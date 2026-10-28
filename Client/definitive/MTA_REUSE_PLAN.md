@@ -1,5 +1,20 @@
 # MTA on Definitive Edition: reuse boundary
 
+## Shared native present ownership (2026-10-28)
+
+The native hook manager now owns route qualification, the original trampoline,
+relays, thread holds, module retention, in-flight accounting and recovery.
+The bounded diagnostic owns its deadline, snapshots and COM/device candidates.
+Static callbacks carry their exact owner generation; stale diagnostics forward
+the original call without borrowing newer diagnostic state.
+
+Cleanup detaches and drains the native hook before retiring untaken diagnostic
+COM references. Only confirmed completion releases the manager's admission;
+failed cleanup retains the actual manager and callable storage. Existing
+native routines, argument/result forwarding, the diagnostic deadline and
+Render/Clock exclusion remain unchanged. Persistent presentation policy and
+the SDK DisableVSync implementation still require further work.
+
 ## Presentation and Clock transition coordination (2026-10-28)
 
 Clock peer holds now close a shared CPU transition gate before enumerating or

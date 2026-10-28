@@ -1,103 +1,27 @@
 /*****************************************************************************
  * PROJECT: Multi Theft Auto
  * LICENSE: See LICENSE in the repository root
- * PURPOSE: Observe an engine-owned Present scope without worker COM access
+ * PURPOSE: Bounded diagnostic consumer of the real native present-hook owner
  *****************************************************************************/
 
 #include "NativeRenderObservation.h"
+#include "NativePresentOwner.h"
 #include "NativeD3D12OwnershipProbe.h"
 #include "NativeCustomPresentProbe.h"
 #include "NativeFrameBoundaryProbe.h"
-#include "NativeServiceAdmission.h"
 #include <array>
-#include <algorithm>
 #include <atomic>
-#include <limits>
-#include <new>
-#include <vector>
 #include <windows.h>
-#include <tlhelp32.h>
-#include <bcrypt.h>
-#include <detours.h>
 
 namespace mta::game_de
 {
     namespace
     {
         using Failure = NativeRenderObservationFailure;
-        namespace Admission = NativeServiceAdmission;
-        using PresentFunction = bool (*)(void*, std::uint32_t);
-        constexpr ULONGLONG                     maximumObservationMs = 30000;
-        constexpr std::array<unsigned char, 32> executableHash = {0x63, 0xe6, 0x33, 0xbb, 0x51, 0xc3, 0x5f, 0xe3, 0x5c, 0xa9, 0x8f,
-                                                                  0x50, 0x3b, 0x62, 0xe7, 0xdd, 0xb8, 0x40, 0x3a, 0xbe, 0x4c, 0x9d,
-                                                                  0x50, 0x1c, 0xfa, 0x91, 0x62, 0x89, 0x24, 0x53, 0x84, 0x6f};
-        struct RouteDescriptor
-        {
-            RenderObservationRoute        route;
-            std::uintptr_t                presentRva;
-            std::size_t                   presentBytes;
-            std::array<unsigned char, 32> presentHash;
-            std::uintptr_t                viewportTable, swapchainOffset;
-        };
-        constexpr RouteDescriptor d3d11Route = {RenderObservationRoute::D3D11,
-                                                0x1f5a430,
-                                                421,
-                                                {0x60, 0x5f, 0xf6, 0x63, 0x24, 0x56, 0x99, 0x2a, 0xb7, 0x4e, 0x61, 0xcb, 0x14, 0xff, 0x2f, 0xdb,
-                                                 0xb5, 0x74, 0xaf, 0x74, 0xf7, 0x49, 0x35, 0x74, 0x0e, 0x66, 0xfd, 0xf6, 0x3b, 0x2a, 0x98, 0x8f},
-                                                0x44fbc08,
-                                                0x78};
-        // These are complete unwind-bounded functions in the same pinned PE,
-        // not old SDK hints or a guess based on an inactive D3D11 route.
-        constexpr RouteDescriptor d3d12Route = {RenderObservationRoute::D3D12,
-                                                0x1fd5da0,
-                                                429,
-                                                {0x37, 0x6c, 0xfc, 0x00, 0xed, 0x38, 0x24, 0x9e, 0x3e, 0x22, 0x6a, 0x32, 0xde, 0xab, 0xc2, 0x5d,
-                                                 0x2d, 0xd1, 0xe5, 0x25, 0x62, 0x1b, 0xab, 0xa6, 0x9f, 0x23, 0x62, 0xc2, 0x9a, 0x99, 0x93, 0x4e},
-                                                0x4504060,
-                                                0x60};
-
-        const RouteDescriptor* SelectRoute(RenderObservationRoute route) noexcept
-        {
-            return route == RenderObservationRoute::D3D11 ? &d3d11Route : route == RenderObservationRoute::D3D12 ? &d3d12Route : nullptr;
-        }
-
-        template <typename T>
-        struct VirtualAllocator
-        {
-            using value_type = T;
-            VirtualAllocator() noexcept = default;
-            template <typename U>
-            VirtualAllocator(const VirtualAllocator<U>&) noexcept
-            {
-            }
-            T* allocate(std::size_t count)
-            {
-                if (!count || count > (std::numeric_limits<std::size_t>::max)() / sizeof(T))
-                    throw std::bad_alloc();
-                auto* result = static_cast<T*>(VirtualAlloc(nullptr, count * sizeof(T), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
-                if (!result)
-                    throw std::bad_alloc();
-                return result;
-            }
-            void deallocate(T* value, std::size_t) noexcept
-            {
-                if (value)
-                    VirtualFree(value, 0, MEM_RELEASE);
-            }
-            template <typename U>
-            bool operator==(const VirtualAllocator<U>&) const noexcept
-            {
-                return true;
-            }
-            template <typename U>
-            bool operator!=(const VirtualAllocator<U>&) const noexcept
-            {
-                return false;
-            }
-        };
-        using ThreadHandles = std::vector<HANDLE, VirtualAllocator<HANDLE>>;
-        using NextThread = LONG(NTAPI*)(HANDLE, HANDLE, ACCESS_MASK, ULONG, ULONG, PHANDLE);
-        using CompareThreadObjects = LONG(NTAPI*)(HANDLE, HANDLE);
+        namespace Owner = NativePresentOwner;
+        using PresentFunction = Owner::PresentFunction;
+        using RouteDescriptor = Owner::RouteDescriptor;
+        constexpr ULONGLONG maximumObservationMs = 30000;
         enum class DeviceCapturePhase : unsigned
         {
             Off,
@@ -110,67 +34,28 @@ namespace mta::game_de
 
         struct Runtime
         {
-            std::atomic<bool>               apiBusy{false}, bound{false}, active{false}, hooked{false}, modulePinned{false};
-            std::atomic<unsigned>           inFlight{0};
-            std::atomic<std::uint64_t>      generation{0}, callbacks{0}, accepted{0}, rejected{0}, nested{0}, foreign{0}, missed{0};
-            std::atomic<std::uint64_t>      admissionGeneration{0}, admissionSerial{0};
-            std::atomic<std::uint32_t>      failure{0};
-            std::atomic<DWORD>              callbackThread{0};
-            SRWLOCK                         snapshotLock = SRWLOCK_INIT;
-            NativeRenderObservationState    snapshot;
-            DWORD                           producerThread = 0;
-            std::uintptr_t                  image = 0;
-            ULONGLONG                       started = 0;
-            PresentFunction                 original = nullptr;
-            const RouteDescriptor*          route = nullptr;
-            std::uint32_t                   requestedRoute = 0;
-            bool                            queryGpuOwnership = false;
-            bool                            classifyCustomPresent = false;
-            bool                            queryFrameBoundary = false;
-            bool                            nativeDispatch = false;
-            bool                            captureDeviceWindow = false;
+            std::atomic<bool>            active{false};
+            std::atomic<std::uint64_t>   callbacks{0}, accepted{0}, rejected{0}, nested{0}, foreign{0}, missed{0};
+            std::atomic<std::uint64_t>   registeredGeneration{0};
+            std::atomic<std::uint32_t>   failure{0};
+            std::atomic<DWORD>           callbackThread{0};
+            SRWLOCK                      snapshotLock = SRWLOCK_INIT;
+            NativeRenderObservationState snapshot;
+            DWORD                        producerThread = 0;
+            std::uintptr_t               image = 0;
+            ULONGLONG                    started = 0;
+            const RouteDescriptor*       route = nullptr;
+            std::uint32_t                requestedRoute = 0;
+            bool queryGpuOwnership = false, classifyCustomPresent = false, queryFrameBoundary = false, nativeDispatch = false, captureDeviceWindow = false;
             std::atomic<DeviceCapturePhase> devicePhase{DeviceCapturePhase::Off};
             std::atomic<bool>               devicePending{false}, deviceReleaseFault{false};
             RenderDeviceLeaseV1             deviceLease;
             DeviceWindowCandidate           deviceWindow;
-            ThreadHandles                   retainedSuspensions;
-            bool                            safetyHeldSuspensions = false;
-            NextThread                      nextThread = nullptr;
-            CompareThreadObjects            compareThreadObjects = nullptr;
-            std::uintptr_t                  nextThreadImage = 0;
-            RenderSetupDiagnosticV1         setup;
-            bool                            setupTracing = false;
         };
-        // Failed teardown must retain its trampoline and callback storage.
-        // Nothing in this process-lifetime state points at a released owner.
+        // This bounded diagnostic storage is process lifetime. The shared hook
+        // manager calls static code and never keeps a consumer-object pointer.
         Runtime runtime;
-
-        bool ReleaseAdmission(std::uint64_t generation) noexcept
-        {
-            const auto owner = runtime.admissionGeneration.load();
-            if (!owner)
-                return true;
-            if (!generation || generation != runtime.generation.load() || generation != owner)
-                return false;
-            if (!Admission::Release({Admission::Category::Render, runtime.admissionSerial.load()}))
-                return false;
-            runtime.admissionSerial.store(0);
-            runtime.admissionGeneration.store(0);
-            return true;
-        }
-        thread_local unsigned callbackDepth = 0;
-
-        struct ApiOperation
-        {
-            bool acquired;
-            ApiOperation() noexcept : acquired(!runtime.apiBusy.exchange(true)) {}
-            ~ApiOperation()
-            {
-                if (acquired)
-                    runtime.apiBusy.store(false);
-            }
-        };
-
+        using ApiOperation = NativePresentOwner::Operation;
         void Fail(Failure failure) noexcept
         {
             runtime.active.store(false);
@@ -178,172 +63,19 @@ namespace mta::game_de
             std::uint32_t expected = 0;
             runtime.failure.compare_exchange_strong(expected, static_cast<std::uint32_t>(failure));
         }
-
-        void InitializeSetupDiagnostic(std::uint64_t generation) noexcept
+        void OwnerFailure(std::uint32_t failure) noexcept
         {
-            runtime.setup = {};
-            runtime.setup.version = RenderSetupDiagnosticVersionV1;
-            runtime.setup.generationLow = static_cast<std::uint32_t>(generation);
-            runtime.setup.generationHigh = static_cast<std::uint32_t>(generation >> 32);
-            runtime.setup.attempted = 1;
-            runtime.setup.stage = static_cast<unsigned>(RenderSetupStage::PrepareFrameBoundary);
-            runtime.setupTracing = true;
+            Fail(static_cast<Failure>(failure));
         }
-        void SetupStep(RenderSetupStage stage) noexcept
-        {
-            if (runtime.setupTracing && !runtime.setup.failureStage)
-                runtime.setup.stage = static_cast<unsigned>(stage);
-        }
-        bool SetupRefused(RenderSetupStage stage, RenderSetupErrorDomain domain = RenderSetupErrorDomain::None, std::uint32_t error = 0) noexcept
-        {
-            // Only the owning worker writes these scalars. Preserve its first
-            // install refusal; rollback/detach must not replace it with a later
-            // operation or stale GetLastError value. No callback lock is needed.
-            if (runtime.setupTracing && !runtime.setup.failureStage)
-            {
-                runtime.setup.stage = runtime.setup.failureStage = static_cast<unsigned>(stage);
-                runtime.setup.errorDomain = static_cast<unsigned>(domain);
-                runtime.setup.errorCode = error;
-            }
-            return false;
-        }
-        void SetupRetained() noexcept
-        {
-            if (!runtime.setup.version)
-                return;
-            runtime.setup.retainedSuspensions = 0;
-            for (const auto thread : runtime.retainedSuspensions)
-                if (thread)
-                    ++runtime.setup.retainedSuspensions;
-            runtime.setup.safetyHeldSuspensions = runtime.safetyHeldSuspensions ? 1u : 0u;
-        }
-        bool FinishSetupChange(bool ready, bool install) noexcept
-        {
-            if (runtime.setupTracing)
-            {
-                if (ready && install)
-                {
-                    runtime.setup.installSucceeded = 1;
-                    SetupStep(RenderSetupStage::Complete);
-                }
-            }
-            SetupRetained();
-            runtime.setupTracing = false;
-            return ready;
-        }
-        void SetupCleanup(bool complete) noexcept
-        {
-            if (!runtime.setup.version)
-                return;
-            runtime.setup.cleanupAttempted = 1;
-            runtime.setup.cleanupComplete = complete ? 1u : 0u;
-            SetupRetained();
-        }
-
-        bool Pages(std::uintptr_t address, std::size_t bytes, std::uintptr_t image = 0, bool executable = false) noexcept
-        {
-            if (!address || !bytes || bytes > (std::numeric_limits<std::uintptr_t>::max)() - address)
-                return false;
-            const auto end = address + bytes;
-            while (address < end)
-            {
-                MEMORY_BASIC_INFORMATION info{};
-                if (VirtualQuery(reinterpret_cast<void*>(address), &info, sizeof(info)) != sizeof(info) || info.State != MEM_COMMIT ||
-                    (info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) ||
-                    (image && (info.Type != MEM_IMAGE || reinterpret_cast<std::uintptr_t>(info.AllocationBase) != image)))
-                    return false;
-                const auto protection = info.Protect & 0xff;
-                const bool execute = protection == PAGE_EXECUTE_READ || protection == PAGE_EXECUTE_READWRITE || protection == PAGE_EXECUTE_WRITECOPY;
-                if (!(execute || protection == PAGE_READONLY || protection == PAGE_READWRITE || protection == PAGE_WRITECOPY) || (executable && !execute))
-                    return false;
-                const auto start = reinterpret_cast<std::uintptr_t>(info.BaseAddress);
-                if (info.RegionSize > (std::numeric_limits<std::uintptr_t>::max)() - start || start + info.RegionSize <= address)
-                    return false;
-                address = (start + info.RegionSize < end) ? start + info.RegionSize : end;
-            }
-            return true;
-        }
-
         bool Read(std::uintptr_t address, void* destination, std::size_t bytes, std::uintptr_t image = 0, bool executable = false) noexcept
         {
-            SIZE_T copied = 0;
-            return Pages(address, bytes, image, executable) &&
-                   ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(address), destination, bytes, &copied) && copied == bytes;
+            return Owner::ReadBytes(address, destination, bytes, image, executable);
         }
         template <typename T>
         bool Read(std::uintptr_t address, T& value) noexcept
         {
             return Read(address, &value, sizeof(value));
         }
-
-        struct HashResources
-        {
-            HANDLE             file = INVALID_HANDLE_VALUE;
-            BCRYPT_ALG_HANDLE  algorithm = nullptr;
-            BCRYPT_HASH_HANDLE hash = nullptr;
-            ~HashResources()
-            {
-                if (hash)
-                    BCryptDestroyHash(hash);
-                if (algorithm)
-                    BCryptCloseAlgorithmProvider(algorithm, 0);
-                if (file != INVALID_HANDLE_VALUE)
-                    CloseHandle(file);
-            }
-            bool Open() noexcept
-            {
-                return BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) >= 0 &&
-                       BCryptCreateHash(algorithm, &hash, nullptr, 0, nullptr, 0, 0) >= 0;
-            }
-            bool Finish(const std::array<unsigned char, 32>& expected) noexcept
-            {
-                std::array<unsigned char, 32> digest{};
-                return BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0) >= 0 && digest == expected;
-            }
-        };
-
-        bool ExactExecutable() noexcept
-        {
-            std::array<wchar_t, 32768> path{};
-            const auto                 size = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
-            if (!size || size >= path.size() || sizeof(void*) != 8)
-                return false;
-            HashResources hash;
-            hash.file = CreateFileW(path.data(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-            LARGE_INTEGER bytes{};
-            if (hash.file == INVALID_HANDLE_VALUE || !GetFileSizeEx(hash.file, &bytes) || bytes.QuadPart != 89497064 || !hash.Open())
-                return false;
-            std::array<unsigned char, 65536> buffer{};
-            for (;;)
-            {
-                DWORD count = 0;
-                if (!ReadFile(hash.file, buffer.data(), static_cast<DWORD>(buffer.size()), &count, nullptr))
-                    return false;
-                if (!count)
-                    break;
-                if (BCryptHashData(hash.hash, buffer.data(), count, 0) < 0)
-                    return false;
-            }
-            return hash.Finish(executableHash);
-        }
-
-        bool CheckFingerprint(std::uintptr_t image, const RouteDescriptor& route) noexcept
-        {
-            IMAGE_DOS_HEADER   dos{};
-            IMAGE_NT_HEADERS64 nt{};
-            if (!Read(image, &dos, sizeof(dos), image) || dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew < static_cast<LONG>(sizeof(dos)) ||
-                dos.e_lfanew > 1048576 || !Read(image + dos.e_lfanew, &nt, sizeof(nt), image) || nt.Signature != IMAGE_NT_SIGNATURE ||
-                nt.FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 || nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
-                nt.OptionalHeader.SizeOfImage != 97141760)
-                return false;
-            std::array<unsigned char, 429> code{};
-            HashResources                  hash;
-            // The complete unwind-bounded function has no base relocations;
-            // hashing only a prologue could miss a changed member/vcall path.
-            return route.presentBytes <= code.size() && Read(image + route.presentRva, code.data(), route.presentBytes, image, true) && hash.Open() &&
-                   BCryptHashData(hash.hash, code.data(), static_cast<ULONG>(route.presentBytes), 0) >= 0 && hash.Finish(route.presentHash);
-        }
-
         bool Capture(void* viewport, std::uint32_t syncInterval, NativeRenderObservationState& output) noexcept
         {
             const auto object = reinterpret_cast<std::uintptr_t>(viewport);
@@ -422,7 +154,7 @@ namespace mta::game_de
         bool BorrowedComRoot(std::uintptr_t object) noexcept
         {
             std::uintptr_t table = 0, queryInterface = 0;
-            return Read(object, table) && Read(table, queryInterface) && Pages(queryInterface, 1, 0, true);
+            return Read(object, table) && Read(table, queryInterface) && Owner::ValidatePages(queryInterface, 1, 0, true);
         }
 
         class ImageCustomPresentReads final : public CustomPresentReads
@@ -561,7 +293,7 @@ namespace mta::game_de
                 runtime.deviceLease = {};
                 runtime.deviceLease.device = scope.deviceCandidate;
                 scope.deviceCandidate = nullptr;
-                runtime.deviceLease.generation = runtime.generation.load();
+                runtime.deviceLease.generation = Owner::CurrentGeneration();
                 runtime.deviceLease.acceptedSnapshots = acceptedNext;
                 runtime.deviceLease.dispatchEntries = capture.nativeDispatch.presentEntries;
                 runtime.deviceLease.sourceProfileId = 2;
@@ -569,12 +301,12 @@ namespace mta::game_de
                 runtime.devicePending.store(true);
             }
         }
-        bool InvokeOriginal(void* viewport, std::uint32_t syncInterval, FrameBoundaryScope& scope, bool observe)
+        bool InvokeOriginal(PresentFunction original, void* viewport, std::uint32_t syncInterval, FrameBoundaryScope& scope, bool observe)
         {
             bool returned = false;
             __try
             {
-                const bool result = runtime.original(viewport, syncInterval);
+                const bool result = original(viewport, syncInterval);
                 returned = true;
                 return result;
             }
@@ -594,12 +326,16 @@ namespace mta::game_de
             Fail(Failure::GpuOwnershipCleanup);
         }
 
-        bool PresentBody(void* viewport, std::uint32_t syncInterval)
+        bool PresentBody(const Owner::CallbackContext& context, void* viewport, std::uint32_t syncInterval)
         {
+            // Registration belongs to this static diagnostic generation, not
+            // to the lifetime of a C++ consumer object or a cached snapshot.
+            if (!context.generation || context.generation != runtime.registeredGeneration.load() || context.generation != Owner::CurrentGeneration())
+                return context.original(viewport, syncInterval);
             runtime.callbacks.fetch_add(1);
             if (runtime.active.load())
             {
-                if (callbackDepth != 1)
+                if (context.depth != 1)
                 {
                     runtime.nested.fetch_add(1);
                     Fail(Failure::NestedCallback);
@@ -644,7 +380,7 @@ namespace mta::game_de
                 EnterFrameBoundaryScope(boundary, runtime.image, viewport, runtime.callbackThread.load(), capture.custom, &BoundaryCleanupFailure,
                                         runtime.devicePhase.load() == DeviceCapturePhase::Armed ? &ReserveDeviceCandidate : nullptr,
                                         runtime.captureDeviceWindow);
-            const bool result = InvokeOriginal(viewport, syncInterval, boundary, observeBoundary);
+            const bool result = InvokeOriginal(context.original, viewport, syncInterval, boundary, observeBoundary);
             if (observeBoundary)
             {
                 capture.boundary = boundary.state;
@@ -696,8 +432,8 @@ namespace mta::game_de
                             // This remains historical when a later publication misses.
                             capture.rootsDiagnostic = boundary.rootsDiagnostic;
                             capture.rootsDiagnostic.version = RenderRootsDiagnosticVersionV1;
-                            capture.rootsDiagnostic.generationLow = static_cast<std::uint32_t>(runtime.generation.load());
-                            capture.rootsDiagnostic.generationHigh = static_cast<std::uint32_t>(runtime.generation.load() >> 32);
+                            capture.rootsDiagnostic.generationLow = static_cast<std::uint32_t>(Owner::CurrentGeneration());
+                            capture.rootsDiagnostic.generationHigh = static_cast<std::uint32_t>(Owner::CurrentGeneration() >> 32);
                             const auto acceptedNext = runtime.accepted.load() + 1;
                             capture.rootsDiagnostic.acceptedSnapshotsLow = static_cast<std::uint32_t>(acceptedNext);
                             capture.rootsDiagnostic.acceptedSnapshotsHigh = static_cast<std::uint32_t>(acceptedNext >> 32);
@@ -720,589 +456,6 @@ namespace mta::game_de
             // only this callback's ref and cannot publish it retrospectively.
             DiscardDeviceCandidate(boundary);
             return result;
-        }
-
-        bool HookPresent(void* viewport, std::uint32_t syncInterval)
-        {
-            runtime.inFlight.fetch_add(1);
-            ++callbackDepth;
-            __try
-            {
-                return PresentBody(viewport, syncInterval);
-            }
-            __finally
-            {
-                --callbackDepth;
-                runtime.inFlight.fetch_sub(1);
-            }
-        }
-
-        bool CollectThreads(ThreadHandles& threads) noexcept
-        {
-            SetupStep(RenderSetupStage::CollectReserve);
-            try
-            {
-                threads.reserve(1024);
-            }
-            catch (...)
-            {
-                return SetupRefused(RenderSetupStage::CollectReserve);
-            }
-            SetupStep(RenderSetupStage::CollectSnapshot);
-            const auto snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-            if (snapshot == INVALID_HANDLE_VALUE)
-            {
-                const auto error = GetLastError();
-                return SetupRefused(RenderSetupStage::CollectSnapshot, RenderSetupErrorDomain::Win32, error);
-            }
-            THREADENTRY32 entry{};
-            entry.dwSize = sizeof(entry);
-            SetupStep(RenderSetupStage::CollectFirst);
-            bool  enumerated = Thread32First(snapshot, &entry) != FALSE, ready = enumerated;
-            DWORD enumerationError = enumerated ? ERROR_SUCCESS : GetLastError();
-            if (!enumerated)
-                SetupRefused(RenderSetupStage::CollectFirst, RenderSetupErrorDomain::Win32, enumerationError);
-            try
-            {
-                while (enumerated)
-                {
-                    if (entry.th32OwnerProcessID == GetCurrentProcessId() && entry.th32ThreadID != GetCurrentThreadId())
-                    {
-                        if (runtime.nativeDispatch && threads.size() == 1024)
-                        {
-                            ready = SetupRefused(RenderSetupStage::ThreadLimit);
-                            break;
-                        }
-                        SetupStep(RenderSetupStage::CollectOpen);
-                        const auto thread =
-                            OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, entry.th32ThreadID);
-                        if (!thread)
-                        {
-                            const auto error = GetLastError();
-                            ready = SetupRefused(RenderSetupStage::CollectOpen, RenderSetupErrorDomain::Win32, error);
-                            break;
-                        }
-                        try
-                        {
-                            threads.push_back(thread);
-                        }
-                        catch (...)
-                        {
-                            CloseHandle(thread);
-                            throw;
-                        }
-                        if (runtime.setupTracing)
-                            runtime.setup.initialThreads = static_cast<std::uint32_t>(threads.size());
-                    }
-                    SetupStep(RenderSetupStage::CollectNext);
-                    enumerated = Thread32Next(snapshot, &entry) != FALSE;
-                    enumerationError = enumerated ? ERROR_SUCCESS : GetLastError();
-                }
-                if (!enumerated && enumerationError != ERROR_NO_MORE_FILES)
-                    ready = SetupRefused(RenderSetupStage::CollectNext, RenderSetupErrorDomain::Win32, enumerationError);
-            }
-            catch (...)
-            {
-                ready = SetupRefused(RenderSetupStage::CollectReserve);
-            }
-            CloseHandle(snapshot);
-            return ready;
-        }
-        bool NativeThreadStubMatches(const std::array<unsigned char, 24>& actual) noexcept
-        {
-            constexpr std::array<unsigned char, 24> expected{0x4c, 0x8b, 0xd1, 0xb8, 0x01, 0x01, 0,    0,    0xf6, 0x04, 0x25, 0x08,
-                                                             0x03, 0xfe, 0x7f, 0x01, 0x75, 0x03, 0x0f, 0x05, 0xc3, 0xcd, 0x2e, 0xc3};
-            return actual == expected;
-        }
-        bool NativeThreadComparisonStubMatches(const std::array<unsigned char, 24>& actual) noexcept
-        {
-            constexpr std::array<unsigned char, 24> expected{0x4c, 0x8b, 0xd1, 0xb8, 0x9f, 0,    0,    0,    0xf6, 0x04, 0x25, 0x08,
-                                                             0x03, 0xfe, 0x7f, 0x01, 0x75, 0x03, 0x0f, 0x05, 0xc3, 0xcd, 0x2e, 0xc3};
-            return actual == expected;
-        }
-        bool PrepareNativeThreadEnumeration() noexcept
-        {
-            // Toolhelp may allocate internally. Cache this exact local x64
-            // system entry before holds; stable passes then use only its
-            // syscall/int2e stub. Modified or foreign entries fail closed.
-            if (!runtime.nextThread || !runtime.compareThreadObjects)
-            {
-                SetupStep(RenderSetupStage::NativeThreadModule);
-                if (!runtime.retainedSuspensions.empty())
-                    return SetupRefused(RenderSetupStage::NativeThreadModule);
-                const auto module = GetModuleHandleW(L"ntdll.dll");
-                if (!module)
-                {
-                    const auto error = GetLastError();
-                    return SetupRefused(RenderSetupStage::NativeThreadModule, RenderSetupErrorDomain::Win32, error);
-                }
-                SetupStep(RenderSetupStage::NativeThreadExport);
-                const auto entry = GetProcAddress(module, "NtGetNextThread");
-                if (!entry)
-                {
-                    const auto error = GetLastError();
-                    return SetupRefused(RenderSetupStage::NativeThreadExport, RenderSetupErrorDomain::Win32, error);
-                }
-                const auto comparison = GetProcAddress(module, "NtCompareObjects");
-                if (!comparison)
-                {
-                    const auto error = GetLastError();
-                    return SetupRefused(RenderSetupStage::NativeThreadExport, RenderSetupErrorDomain::Win32, error);
-                }
-                SetupStep(RenderSetupStage::NativeThreadImage);
-                MEMORY_BASIC_INFORMATION page{};
-                if (VirtualQuery(reinterpret_cast<void*>(entry), &page, sizeof(page)) != sizeof(page))
-                {
-                    const auto error = GetLastError();
-                    return SetupRefused(RenderSetupStage::NativeThreadImage, RenderSetupErrorDomain::Win32, error);
-                }
-                if (page.Type != MEM_IMAGE || page.AllocationBase != module)
-                    return SetupRefused(RenderSetupStage::NativeThreadImage);
-                if (VirtualQuery(reinterpret_cast<void*>(comparison), &page, sizeof(page)) != sizeof(page))
-                {
-                    const auto error = GetLastError();
-                    return SetupRefused(RenderSetupStage::NativeThreadImage, RenderSetupErrorDomain::Win32, error);
-                }
-                if (page.Type != MEM_IMAGE || page.AllocationBase != module)
-                    return SetupRefused(RenderSetupStage::NativeThreadImage);
-                runtime.nextThread = reinterpret_cast<NextThread>(entry);
-                runtime.compareThreadObjects = reinterpret_cast<CompareThreadObjects>(comparison);
-                runtime.nextThreadImage = reinterpret_cast<std::uintptr_t>(module);
-            }
-            SetupStep(RenderSetupStage::NativeThreadStubRead);
-            std::array<unsigned char, 24> actual{};
-            if (!Read(reinterpret_cast<std::uintptr_t>(runtime.nextThread), actual.data(), actual.size(), runtime.nextThreadImage, true))
-                return SetupRefused(RenderSetupStage::NativeThreadStubRead);
-            SetupStep(RenderSetupStage::NativeThreadStubMatch);
-            if (!NativeThreadStubMatches(actual))
-                return SetupRefused(RenderSetupStage::NativeThreadStubMatch);
-            // The documented Win32 comparator converts negative NT statuses.
-            // Use only the pinned local syscall body while peers are stopped,
-            // avoiding that wrapper's additional error-conversion calls.
-            SetupStep(RenderSetupStage::NativeThreadStubRead);
-            if (!Read(reinterpret_cast<std::uintptr_t>(runtime.compareThreadObjects), actual.data(), actual.size(), runtime.nextThreadImage, true))
-                return SetupRefused(RenderSetupStage::NativeThreadStubRead);
-            SetupStep(RenderSetupStage::NativeThreadStubMatch);
-            return NativeThreadComparisonStubMatches(actual) || SetupRefused(RenderSetupStage::NativeThreadStubMatch);
-        }
-        bool ResumeOwnedThread(HANDLE thread, DWORD(WINAPI* resume)(HANDLE) = &ResumeThread, DWORD* resumeError = nullptr) noexcept
-        {
-            const auto result = resume(thread);
-            const auto error = result == static_cast<DWORD>(-1) ? GetLastError() : ERROR_SUCCESS;
-            if (resumeError)
-                *resumeError = error;
-            DWORD exitCode = STILL_ACTIVE;
-            return result != static_cast<DWORD>(-1) || (GetExitCodeThread(thread, &exitCode) && exitCode != STILL_ACTIVE);
-        }
-        bool HoldNativeDispatchThreads(ThreadHandles& threads, ThreadHandles& held) noexcept
-        {
-            // VM-backed buffers are reserved before suspension. Newly found
-            // children never grow a vector or touch a stopped CRT heap.
-            constexpr std::size_t maximumThreads = 1024;
-            struct ExitedObjects
-            {
-                ThreadHandles handles;
-                ~ExitedObjects()
-                {
-                    for (const auto handle : handles)
-                        CloseHandle(handle);
-                }
-            } exitedObjects;
-            if (threads.size() > maximumThreads)
-                return SetupRefused(RenderSetupStage::ThreadLimit);
-            SetupStep(RenderSetupStage::HoldReserve);
-            try
-            {
-                threads.reserve(maximumThreads);
-                held.reserve(maximumThreads);
-                exitedObjects.handles.reserve(maximumThreads);
-                held.resize(threads.size(), nullptr);
-            }
-            catch (...)
-            {
-                return SetupRefused(RenderSetupStage::HoldReserve);
-            }
-            for (std::size_t index = 0; index < threads.size(); ++index)
-            {
-                SetupStep(RenderSetupStage::HoldSuspend);
-                if (SuspendThread(threads[index]) == static_cast<DWORD>(-1))
-                {
-                    const auto error = GetLastError();
-                    return SetupRefused(RenderSetupStage::HoldSuspend, RenderSetupErrorDomain::Win32, error);
-                }
-                held[index] = threads[index];
-                if (runtime.setupTracing)
-                    ++runtime.setup.heldThreads;
-            }
-            unsigned stablePasses = 0;
-            for (unsigned pass = 0; pass < 4; ++pass)
-            {
-                if (runtime.setupTracing)
-                    runtime.setup.stablePasses = pass + 1;
-                HANDLE   previous = nullptr;
-                bool     ready = runtime.nextThread && runtime.compareThreadObjects, added = false;
-                unsigned enumerated = 0;
-                if (!ready)
-                    SetupRefused(RenderSetupStage::StableEnumerate);
-                while (ready)
-                {
-                    HANDLE next = nullptr;
-                    SetupStep(RenderSetupStage::StableEnumerate);
-                    const auto status = runtime.nextThread(
-                        GetCurrentProcess(), previous, THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_QUERY_INFORMATION | SYNCHRONIZE,
-                        0, 0, &next);
-                    if (previous)
-                        CloseHandle(previous);
-                    previous = next;
-                    if (status == static_cast<LONG>(0x8000001au))
-                        break;
-                    if (status != 0)
-                    {
-                        ready = SetupRefused(RenderSetupStage::StableEnumerate, RenderSetupErrorDomain::NtStatus, static_cast<std::uint32_t>(status));
-                        break;
-                    }
-                    if (!next)
-                    {
-                        ready = SetupRefused(RenderSetupStage::StableEnumerate);
-                        break;
-                    }
-                    if (++enumerated > maximumThreads + 1)
-                    {
-                        ready = SetupRefused(RenderSetupStage::StableLimit);
-                        break;
-                    }
-                    SetupStep(RenderSetupStage::StableThreadId);
-                    const auto id = GetThreadId(next);
-                    if (!id)
-                    {
-                        const auto error = GetLastError();
-                        ready = SetupRefused(RenderSetupStage::StableThreadId, RenderSetupErrorDomain::Win32, error);
-                        break;
-                    }
-                    if (id != GetCurrentThreadId() && std::none_of(threads.begin(), threads.end(), [&](HANDLE thread) { return GetThreadId(thread) == id; }))
-                    {
-                        if (threads.size() == maximumThreads)
-                            ready = SetupRefused(RenderSetupStage::ThreadLimit);
-                        else
-                        {
-                            HANDLE thread = nullptr;
-                            SetupStep(RenderSetupStage::StableDuplicate);
-                            if (!DuplicateHandle(GetCurrentProcess(), next, GetCurrentProcess(), &thread, 0, FALSE, DUPLICATE_SAME_ACCESS))
-                            {
-                                const auto error = GetLastError();
-                                if (thread)
-                                    CloseHandle(thread);
-                                ready = SetupRefused(RenderSetupStage::StableDuplicate, RenderSetupErrorDomain::Win32, error);
-                            }
-                            else
-                            {
-                                SetupStep(RenderSetupStage::StableSuspend);
-                                if (SuspendThread(thread) == static_cast<DWORD>(-1))
-                                {
-                                    const auto error = GetLastError();
-                                    // A newly enumerated thread can finish before
-                                    // suspension. Error 5 alone also describes a
-                                    // live access refusal; discard only this exact
-                                    // owned object after a nonblocking exit proof.
-                                    const bool exited = error == ERROR_ACCESS_DENIED && WaitForSingleObject(thread, 0) == WAIT_OBJECT_0;
-                                    if (exited)
-                                    {
-                                        // Retained exited objects remain enumerable.
-                                        // Keep the iterator valid through its next
-                                        // native call, and remember exact kernel
-                                        // objects with separate unsuspended handles.
-                                        // First sightings reset stability because a
-                                        // dead creator could have spawned a live
-                                        // child behind this scan; only repeats with
-                                        // this fresh exit proof are neutral.
-                                        bool seen = false;
-                                        for (const auto known : exitedObjects.handles)
-                                        {
-                                            const auto comparisonStatus = runtime.compareThreadObjects(thread, known);
-                                            if (comparisonStatus == 0)
-                                            {
-                                                seen = true;
-                                                break;
-                                            }
-                                            if (comparisonStatus != static_cast<LONG>(0xc00001acu))
-                                            {
-                                                ready = SetupRefused(RenderSetupStage::StableSuspend, RenderSetupErrorDomain::NtStatus,
-                                                                     static_cast<std::uint32_t>(comparisonStatus));
-                                                break;
-                                            }
-                                        }
-                                        if (ready && !seen)
-                                        {
-                                            if (exitedObjects.handles.size() == maximumThreads)
-                                                ready = SetupRefused(RenderSetupStage::ThreadLimit);
-                                            else
-                                            {
-                                                exitedObjects.handles.push_back(thread);
-                                                thread = nullptr;
-                                                added = true;
-                                            }
-                                        }
-                                        if (thread)
-                                            CloseHandle(thread);
-                                        continue;
-                                    }
-                                    CloseHandle(thread);
-                                    ready = SetupRefused(RenderSetupStage::StableSuspend, RenderSetupErrorDomain::Win32, error);
-                                }
-                                else
-                                {
-                                    threads.push_back(thread);
-                                    held.push_back(thread);
-                                    if (runtime.setupTracing)
-                                        ++runtime.setup.heldThreads;
-                                    CONTEXT context{};
-                                    context.ContextFlags = CONTEXT_CONTROL;
-                                    SetupStep(RenderSetupStage::StableContext);
-                                    if (!GetThreadContext(thread, &context))
-                                    {
-                                        const auto error = GetLastError();
-                                        ready = SetupRefused(RenderSetupStage::StableContext, RenderSetupErrorDomain::Win32, error);
-                                    }
-                                    else
-                                    {
-                                        SetupStep(RenderSetupStage::StableInstruction);
-                                        ready = NativeDispatchInstructionSafe(static_cast<std::uintptr_t>(context.Rip),
-                                                                              runtime.hooked.load() ? reinterpret_cast<std::uintptr_t>(runtime.original) : 0) ||
-                                                SetupRefused(RenderSetupStage::StableInstruction);
-                                    }
-                                    added = true;
-                                }
-                            }
-                        }
-                    }
-                }
-                if (previous)
-                    CloseHandle(previous);
-                if (!ready)
-                    return false;
-                stablePasses = added ? 0u : stablePasses + 1;
-                if (stablePasses == 2)
-                    return true;
-            }
-            return SetupRefused(RenderSetupStage::StableLimit);
-        }
-        bool ChangeHooks(bool install, bool& pending) noexcept
-        {
-            runtime.setupTracing = install && runtime.nativeDispatch && runtime.setup.version == RenderSetupDiagnosticVersionV1;
-            pending = false;
-            if (runtime.safetyHeldSuspensions)
-            {
-                SetupStep(RenderSetupStage::SafeToResume);
-                if (!NativeDispatchSafeToResume(runtime.hooked.load()))
-                {
-                    SetupRefused(RenderSetupStage::SafeToResume);
-                    pending = true;
-                    return FinishSetupChange(false, install);
-                }
-                runtime.safetyHeldSuspensions = false;
-            }
-            for (auto& retained : runtime.retainedSuspensions)
-                if (retained)
-                {
-                    SetupStep(RenderSetupStage::Resume);
-                    DWORD error = 0;
-                    if (ResumeOwnedThread(retained, &ResumeThread, &error))
-                    {
-                        CloseHandle(retained);
-                        retained = nullptr;
-                    }
-                    else
-                    {
-                        SetupRefused(RenderSetupStage::Resume, RenderSetupErrorDomain::Win32, error);
-                        pending = true;
-                        return FinishSetupChange(false, install);
-                    }
-                }
-            runtime.retainedSuspensions.clear();
-            ThreadHandles threads;
-            ThreadHandles ownedSuspended;
-            bool          ready = (!runtime.nativeDispatch || PrepareNativeThreadEnumeration()) && CollectThreads(threads);
-            if (ready && runtime.nativeDispatch)
-                ready = HoldNativeDispatchThreads(threads, ownedSuspended);
-            bool       transaction = false;
-            bool       callsiteChanged = false;
-            bool       committedChange = false;
-            const bool entryBefore = runtime.hooked.load();
-            if (ready)
-            {
-                SetupStep(RenderSetupStage::TransactionBegin);
-                const auto beginError = DetourTransactionBegin();
-                ready = beginError == NO_ERROR ||
-                        SetupRefused(RenderSetupStage::TransactionBegin, RenderSetupErrorDomain::Detours, static_cast<std::uint32_t>(beginError));
-                if (ready)
-                {
-                    transaction = true;
-                    SetupStep(RenderSetupStage::TransactionCurrent);
-                    const auto currentError = DetourUpdateThread(GetCurrentThread());
-                    ready = currentError == NO_ERROR ||
-                            SetupRefused(RenderSetupStage::TransactionCurrent, RenderSetupErrorDomain::Detours, static_cast<std::uint32_t>(currentError));
-                    for (const auto thread : threads)
-                        if (ready)
-                        {
-                            SetupStep(RenderSetupStage::TransactionPeers);
-#ifdef DETOURS_MTA_VM_TRANSACTION_NODES
-                            const auto peerError = (runtime.nativeDispatch ? DetourUpdateThreadExternallySuspended(thread) : DetourUpdateThread(thread));
-                            ready = peerError == NO_ERROR ||
-                                    SetupRefused(RenderSetupStage::TransactionPeers, RenderSetupErrorDomain::Detours, static_cast<std::uint32_t>(peerError));
-#else
-                            if (runtime.nativeDispatch)
-                                ready = SetupRefused(RenderSetupStage::TransactionPeers);
-                            else
-                            {
-                                const auto peerError = DetourUpdateThread(thread);
-                                ready = peerError == NO_ERROR || SetupRefused(RenderSetupStage::TransactionPeers, RenderSetupErrorDomain::Detours,
-                                                                              static_cast<std::uint32_t>(peerError));
-                            }
-#endif
-                        }
-                    if (ready && runtime.nativeDispatch)
-                        for (const auto thread : threads)
-                        {
-                            CONTEXT context{};
-                            context.ContextFlags = CONTEXT_CONTROL;
-                            SetupStep(RenderSetupStage::FinalContext);
-                            if (!GetThreadContext(thread, &context))
-                            {
-                                const auto error = GetLastError();
-                                ready = SetupRefused(RenderSetupStage::FinalContext, RenderSetupErrorDomain::Win32, error);
-                                pending = !install;
-                                break;
-                            }
-                            SetupStep(RenderSetupStage::FinalInstruction);
-                            if (!NativeDispatchInstructionSafe(static_cast<std::uintptr_t>(context.Rip),
-                                                               runtime.hooked.load() ? reinterpret_cast<std::uintptr_t>(runtime.original) : 0))
-                            {
-                                ready = SetupRefused(RenderSetupStage::FinalInstruction);
-                                pending = !install;
-                                break;
-                            }
-                        }
-                    // No callback-shared lock is held while Detours suspends threads.
-                    // A callback can enter after End's optimistic check; abort and
-                    // resume it rather than freeing its live trampoline.
-                    if (ready && !install && (runtime.inFlight.load() || (runtime.queryFrameBoundary && FrameBoundaryInFlight())))
-                    {
-                        SetupRefused(RenderSetupStage::InFlight);
-                        pending = true;
-                        ready = false;
-                    }
-                    if (ready && runtime.nativeDispatch)
-                    {
-                        SetupStep(RenderSetupStage::ProtectionBaseline);
-                        ready = CaptureNativeDispatchProtectionBaseline() || SetupRefused(RenderSetupStage::ProtectionBaseline);
-                    }
-                    if (ready && (install || entryBefore))
-                    {
-                        SetupStep(RenderSetupStage::WrapperChange);
-                        const auto wrapperError =
-                            (install ? DetourAttach : DetourDetach)(reinterpret_cast<PVOID*>(&runtime.original), reinterpret_cast<PVOID>(&HookPresent));
-                        ready = wrapperError == NO_ERROR ||
-                                SetupRefused(RenderSetupStage::WrapperChange, RenderSetupErrorDomain::Detours, static_cast<std::uint32_t>(wrapperError));
-                    }
-                    if (ready && runtime.queryFrameBoundary && (install || NativeDispatchDetoursPresent()))
-                    {
-                        SetupStep(RenderSetupStage::LifecycleOwnership);
-                        ready = install || FrameBoundaryHooksOwned() || SetupRefused(RenderSetupStage::LifecycleOwnership);
-                    }
-                    if (ready && runtime.queryFrameBoundary && (install || NativeDispatchDetoursPresent()))
-                    {
-                        SetupStep(RenderSetupStage::LifecycleChange);
-                        ready = ChangeFrameBoundaryHooks(install) || SetupRefused(RenderSetupStage::LifecycleChange);
-                    }
-                    if (ready && runtime.nativeDispatch)
-                    {
-                        SetupStep(RenderSetupStage::CallsiteChange);
-                        const bool before = NativeDispatchPatchPresent();
-                        ready = ChangeNativeDispatchCallsite(install, entryBefore) || SetupRefused(RenderSetupStage::CallsiteChange);
-                        callsiteChanged = NativeDispatchPatchPresent() != before;
-                    }
-                    if (ready)
-                    {
-                        SetupStep(RenderSetupStage::TransactionCommit);
-                        const auto commitError = DetourTransactionCommit();
-                        ready = commitError == NO_ERROR ||
-                                SetupRefused(RenderSetupStage::TransactionCommit, RenderSetupErrorDomain::Detours, static_cast<std::uint32_t>(commitError));
-                        transaction = false;
-                        committedChange = ready;
-                        if (ready && runtime.setupTracing)
-                            runtime.setup.transactionCommitted = 1;
-                        if (ready && runtime.queryFrameBoundary)
-                        {
-                            // A committed hook remains owned even if post-attach
-                            // verification refuses observation; End must remove it.
-                            runtime.hooked.store(install);
-                            SetupStep(RenderSetupStage::HooksCommitted);
-                            ready = FrameBoundaryHooksCommitted(install) || SetupRefused(RenderSetupStage::HooksCommitted);
-                            if (ready && runtime.setupTracing)
-                                runtime.setup.hooksCommitted = 1;
-                        }
-                    }
-                }
-            }
-            // Detours knows only its entry patches. Our additional suspend
-            // counts keep every enlisted thread stopped after Commit/Abort so
-            // a failed transaction can roll back the CALL before any resume.
-            if (!ready && !committedChange && runtime.nativeDispatch && callsiteChanged)
-            {
-                SetupStep(RenderSetupStage::RollbackCallsite);
-                if (!ChangeNativeDispatchCallsite(!install, entryBefore))
-                {
-                    SetupRefused(RenderSetupStage::RollbackCallsite);
-                    pending = true;
-                }
-            }
-            if (transaction)
-            {
-                SetupStep(RenderSetupStage::TransactionAbort);
-                const auto abortError = DetourTransactionAbort();
-                if (abortError != NO_ERROR)
-                    SetupRefused(RenderSetupStage::TransactionAbort, RenderSetupErrorDomain::Detours, static_cast<std::uint32_t>(abortError));
-            }
-            SetupStep(RenderSetupStage::SafeToResume);
-            const bool safeToResume = !runtime.nativeDispatch || NativeDispatchSafeToResume(runtime.hooked.load());
-            if (!safeToResume)
-            {
-                SetupRefused(RenderSetupStage::SafeToResume);
-                pending = true;
-                ready = false;
-                runtime.safetyHeldSuspensions = true;
-            }
-            if (ready && !install && runtime.nativeDispatch)
-            {
-                SetupStep(RenderSetupStage::RelayRelease);
-                if (!ReleaseNativeDispatchRelay())
-                {
-                    SetupRefused(RenderSetupStage::RelayRelease);
-                    ready = false;
-                    pending = true;
-                }
-            }
-            for (auto& thread : ownedSuspended)
-                if (thread && safeToResume)
-                {
-                    SetupStep(RenderSetupStage::Resume);
-                    DWORD error = 0;
-                    if (ResumeOwnedThread(thread, &ResumeThread, &error))
-                        thread = nullptr;
-                    else
-                    {
-                        SetupRefused(RenderSetupStage::Resume, RenderSetupErrorDomain::Win32, error);
-                        ready = false;
-                        pending = true;
-                    }
-                }
-            runtime.retainedSuspensions.swap(ownedSuspended);
-            for (const auto thread : threads)
-                if (std::find(runtime.retainedSuspensions.begin(), runtime.retainedSuspensions.end(), thread) == runtime.retainedSuspensions.end())
-                    CloseHandle(thread);
-            if (std::all_of(runtime.retainedSuspensions.begin(), runtime.retainedSuspensions.end(), [](HANDLE thread) { return thread == nullptr; }))
-                runtime.retainedSuspensions.clear();
-            return FinishSetupChange(ready, install);
         }
 
         void ResetCounters() noexcept
@@ -1332,22 +485,17 @@ namespace mta::game_de
         if (captureDeviceWindow && (captureDevice || !nativeDispatch || !queryFrameBoundary))
             return false;
         ApiOperation operation;
-        if (!operation.acquired || runtime.hooked.load() || NativeDispatchPatchPresent() || !runtime.retainedSuspensions.empty() || runtime.inFlight.load() ||
-            FrameBoundaryInFlight() || runtime.active.load() || runtime.devicePending.load() || runtime.deviceReleaseFault.load() ||
-            runtime.admissionSerial.load() || runtime.generation.load() == (std::numeric_limits<std::uint64_t>::max)())
+        if (!operation.acquired || runtime.active.load() || runtime.devicePending.load() || runtime.deviceReleaseFault.load())
             return false;
-        Admission::Token claim;
-        if (!Admission::TryAcquire(Admission::Category::Render, claim))
+        const Owner::Config config{route, queryGpuOwnership, classifyCustomPresent, queryFrameBoundary, nativeDispatch, captureDevice, captureDeviceWindow};
+        if (!Owner::Reserve(operation, config, &PresentBody, &OwnerFailure, generation))
             return false;
-        generation = runtime.generation.fetch_add(1) + 1;
-        runtime.admissionSerial.store(claim.serial);
-        runtime.admissionGeneration.store(generation);
         finalState = {};
-        runtime.setup = {};
-        runtime.setupTracing = false;
-        runtime.bound.store(false);
-        runtime.producerThread = GetCurrentThreadId();
-        runtime.image = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
+        const auto owned = Owner::ReadOwnerState();
+        runtime.producerThread = owned.producerThread;
+        runtime.image = owned.image;
+        runtime.route = owned.route;
+        runtime.registeredGeneration.store(generation);
         ResetCounters();
         runtime.requestedRoute = static_cast<std::uint32_t>(route);
         runtime.queryGpuOwnership = queryGpuOwnership;
@@ -1359,71 +507,12 @@ namespace mta::game_de
         runtime.deviceLease = {};
         runtime.deviceWindow = {};
         ResetFrameBoundaryObservation();
-        runtime.route = SelectRoute(route);
-#ifndef DETOURS_MTA_VM_TRANSACTION_NODES
-        // The direct CALL path cannot fall back to CRT-backed transaction
-        // nodes or vendor-owned suspension counts when this build lacks the
-        // explicit DE extension. Refuse before any peer is suspended.
-        if (nativeDispatch)
+        if (!Owner::Install(operation, generation))
         {
-            Fail(Failure::UnsupportedRoute);
             ReadState(finalState);
-            ReleaseAdmission(generation);
+            Owner::FinishFailedInstall(operation, generation);
             return false;
         }
-#endif
-        if (!runtime.route || ((queryGpuOwnership || classifyCustomPresent) && route != RenderObservationRoute::D3D12) ||
-            (classifyCustomPresent && !queryGpuOwnership) || (queryFrameBoundary && (!classifyCustomPresent || route != RenderObservationRoute::D3D12)) ||
-            (nativeDispatch && !queryFrameBoundary) || (captureDevice && !nativeDispatch))
-        {
-            Fail(Failure::UnsupportedRoute);
-            ReadState(finalState);
-            ReleaseAdmission(generation);
-            return false;
-        }
-        if (!ExactExecutable())
-        {
-            Fail(Failure::UnsupportedBuild);
-            ReadState(finalState);
-            ReleaseAdmission(generation);
-            return false;
-        }
-        if (!CheckFingerprint(runtime.image, *runtime.route))
-        {
-            Fail(Failure::FingerprintMismatch);
-            ReadState(finalState);
-            ReleaseAdmission(generation);
-            return false;
-        }
-        HMODULE pinned = nullptr;
-        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN, reinterpret_cast<LPCWSTR>(&HookPresent), &pinned))
-        {
-            Fail(Failure::HookInstall);
-            ReadState(finalState);
-            ReleaseAdmission(generation);
-            return false;
-        }
-        runtime.modulePinned.store(true);
-        if (nativeDispatch)
-            InitializeSetupDiagnostic(generation);
-        if (queryFrameBoundary && !PrepareFrameBoundaryHooks(runtime.image, generation, nativeDispatch, reinterpret_cast<void*>(&HookPresent)))
-        {
-            SetupRefused(RenderSetupStage::PrepareFrameBoundary);
-            runtime.setupTracing = false;
-            Fail(Failure::FingerprintMismatch);
-            ReadState(finalState);
-            return false;
-        }
-        runtime.original = reinterpret_cast<PresentFunction>(runtime.image + runtime.route->presentRva);
-        bool pending = false;
-        if (!ChangeHooks(true, pending))
-        {
-            Fail(Failure::HookInstall);
-            ReadState(finalState);
-            return false;
-        }
-        runtime.hooked.store(true);
-        runtime.bound.store(true);
         runtime.started = GetTickCount64();
         runtime.active.store(true);
         ReadState(finalState);
@@ -1432,44 +521,23 @@ namespace mta::game_de
 
     bool NativeRenderObservation::End() noexcept
     {
-        if (!generation || generation != runtime.generation.load())
+        if (!generation || generation != Owner::CurrentGeneration())
             return true;
         ApiOperation operation;
         if (!operation.acquired)
             return false;
-        if (!generation || generation != runtime.generation.load())
+        if (!generation || generation != Owner::CurrentGeneration())
             return true;
         runtime.active.store(false);
         runtime.devicePhase.store(DeviceCapturePhase::Stopped);
-        StopFrameBoundaryAdmission();
+        Owner::StopBoundaryAdmission(operation, generation);
         if (GetCurrentThreadId() != runtime.producerThread)
         {
             Fail(Failure::WrongProducerThread);
             return false;
         }
-        SetupCleanup(false);
-        // A counted callback may be the thread whose resume failed. Cleanup
-        // must first retry its safe resume rather than requiring it to finish
-        // while it is still stopped; ChangeHooks rechecks counts under holds.
-        if ((runtime.inFlight.load() || (runtime.queryFrameBoundary && FrameBoundaryInFlight())) && runtime.retainedSuspensions.empty() &&
-            !runtime.safetyHeldSuspensions)
+        if (!Owner::Detach(operation, generation))
         {
-            ReadState(finalState);
-            return false;
-        }
-        bool pending = false;
-        if ((runtime.hooked.load() || NativeDispatchPatchPresent() || !runtime.retainedSuspensions.empty()) && !ChangeHooks(false, pending))
-        {
-            SetupCleanup(false);
-            if (!pending)
-                Fail(Failure::HookRemove);
-            ReadState(finalState);
-            return false;
-        }
-        runtime.hooked.store(false);
-        if (!ReleaseNativeDispatchRelay())
-        {
-            SetupCleanup(false);
             ReadState(finalState);
             return false;
         }
@@ -1490,23 +558,23 @@ namespace mta::game_de
             DeviceReleaseFailed();
         if (runtime.deviceReleaseFault.load())
         {
-            SetupCleanup(false);
+            Owner::CleanupIncomplete(operation, generation);
             ReadState(finalState);
             return false;
         }
-        ReleaseFrameBoundaryDiagnosticModules();
-        SetupCleanup(true);
+        if (!Owner::CompleteCleanup(operation, generation))
+            return false;
         ReadState(finalState);
-        // Historical bound/modulePinned observations survive End. Only actual
-        // hook/relay/suspension/device ownership holds process admission.
-        return ReleaseAdmission(generation);
+        // The manager, not the bounded snapshot, retains process admission until
+        // both hook recovery and the diagnostic's untaken COM work have retired.
+        return Owner::Release(operation, generation);
     }
 
     void NativeRenderObservation::ReadState(NativeRenderObservationState& state) const noexcept
     {
         state = finalState;
-        state.modulePinned = runtime.modulePinned.load();
-        if (!generation || generation != runtime.generation.load())
+        state.modulePinned = Owner::ModulePinned();
+        if (!generation || generation != Owner::CurrentGeneration())
             return;
         if (runtime.active.load())
         {
@@ -1517,7 +585,8 @@ namespace mta::game_de
         // A failed resume may retain a callback while it owns this lock. The
         // worker must remain able to retry cleanup; keep its last coherent
         // value cache if a nonblocking read cannot obtain a new publication.
-        const bool retained = runtime.safetyHeldSuspensions || !runtime.retainedSuspensions.empty();
+        const auto owned = Owner::ReadOwnerState();
+        const bool retained = owned.retained;
         const bool locked = retained ? TryAcquireSRWLockShared(&runtime.snapshotLock) != FALSE : (AcquireSRWLockShared(&runtime.snapshotLock), true);
         if (locked)
         {
@@ -1529,12 +598,10 @@ namespace mta::game_de
         }
         state.generation = generation;
         state.requestedRoute = runtime.requestedRoute;
-        state.modulePinned = runtime.modulePinned.load();
-        state.bound = runtime.bound.load();
+        state.modulePinned = Owner::ModulePinned();
+        state.bound = owned.bound;
         state.active = runtime.active.load();
-        state.pendingCleanup = (runtime.hooked.load() || NativeDispatchPatchPresent() || !runtime.retainedSuspensions.empty() || runtime.devicePending.load() ||
-                                runtime.deviceReleaseFault.load()) &&
-                               !state.active;
+        state.pendingCleanup = (owned.pendingHookWork || runtime.devicePending.load() || runtime.deviceReleaseFault.load()) && !state.active;
         // Completed effects precede their monotonically increasing prerequisite.
         state.rejectedSnapshots = runtime.rejected.load();
         state.nestedCallbacks = runtime.nested.load();
@@ -1546,8 +613,8 @@ namespace mta::game_de
     }
     bool NativeRenderObservation::ReadEndpointDiagnostic(RenderEndpointDiagnosticV1& state) const noexcept
     {
-        if (!generation || generation != runtime.generation.load() || GetCurrentThreadId() != runtime.producerThread || !runtime.queryFrameBoundary ||
-            runtime.safetyHeldSuspensions || !runtime.retainedSuspensions.empty())
+        if (!generation || generation != Owner::CurrentGeneration() || GetCurrentThreadId() != runtime.producerThread || !runtime.queryFrameBoundary ||
+            Owner::ReadOwnerState().retained)
             return false;
         // Use the same lock order as publication so a separate diagnostic read
         // cannot observe next-count metadata before the native snapshot commits.
@@ -1558,21 +625,7 @@ namespace mta::game_de
     }
     bool NativeRenderObservation::ReadSetupDiagnostic(RenderSetupDiagnosticV1& state) const noexcept
     {
-        // A different live lease may begin a generation after this lease ends.
-        // Serialize the scalar copy with those writers without waiting on a
-        // worker that might still own suspended peers.
-        ApiOperation operation;
-        if (!operation.acquired)
-            return false;
-        if (!generation || generation != runtime.generation.load() || GetCurrentThreadId() != runtime.producerThread || !runtime.nativeDispatch ||
-            runtime.safetyHeldSuspensions || !runtime.retainedSuspensions.empty() || runtime.setup.version != RenderSetupDiagnosticVersionV1 ||
-            runtime.setup.generationLow != static_cast<std::uint32_t>(generation) ||
-            runtime.setup.generationHigh != static_cast<std::uint32_t>(generation >> 32))
-            return false;
-        // The operation guard protects this worker-owned cache across leases.
-        // It needs no callback-shared lock and remains usable after End.
-        state = runtime.setup;
-        return true;
+        return Owner::ReadSetupDiagnostic(generation, state);
     }
 
     bool NativeRenderObservation::ReadRootsDiagnostic(RenderRootsDiagnosticV1& state) const noexcept
@@ -1581,8 +634,8 @@ namespace mta::game_de
         // callback snapshot lock used for its accepted-count publication. Optional
         // logging must never obstruct cleanup of a retained suspended peer.
         ApiOperation operation;
-        if (!operation.acquired || !generation || generation != runtime.generation.load() || GetCurrentThreadId() != runtime.producerThread ||
-            !runtime.nativeDispatch || runtime.safetyHeldSuspensions || !runtime.retainedSuspensions.empty())
+        if (!operation.acquired || !generation || generation != Owner::CurrentGeneration() || GetCurrentThreadId() != runtime.producerThread ||
+            !runtime.nativeDispatch || Owner::ReadOwnerState().retained)
             return false;
         if (!TryAcquireSRWLockShared(&runtime.snapshotLock))
             return false;
@@ -1597,9 +650,9 @@ namespace mta::game_de
     Status NativeRenderObservation::TakeDeviceLease(RenderDeviceLeaseV1& state) noexcept
     {
         ApiOperation operation;
-        if (!operation.acquired || runtime.safetyHeldSuspensions || !runtime.retainedSuspensions.empty())
+        if (!operation.acquired || Owner::ReadOwnerState().retained)
             return Status::Unsupported;
-        if (!generation || generation != runtime.generation.load() || GetCurrentThreadId() != runtime.producerThread)
+        if (!generation || generation != Owner::CurrentGeneration() || GetCurrentThreadId() != runtime.producerThread)
             return Status::Unsupported;
         if (runtime.captureDeviceWindow)
             return Status::NotInitialized;
@@ -1625,9 +678,9 @@ namespace mta::game_de
     Status NativeRenderObservation::TakeDeviceWindowLease(RenderDeviceWindowLeaseV2& state) noexcept
     {
         ApiOperation operation;
-        if (!operation.acquired || runtime.safetyHeldSuspensions || !runtime.retainedSuspensions.empty())
+        if (!operation.acquired || Owner::ReadOwnerState().retained)
             return Status::Unsupported;
-        if (!generation || generation != runtime.generation.load() || GetCurrentThreadId() != runtime.producerThread)
+        if (!generation || generation != Owner::CurrentGeneration() || GetCurrentThreadId() != runtime.producerThread)
             return Status::Unsupported;
         if (!runtime.captureDeviceWindow || !runtime.active.load() || runtime.failure.load() || runtime.deviceReleaseFault.load() ||
             runtime.devicePhase.load() != DeviceCapturePhase::Ready)

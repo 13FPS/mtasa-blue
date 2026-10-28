@@ -56,6 +56,8 @@ namespace mta::game_de
     // These observations issue no GPU work and export no native pointers. A
     // separate explicit one-shot device request may transfer an acquired COM
     // reference for Core's own queue; it never grants native-frame permission.
+    // NativePresentOwner owns the actual hook, relay and retained recovery.
+    // This consumer keeps its diagnostic deadline and COM/snapshot ownership.
     // Begin/ReadState/End belong to one producer thread. End
     // disarms immediately but may require a later retry; retain the owner and
     // module until it succeeds. Static pinned hook state never retains this.

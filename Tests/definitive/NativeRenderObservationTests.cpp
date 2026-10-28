@@ -44,9 +44,31 @@ BOOL WINAPI FixtureNativeCloseHandle(HANDLE handle)
 }
 #define SuspendThread FixtureNativeSuspendThread
 #define CloseHandle   FixtureNativeCloseHandle
+#include "../../Client/game_de/NativePresentOwner.cpp"
 #include "../../Client/game_de/NativeRenderObservation.cpp"
 #undef CloseHandle
 #undef SuspendThread
+
+// The private fixture still reaches the real implementation after state ownership
+// moves; no production bypass or forwarding facade is added for these tests.
+using mta::game_de::PresentOwnerDetail::callbackDepth;
+using mta::game_de::PresentOwnerDetail::ChangeHooks;
+using mta::game_de::PresentOwnerDetail::CollectThreads;
+using mta::game_de::PresentOwnerDetail::CompareThreadObjects;
+using mta::game_de::PresentOwnerDetail::d3d11Route;
+using mta::game_de::PresentOwnerDetail::d3d12Route;
+using mta::game_de::PresentOwnerDetail::FinishSetupChange;
+using mta::game_de::PresentOwnerDetail::HoldNativeDispatchThreads;
+using mta::game_de::PresentOwnerDetail::HookPresent;
+using mta::game_de::PresentOwnerDetail::InitializeSetupDiagnostic;
+using mta::game_de::PresentOwnerDetail::NativeThreadComparisonStubMatches;
+using mta::game_de::PresentOwnerDetail::NativeThreadStubMatches;
+using mta::game_de::PresentOwnerDetail::NextThread;
+using mta::game_de::PresentOwnerDetail::PrepareNativeThreadEnumeration;
+using mta::game_de::PresentOwnerDetail::ResumeOwnedThread;
+using mta::game_de::PresentOwnerDetail::SelectRoute;
+using mta::game_de::PresentOwnerDetail::SetupRefused;
+using mta::game_de::PresentOwnerDetail::ThreadHandles;
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -161,22 +183,30 @@ namespace
     }
     void Configure(std::uintptr_t image, PresentFunction original = Original, RenderObservationRoute route = RenderObservationRoute::D3D11)
     {
-        runtime.image = image;
-        runtime.original = original;
-        runtime.route = SelectRoute(route);
+        runtime.image = PresentOwnerDetail::runtime.image = image;
+        PresentOwnerDetail::runtime.original = original;
+        runtime.route = PresentOwnerDetail::runtime.route = SelectRoute(route);
+        PresentOwnerDetail::runtime.config = {};
+        PresentOwnerDetail::runtime.config.route = route;
+        PresentOwnerDetail::runtime.consumer = &PresentBody;
+        PresentOwnerDetail::runtime.failureHandler = &OwnerFailure;
+        PresentOwnerDetail::runtime.detached = false;
+        PresentOwnerDetail::runtime.consumerCleanupComplete = false;
+        runtime.registeredGeneration.store(PresentOwnerDetail::runtime.generation.load());
+        PresentOwnerDetail::runtime.releaseFailureAfterSnapshot = false;
         runtime.requestedRoute = static_cast<std::uint32_t>(route);
         // API1/2 never inherit opt-in COM work from a previously rejected API3 Begin.
-        runtime.queryGpuOwnership = false;
-        runtime.classifyCustomPresent = false;
-        runtime.queryFrameBoundary = false;
-        runtime.nativeDispatch = false;
-        runtime.captureDeviceWindow = false;
+        runtime.queryGpuOwnership = PresentOwnerDetail::runtime.config.queryGpuOwnership = false;
+        runtime.classifyCustomPresent = PresentOwnerDetail::runtime.config.classifyCustomPresent = false;
+        runtime.queryFrameBoundary = PresentOwnerDetail::runtime.config.queryFrameBoundary = PresentOwnerDetail::runtime.queryFrameBoundary = false;
+        runtime.nativeDispatch = PresentOwnerDetail::runtime.config.nativeDispatch = PresentOwnerDetail::runtime.nativeDispatch = false;
+        runtime.captureDeviceWindow = PresentOwnerDetail::runtime.config.captureDeviceWindow = false;
         runtime.deviceWindow = {};
         runtime.devicePhase.store(DeviceCapturePhase::Off);
-        runtime.producerThread = GetCurrentThreadId();
-        runtime.bound.store(true);
+        runtime.producerThread = PresentOwnerDetail::runtime.producerThread = GetCurrentThreadId();
+        PresentOwnerDetail::runtime.bound.store(true);
         runtime.active.store(true);
-        runtime.hooked.store(false);
+        PresentOwnerDetail::runtime.hooked.store(false);
         runtime.started = GetTickCount64();
         ResetCounters();
         viewport.fill(0);
@@ -210,7 +240,7 @@ namespace
     }
     void EnableOwnership(std::uintptr_t image, std::uint32_t explicitCount = 1, std::uint32_t afrCount = 1)
     {
-        runtime.queryGpuOwnership = true;
+        runtime.queryGpuOwnership = PresentOwnerDetail::runtime.config.queryGpuOwnership = true;
         Put(image + 0x503e8e0, explicitCount);
         Put(image + 0x503f45c, afrCount);
     }
@@ -265,8 +295,11 @@ namespace
         {
             Configure(image, DeviceCandidateFixtureOriginal, RenderObservationRoute::D3D12);
             EnableOwnership(image, 2, 1);
-            runtime.classifyCustomPresent = runtime.queryFrameBoundary = runtime.nativeDispatch = true;
-            PrimeNativeDispatchDiagnostic(runtime.generation.load());
+            runtime.classifyCustomPresent = PresentOwnerDetail::runtime.config.classifyCustomPresent = runtime.queryFrameBoundary =
+                PresentOwnerDetail::runtime.config.queryFrameBoundary = PresentOwnerDetail::runtime.queryFrameBoundary = runtime.nativeDispatch =
+                    PresentOwnerDetail::runtime.config.nativeDispatch = PresentOwnerDetail::runtime.nativeDispatch = true;
+            PrimeNativeDispatchDiagnostic(PresentOwnerDetail::runtime.generation.load());
+            PresentOwnerDetail::runtime.config.captureDevice = enabled;
             runtime.devicePhase.store(enabled ? DeviceCapturePhase::Armed : DeviceCapturePhase::Off);
             SetDeviceCandidateFixture(device, mode);
         };
@@ -276,13 +309,13 @@ namespace
         const auto unchanged = [&] { return std::memcmp(&output, &sentinel, sizeof(output)) == 0; };
         configure(&staleDevice, 0);
         {
-            const auto generation = runtime.generation.load();
-            runtime.hooked.store(true);
+            const auto generation = PresentOwnerDetail::runtime.generation.load();
+            PresentOwnerDetail::runtime.hooked.store(true);
             NativeRenderObservation fresh;
-            Check(fresh.End() && runtime.active.load() && runtime.hooked.load() && runtime.generation.load() == generation &&
-                      runtime.devicePhase.load() == DeviceCapturePhase::Armed,
+            Check(fresh.End() && runtime.active.load() && PresentOwnerDetail::runtime.hooked.load() &&
+                      PresentOwnerDetail::runtime.generation.load() == generation && runtime.devicePhase.load() == DeviceCapturePhase::Armed,
                   "generation-zero End succeeds without mutating another active observer; fresh V6 registry disposal remains ownerless");
-            runtime.hooked.store(false);
+            PresentOwnerDetail::runtime.hooked.store(false);
         }
         Check(HookPresent(viewport.data(), 1) && runtime.devicePending.load(), "explicit clean callback commits one owned device with its accepted snapshot");
         RenderDeviceWindowLeaseV2 unrelatedWindow;
@@ -292,7 +325,7 @@ namespace
                   std::memcmp(&unrelatedWindow, &unrelatedWindowSentinel, sizeof(unrelatedWindow)) == 0 && !staleDevice.releases,
               "V2 cannot consume an existing V1 result or reinterpret it as window metadata");
         Check(owner.TakeDeviceLease(staleLease) == Status::Ok && staleLease.device == reinterpret_cast<ID3D12Device*>(&staleDevice) && staleLease.size == 48 &&
-                  staleLease.version == 1 && staleLease.generation == runtime.generation.load() && staleLease.acceptedSnapshots == 1 &&
+                  staleLease.version == 1 && staleLease.generation == PresentOwnerDetail::runtime.generation.load() && staleLease.acceptedSnapshots == 1 &&
                   staleLease.dispatchEntries == 1 && staleLease.sourceProfileId == 2 && !staleLease.reserved && !staleDevice.adds && !staleDevice.releases,
               "Take moves the existing reference and exact accepted provenance without AddRef");
         Check(owner.TakeDeviceLease(output) == Status::NotInitialized && unchanged(), "second Take never duplicates or overwrites device ownership");
@@ -353,10 +386,10 @@ namespace
             OwnedLeaseDevice device;
             configure(&device, 0);
             HookPresent(viewport.data(), 1);
-            runtime.safetyHeldSuspensions = true;
+            PresentOwnerDetail::runtime.safetyHeldSuspensions = true;
             Check(owner.TakeDeviceLease(output) == Status::Unsupported && unchanged() && !device.releases,
                   "Take refuses retained peers without waiting, releasing or changing output");
-            runtime.safetyHeldSuspensions = false;
+            PresentOwnerDetail::runtime.safetyHeldSuspensions = false;
             bool        foreignPreserved = false;
             std::thread foreignTake(
                 [&]
@@ -374,10 +407,10 @@ namespace
             AcquireSRWLockShared(&runtime.snapshotLock);
             Check(owner.TakeDeviceLease(output) == Status::Unsupported && unchanged(), "Take never waits for callback publication lock");
             ReleaseSRWLockShared(&runtime.snapshotLock);
-            runtime.inFlight.store(1);
+            PresentOwnerDetail::runtime.inFlight.store(1);
             Check(!owner.End() && !device.releases && runtime.devicePending.load() && owner.TakeDeviceLease(output) == Status::NotInitialized && unchanged(),
                   "End overlap stops handoff but retains the untaken ref until callback quiescence");
-            runtime.inFlight.store(0);
+            PresentOwnerDetail::runtime.inFlight.store(0);
             Check(owner.End() && device.releases == 1 && !device.references, "clean End releases an untaken device exactly once after quiescence");
         }
         for (unsigned faultStage = 0; faultStage < 4; ++faultStage)
@@ -432,9 +465,11 @@ namespace
         {
             Configure(image, DeviceCandidateFixtureOriginal, RenderObservationRoute::D3D12);
             EnableOwnership(image, 2, 1);
-            runtime.classifyCustomPresent = runtime.queryFrameBoundary = runtime.nativeDispatch = true;
-            runtime.captureDeviceWindow = true;
-            PrimeNativeDispatchDiagnostic(runtime.generation.load());
+            runtime.classifyCustomPresent = PresentOwnerDetail::runtime.config.classifyCustomPresent = runtime.queryFrameBoundary =
+                PresentOwnerDetail::runtime.config.queryFrameBoundary = PresentOwnerDetail::runtime.queryFrameBoundary = runtime.nativeDispatch =
+                    PresentOwnerDetail::runtime.config.nativeDispatch = PresentOwnerDetail::runtime.nativeDispatch = true;
+            runtime.captureDeviceWindow = PresentOwnerDetail::runtime.config.captureDeviceWindow = true;
+            PrimeNativeDispatchDiagnostic(PresentOwnerDetail::runtime.generation.load());
             runtime.devicePhase.store(DeviceCapturePhase::Armed);
             SetDeviceCandidateFixture(device, mode);
             SetDeviceWindowCandidateFixture(candidateWindow, windowed);
@@ -456,10 +491,10 @@ namespace
               "V1 cannot consume or overwrite an explicitly requested V2 reference");
         NativeRenderObservation fresh;
         Check(fresh.TakeDeviceWindowLease(output) == Status::Unsupported && unchanged(), "generation-zero V2 getter cannot consume another observer's result");
-        runtime.safetyHeldSuspensions = true;
+        PresentOwnerDetail::runtime.safetyHeldSuspensions = true;
         Check(owner.TakeDeviceWindowLease(output) == Status::Unsupported && unchanged(),
               "V2 refuses retained suspension ownership without COM or output changes");
-        runtime.safetyHeldSuspensions = false;
+        PresentOwnerDetail::runtime.safetyHeldSuspensions = false;
         bool        foreignPreserved = false;
         std::thread foreign(
             [&]
@@ -481,8 +516,8 @@ namespace
         RenderDeviceWindowLeaseV2 taken;
         Check(owner.TakeDeviceWindowLease(taken) == Status::Ok && taken.size == 64 && taken.version == 2 &&
                   taken.device == reinterpret_cast<ID3D12Device*>(&device) && taken.window == window && taken.windowed == 1 &&
-                  taken.generation == runtime.generation.load() && taken.acceptedSnapshots == 1 && taken.dispatchEntries == 1 && taken.sourceProfileId == 2 &&
-                  !taken.reserved[0] && !taken.reserved[1] && !device.adds && !device.releases,
+                  taken.generation == PresentOwnerDetail::runtime.generation.load() && taken.acceptedSnapshots == 1 && taken.dispatchEntries == 1 &&
+                  taken.sourceProfileId == 2 && !taken.reserved[0] && !taken.reserved[1] && !device.adds && !device.releases,
               "V2 Take moves the existing device ref and exact correlated scalar window metadata without calling COM or HWND APIs");
         Check(owner.TakeDeviceWindowLease(output) == Status::NotInitialized && unchanged() && owner.End() && !device.releases,
               "V2 is one-shot and End cannot release ownership already transferred to Core");
@@ -527,15 +562,15 @@ namespace
         OwnedLeaseDevice untaken;
         configure(&untaken, 0, window);
         HookPresent(viewport.data(), 1);
-        runtime.inFlight.store(1);
+        PresentOwnerDetail::runtime.inFlight.store(1);
         Check(!owner.End() && !untaken.releases && owner.TakeDeviceWindowLease(output) == Status::NotInitialized && unchanged(),
               "End overlap stops V2 transfer but retains its untaken reference until the callback drains");
-        runtime.inFlight.store(0);
+        PresentOwnerDetail::runtime.inFlight.store(0);
         Check(owner.End() && untaken.releases == 1 && !untaken.references && owner.TakeDeviceWindowLease(output) == Status::NotInitialized && unchanged(),
               "clean End releases an untaken V2 ref exactly once and never permits a post-End transfer");
         SetDeviceCandidateFixture(nullptr, 0);
         SetDeviceWindowCandidateFixture(nullptr, 0);
-        runtime.captureDeviceWindow = false;
+        runtime.captureDeviceWindow = PresentOwnerDetail::runtime.config.captureDeviceWindow = false;
     }
     void CheckCodeFixture(const char* path, const RouteDescriptor& route)
     {
@@ -544,7 +579,7 @@ namespace
         file.read(reinterpret_cast<char*>(fingerprint.data()), static_cast<std::streamsize>(fingerprint.size()));
         Check(file.gcount() == static_cast<std::streamsize>(fingerprint.size()) && file.peek() == std::char_traits<char>::eof(),
               "exact complete route function fixture");
-        HashResources original;
+        PresentOwnerDetail::HashResources original;
         Check(original.Open() && BCryptHashData(original.hash, fingerprint.data(), static_cast<ULONG>(fingerprint.size()), 0) >= 0 &&
                   original.Finish(route.presentHash),
               "production route digest accepts full pinned function");
@@ -552,12 +587,12 @@ namespace
         {
             auto altered = fingerprint;
             altered[index] ^= 1;
-            HashResources hash;
+            PresentOwnerDetail::HashResources hash;
             Check(hash.Open() && BCryptHashData(hash.hash, altered.data(), static_cast<ULONG>(altered.size()), 0) >= 0 && !hash.Finish(route.presentHash),
                   "every route native function byte is fingerprinted");
         }
-        HashResources foreign;
-        const auto&   other = route.route == RenderObservationRoute::D3D11 ? d3d12Route : d3d11Route;
+        PresentOwnerDetail::HashResources foreign;
+        const auto&                       other = route.route == RenderObservationRoute::D3D11 ? d3d12Route : d3d11Route;
         Check(foreign.Open() && BCryptHashData(foreign.hash, fingerprint.data(), static_cast<ULONG>(fingerprint.size()), 0) >= 0 &&
                   !foreign.Finish(other.presentHash),
               "one route cannot borrow another full function fingerprint");
@@ -710,68 +745,73 @@ namespace
 bool OwnedNativeDispatchCleanup(bool& pending)
 {
     using namespace mta::game_de;
-    runtime.nativeDispatch = runtime.queryFrameBoundary = true;
+    runtime.nativeDispatch = PresentOwnerDetail::runtime.config.nativeDispatch = PresentOwnerDetail::runtime.nativeDispatch = runtime.queryFrameBoundary =
+        PresentOwnerDetail::runtime.config.queryFrameBoundary = PresentOwnerDetail::runtime.queryFrameBoundary = true;
     return ChangeHooks(false, pending);
 }
 void* OwnedNativeDispatchWrapperHook()
 {
-    return reinterpret_cast<void*>(&mta::game_de::HookPresent);
+    return reinterpret_cast<void*>(&mta::game_de::PresentOwnerDetail::HookPresent);
 }
 bool OwnedNativeDispatchTransaction(bool install, std::uintptr_t wrapper, bool& pending)
 {
     using namespace mta::game_de;
     if (install)
     {
-        Check(!runtime.hooked.load() && runtime.retainedSuspensions.empty() && !runtime.safetyHeldSuspensions && !runtime.inFlight.load() &&
-                  !FrameBoundaryInFlight(),
+        Check(!PresentOwnerDetail::runtime.hooked.load() && PresentOwnerDetail::runtime.retainedSuspensions.empty() &&
+                  !PresentOwnerDetail::runtime.safetyHeldSuspensions && !PresentOwnerDetail::runtime.inFlight.load() && !FrameBoundaryInFlight(),
               "complete API6 fixture begins without inherited hooks or holds");
         // Only the private owned test advances past admission. The production
         // Begin image/fingerprint gates are unchanged, and this code is never
         // compiled into Game DE. No copied native function is ever invoked.
-        runtime.image = 0;
-        runtime.original = reinterpret_cast<PresentFunction>(wrapper);
-        runtime.producerThread = GetCurrentThreadId();
-        runtime.nativeDispatch = runtime.queryFrameBoundary = true;
+        runtime.image = PresentOwnerDetail::runtime.image = 0;
+        PresentOwnerDetail::runtime.original = reinterpret_cast<PresentFunction>(wrapper);
+        runtime.producerThread = PresentOwnerDetail::runtime.producerThread = GetCurrentThreadId();
+        runtime.nativeDispatch = PresentOwnerDetail::runtime.config.nativeDispatch = PresentOwnerDetail::runtime.nativeDispatch = runtime.queryFrameBoundary =
+            PresentOwnerDetail::runtime.config.queryFrameBoundary = PresentOwnerDetail::runtime.queryFrameBoundary = true;
         runtime.active.store(false);
-        InitializeSetupDiagnostic(runtime.generation.load());
+        InitializeSetupDiagnostic(PresentOwnerDetail::runtime.generation.load());
     }
     const bool result = ChangeHooks(install, pending);
     if (result)
-        Check(runtime.hooked.load() == install && runtime.retainedSuspensions.empty() && !runtime.safetyHeldSuspensions && !runtime.inFlight.load() &&
-                  !FrameBoundaryInFlight() &&
-                  (install ? reinterpret_cast<std::uintptr_t>(runtime.original) != wrapper : reinterpret_cast<std::uintptr_t>(runtime.original) == wrapper),
+        Check(PresentOwnerDetail::runtime.hooked.load() == install && PresentOwnerDetail::runtime.retainedSuspensions.empty() &&
+                  !PresentOwnerDetail::runtime.safetyHeldSuspensions && !PresentOwnerDetail::runtime.inFlight.load() && !FrameBoundaryInFlight() &&
+                  (install ? reinterpret_cast<std::uintptr_t>(PresentOwnerDetail::runtime.original) != wrapper
+                           : reinterpret_cast<std::uintptr_t>(PresentOwnerDetail::runtime.original) == wrapper),
               "complete API6 transaction owns/restores native trampoline and balances every production suspension");
     if (result && !install)
     {
-        runtime.original = nullptr;
-        runtime.nativeDispatch = runtime.queryFrameBoundary = false;
+        PresentOwnerDetail::runtime.original = nullptr;
+        runtime.nativeDispatch = PresentOwnerDetail::runtime.config.nativeDispatch = PresentOwnerDetail::runtime.nativeDispatch = runtime.queryFrameBoundary =
+            PresentOwnerDetail::runtime.config.queryFrameBoundary = PresentOwnerDetail::runtime.queryFrameBoundary = false;
     }
     return result;
 }
 void OwnedNativeDispatchSetupSnapshot(mta::game_de::RenderSetupDiagnosticV1& state)
 {
-    state = mta::game_de::runtime.setup;
+    state = mta::game_de::PresentOwnerDetail::runtime.setup;
 }
 bool OwnedNativeDispatchSetupRefusal(std::uintptr_t wrapper, bool afterHolds, mta::game_de::RenderSetupDiagnosticV1& state)
 {
     using namespace mta::game_de;
-    const auto                    savedEntry = runtime.nextThread;
-    const auto                    savedImage = runtime.nextThreadImage;
+    const auto                    savedEntry = PresentOwnerDetail::runtime.nextThread;
+    const auto                    savedImage = PresentOwnerDetail::runtime.nextThreadImage;
     std::array<unsigned char, 24> foreignEntry{};
     if (!afterHolds)
-        runtime.nextThread = reinterpret_cast<NextThread>(foreignEntry.data());
+        PresentOwnerDetail::runtime.nextThread = reinterpret_cast<NextThread>(foreignEntry.data());
     bool       pending = false;
     const bool installed = OwnedNativeDispatchTransaction(true, afterHolds ? 0 : wrapper, pending);
-    runtime.nextThread = savedEntry;
-    runtime.nextThreadImage = savedImage;
-    state = runtime.setup;
-    runtime.original = reinterpret_cast<PresentFunction>(wrapper);
-    return !installed && !pending && !runtime.hooked.load() && runtime.retainedSuspensions.empty() && !runtime.safetyHeldSuspensions;
+    PresentOwnerDetail::runtime.nextThread = savedEntry;
+    PresentOwnerDetail::runtime.nextThreadImage = savedImage;
+    state = PresentOwnerDetail::runtime.setup;
+    PresentOwnerDetail::runtime.original = reinterpret_cast<PresentFunction>(wrapper);
+    return !installed && !pending && !PresentOwnerDetail::runtime.hooked.load() && PresentOwnerDetail::runtime.retainedSuspensions.empty() &&
+           !PresentOwnerDetail::runtime.safetyHeldSuspensions;
 }
 bool OwnedNativeDispatchSafetyHeld()
 {
     using namespace mta::game_de;
-    return runtime.safetyHeldSuspensions && !runtime.retainedSuspensions.empty();
+    return PresentOwnerDetail::runtime.safetyHeldSuspensions && !PresentOwnerDetail::runtime.retainedSuspensions.empty();
 }
 bool OwnedNativeDispatchDiscovery(void (*afterSnapshot)(), DWORD (*newThreadId)())
 {
@@ -925,11 +965,11 @@ namespace
             const bool created = SetEvent(fixture.create) != FALSE && WaitForSingleObject(fixture.created, 5000) == WAIT_OBJECT_0;
             fixture.valid = fixture.valid && created;
             Sleep(5);
-            fixture.originalNext = runtime.nextThread;
-            fixture.originalCompare = runtime.compareThreadObjects;
-            runtime.nextThread = &ExitingDiscoveryNext;
+            fixture.originalNext = PresentOwnerDetail::runtime.nextThread;
+            fixture.originalCompare = PresentOwnerDetail::runtime.compareThreadObjects;
+            PresentOwnerDetail::runtime.nextThread = &ExitingDiscoveryNext;
             if (fixture.mode == 7)
-                runtime.compareThreadObjects = &ExitingDiscoveryCompare;
+                PresentOwnerDetail::runtime.compareThreadObjects = &ExitingDiscoveryCompare;
         }
         for (unsigned index = 0; index < fixture.extraDead.size(); ++index)
             if (fixture.extraDead[index].thread && GetThreadId(thread) == fixture.extraDead[index].id)
@@ -1085,11 +1125,11 @@ bool OwnedNativeDispatchExitingInstall(std::uintptr_t wrapper, unsigned mode, mt
     fixtureAfterSuspend = nullptr;
     fixtureAfterClose = nullptr;
     if (fixture.originalNext)
-        runtime.nextThread = fixture.originalNext;
+        PresentOwnerDetail::runtime.nextThread = fixture.originalNext;
     if (fixture.originalCompare)
-        runtime.compareThreadObjects = fixture.originalCompare;
+        PresentOwnerDetail::runtime.compareThreadObjects = fixture.originalCompare;
     exitingDiscoveryFixture = nullptr;
-    state = runtime.setup;
+    state = PresentOwnerDetail::runtime.setup;
     const bool     positive = mode == 0 || mode == 4 || mode == 5;
     const unsigned expectedDeadCalls = mode == 0 || mode == 6 ? 4u : mode == 4 || mode == 5 ? 3u : mode == 7 ? 2u : 1u;
     bool           distinctDeadHandles = true;
@@ -1104,7 +1144,7 @@ bool OwnedNativeDispatchExitingInstall(std::uintptr_t wrapper, unsigned mode, mt
           "every accepted dead branch continues from the still-owned native iterator; failing controls close without continuing");
     Check(distinctDeadHandles && fixture.duplicateCloses == expectedDeadCalls && fixture.iteratorCloses == expectedDeadCalls && fixture.deadHandlesClosed,
           "production closes every iterator after continuation and each independent dead duplicate/cache handle exactly once");
-    Check(!pending && runtime.retainedSuspensions.empty() && !runtime.safetyHeldSuspensions,
+    Check(!pending && PresentOwnerDetail::runtime.retainedSuspensions.empty() && !PresentOwnerDetail::runtime.safetyHeldSuspensions,
           "every completed exit/refusal pipeline balances its initial holds without retaining ownership");
     for (unsigned index = 0; index < fixture.extraDead.size(); ++index)
         Check(fixture.extraIteratorCloses[index] == fixture.extraDeadCalls[index] && fixture.extraDuplicateCloses[index] == fixture.extraDeadCalls[index],
@@ -1175,8 +1215,8 @@ bool OwnedNativeDispatchVmTransactions()
 {
     using namespace mta::game_de;
     Check(PrepareNativeThreadEnumeration(), "exact local NtGetNextThread stub admits bounded pre-hold enumeration");
-    const auto                    savedEntry = runtime.nextThread;
-    const auto                    savedImage = runtime.nextThreadImage;
+    const auto                    savedEntry = PresentOwnerDetail::runtime.nextThread;
+    const auto                    savedImage = PresentOwnerDetail::runtime.nextThreadImage;
     std::array<unsigned char, 24> foreignStub{};
     Check(Read(reinterpret_cast<std::uintptr_t>(savedEntry), foreignStub.data(), foreignStub.size()), "owned fixture reads only cached system stub");
     Check(NativeThreadStubMatches(foreignStub), "all24 original system stub bytes match the admitted profile");
@@ -1186,11 +1226,11 @@ bool OwnedNativeDispatchVmTransactions()
         Check(!NativeThreadStubMatches(foreignStub), "each changed system stub byte refuses the actual signature helper");
         byte ^= 1;
     }
-    runtime.nextThread = reinterpret_cast<NextThread>(foreignStub.data());
+    PresentOwnerDetail::runtime.nextThread = reinterpret_cast<NextThread>(foreignStub.data());
     Check(!PrepareNativeThreadEnumeration(), "copied or altered non-image NtGetNextThread entry refuses before any hold");
-    runtime.nextThread = savedEntry;
-    runtime.nextThreadImage = savedImage;
-    const auto savedComparison = runtime.compareThreadObjects;
+    PresentOwnerDetail::runtime.nextThread = savedEntry;
+    PresentOwnerDetail::runtime.nextThreadImage = savedImage;
+    const auto savedComparison = PresentOwnerDetail::runtime.compareThreadObjects;
     Check(Read(reinterpret_cast<std::uintptr_t>(savedComparison), foreignStub.data(), foreignStub.size()),
           "owned fixture reads only cached native comparison stub");
     Check(NativeThreadComparisonStubMatches(foreignStub), "all24 original native comparison bytes match the admitted profile");
@@ -1200,9 +1240,9 @@ bool OwnedNativeDispatchVmTransactions()
         Check(!NativeThreadComparisonStubMatches(foreignStub), "each changed comparison stub byte refuses the actual signature helper");
         byte ^= 1;
     }
-    runtime.compareThreadObjects = reinterpret_cast<CompareThreadObjects>(foreignStub.data());
+    PresentOwnerDetail::runtime.compareThreadObjects = reinterpret_cast<CompareThreadObjects>(foreignStub.data());
     Check(!PrepareNativeThreadEnumeration(), "copied non-image native comparison entry refuses before any hold");
-    runtime.compareThreadObjects = savedComparison;
+    PresentOwnerDetail::runtime.compareThreadObjects = savedComparison;
     Check(PrepareNativeThreadEnumeration(), "both exact system entries remain admissible after copied-entry refusal");
     ThreadHandles vmHandles;
     vmHandles.reserve(1024);
@@ -1293,14 +1333,15 @@ int main(int argc, char** argv)
     Check(!owner.Begin(), "ordinary executable rejected");
     NativeRenderObservationState state;
     owner.ReadState(state);
-    Check(!state.bound && !state.active && !state.modulePinned && !runtime.hooked.load() && !runtime.original,
+    Check(!state.bound && !state.active && !state.modulePinned && !PresentOwnerDetail::runtime.hooked.load() && !PresentOwnerDetail::runtime.original,
           "wrong image installs no hook and pins no module");
     Check(state.failureReason == static_cast<unsigned>(Failure::UnsupportedBuild), "wrong image has precise failure");
     Check(state.requestedRoute == 1 && state.observedRoute == 0 && state.presenceKnownMask == 0, "default API1 route remains D3D11, unobserved until callback");
     Check(owner.End() && owner.End(), "unbound End idempotent");
     Check(!owner.Begin(RenderObservationRoute::Unknown), "unknown route is never guessed");
     owner.ReadState(state);
-    Check(state.failureReason == static_cast<unsigned>(Failure::UnsupportedRoute) && state.requestedRoute == 0 && !state.modulePinned && !runtime.hooked.load(),
+    Check(state.failureReason == static_cast<unsigned>(Failure::UnsupportedRoute) && state.requestedRoute == 0 && !state.modulePinned &&
+              !PresentOwnerDetail::runtime.hooked.load(),
           "unknown route rejected before image pin or hooks");
     Check(owner.End(), "unknown route cleanup");
     Check(!owner.Begin(static_cast<RenderObservationRoute>(3)), "out of domain route rejected");
@@ -1308,24 +1349,24 @@ int main(int argc, char** argv)
     Check(!owner.Begin(RenderObservationRoute::D3D12), "ordinary executable rejects D3D12 without relaxed guard");
     owner.ReadState(state);
     Check(state.failureReason == static_cast<unsigned>(Failure::UnsupportedBuild) && state.requestedRoute == 2 && state.observedRoute == 0 &&
-              !state.modulePinned && !runtime.hooked.load(),
+              !state.modulePinned && !PresentOwnerDetail::runtime.hooked.load(),
           "explicit D3D12 wrong-image rejection remains unobserved and unpinned");
     Check(owner.End(), "wrong-image D3D12 cleanup");
     Check(!owner.Begin(RenderObservationRoute::D3D12, true), "API3 still rejects an ordinary executable before any COM query");
     owner.ReadState(state);
-    Check(!state.bound && !state.modulePinned && !runtime.hooked.load() && state.gpu.attempts == 0 && state.gpu.metadataValid == 0,
+    Check(!state.bound && !state.modulePinned && !PresentOwnerDetail::runtime.hooked.load() && state.gpu.attempts == 0 && state.gpu.metadataValid == 0,
           "wrong-image API3 cannot publish borrowed GPU ownership or install a hook");
     Check(owner.End(), "wrong-image API3 cleanup");
     Check(!owner.Begin(RenderObservationRoute::D3D12, true, true), "API4 rejects a nongame image before reading presenter objects");
     owner.ReadState(state);
-    Check(!state.bound && !state.modulePinned && !runtime.hooked.load() && !state.custom.status && !state.custom.implementationId &&
+    Check(!state.bound && !state.modulePinned && !PresentOwnerDetail::runtime.hooked.load() && !state.custom.status && !state.custom.implementationId &&
               !state.custom.slotSignatureMask && !state.custom.staticPolicyFlags && !state.gpu.attempts,
           "failed API4 image admission cannot fabricate static policy or COM metadata");
     Check(owner.End(), "wrong-image API4 cleanup");
     Check(!owner.Begin(RenderObservationRoute::D3D12, true, true, true), "API5 rejects a nongame image before endpoint or lifecycle preparation");
     owner.ReadState(state);
-    Check(!state.bound && !state.modulePinned && !runtime.hooked.load() && !state.gpu.attempts && !state.boundary.status && !state.boundary.endpointProfileId &&
-              !state.boundary.presentEntries && !state.boundary.resizeEpoch,
+    Check(!state.bound && !state.modulePinned && !PresentOwnerDetail::runtime.hooked.load() && !state.gpu.attempts && !state.boundary.status &&
+              !state.boundary.endpointProfileId && !state.boundary.presentEntries && !state.boundary.resizeEpoch,
           "wrong-image API5 leaves the additive initial tail zero");
     Check(owner.End(), "wrong-image API5 cleanup");
     RenderEndpointDiagnosticV1 unavailableDiagnostic;
@@ -1347,10 +1388,12 @@ int main(int argc, char** argv)
     Check(image != 0, "owned synthetic image allocation");
     Configure(image, NativeDispatchFixtureOriginal, RenderObservationRoute::D3D12);
     EnableOwnership(image, 2, 1);
-    runtime.classifyCustomPresent = runtime.queryFrameBoundary = runtime.nativeDispatch = true;
-    PrimeNativeDispatchDiagnostic(runtime.generation.load());
-    InitializeSetupDiagnostic(runtime.generation.load());
-    runtime.setupTracing = false;
+    runtime.classifyCustomPresent = PresentOwnerDetail::runtime.config.classifyCustomPresent = runtime.queryFrameBoundary =
+        PresentOwnerDetail::runtime.config.queryFrameBoundary = PresentOwnerDetail::runtime.queryFrameBoundary = runtime.nativeDispatch =
+            PresentOwnerDetail::runtime.config.nativeDispatch = PresentOwnerDetail::runtime.nativeDispatch = true;
+    PrimeNativeDispatchDiagnostic(PresentOwnerDetail::runtime.generation.load());
+    InitializeSetupDiagnostic(PresentOwnerDetail::runtime.generation.load());
+    PresentOwnerDetail::runtime.setupTracing = false;
     Check(owner.ReadSetupDiagnostic(setupDiagnostic) && setupDiagnostic.version == 1 && setupDiagnostic.attempted == 1 &&
               setupDiagnostic.stage == static_cast<unsigned>(RenderSetupStage::PrepareFrameBoundary),
           "exact API6 producer reads its separate generation-owned setup cache");
@@ -1386,7 +1429,7 @@ int main(int argc, char** argv)
     Check(owner.ReadRootsDiagnostic(rootsDiagnostic) && rootsDiagnostic.version == 1 && rootsDiagnostic.queryPhase == 1 && rootsDiagnostic.checkpoint == 31 &&
               !rootsDiagnostic.refusalReason && rootsDiagnostic.scalarValidMask == 3 && rootsDiagnostic.contextNodeMask == 1 &&
               !rootsDiagnostic.nativeBufferIndex && rootsDiagnostic.acceptedSnapshotsLow == 2 && rootsDiagnostic.dispatchEntriesLow == 2 &&
-              rootsDiagnostic.generationLow == static_cast<unsigned>(runtime.generation.load()),
+              rootsDiagnostic.generationLow == static_cast<unsigned>(PresentOwnerDetail::runtime.generation.load()),
           "roots evidence is committed after original with the same accepted count and cumulative dispatch count");
     bool        foreignRootsRejected = false;
     std::thread foreignRootsReader(
@@ -1407,11 +1450,11 @@ int main(int argc, char** argv)
               !rootsDiagnostic.scalarValidMask && !rootsDiagnostic.contextNodeMask && !rootsDiagnostic.nativeBufferIndex,
           "accepted callback without a root query publishes an explicit zero-phase record and historical dispatch count");
     const auto beforeRootsMiss = rootsDiagnostic;
-    runtime.original = OriginalException;
+    PresentOwnerDetail::runtime.original = OriginalException;
     Check(CatchOriginalException(viewport.data()) && owner.ReadRootsDiagnostic(rootsDiagnostic) &&
               std::memcmp(&rootsDiagnostic, &beforeRootsMiss, sizeof(rootsDiagnostic)) == 0,
           "original SEH cannot publish a new roots trace or count");
-    runtime.original = NativeDispatchFixtureOriginal;
+    PresentOwnerDetail::runtime.original = NativeDispatchFixtureOriginal;
     AcquireSRWLockShared(&runtime.snapshotLock);
     HookPresent(viewport.data(), 1);
     ReleaseSRWLockShared(&runtime.snapshotLock);
@@ -1429,7 +1472,7 @@ int main(int argc, char** argv)
     Check(owner.ReadEndpointDiagnostic(nativeEndpointDiagnostic) && nativeEndpointDiagnostic.acceptedSnapshotsLow == 3,
           "API6 producer retains the separate generation-coherent endpoint diagnostic");
     AcquireSRWLockExclusive(&runtime.snapshotLock);
-    runtime.retainedSuspensions.push_back(nullptr);
+    PresentOwnerDetail::runtime.retainedSuspensions.push_back(nullptr);
     runtime.accepted.store(4);
     owner.ReadState(state);
     Check(state.acceptedSnapshots == 3 && state.nativeDispatch.presentEntries == 2,
@@ -1441,27 +1484,27 @@ int main(int argc, char** argv)
     Check(!owner.ReadSetupDiagnostic(setupDiagnostic) && setupDiagnostic.version == 99,
           "retained suspension refuses setup getter untouched without acquiring the held snapshot lock");
     Check(!owner.ReadRootsDiagnostic(rootsDiagnostic) && rootsUnchanged(), "retained peer refuses roots getter before acquiring its held snapshot lock");
-    runtime.inFlight.store(1);
+    PresentOwnerDetail::runtime.inFlight.store(1);
     Check(!owner.Begin(RenderObservationRoute::D3D12, true, true, true, true), "held callback readback rejects a new generation without waiting for its lock");
-    runtime.inFlight.store(0);
-    runtime.retainedSuspensions.clear();
+    PresentOwnerDetail::runtime.inFlight.store(0);
+    PresentOwnerDetail::runtime.retainedSuspensions.clear();
     runtime.accepted.store(3);
     ReleaseSRWLockExclusive(&runtime.snapshotLock);
-    runtime.safetyHeldSuspensions = true;
+    PresentOwnerDetail::runtime.safetyHeldSuspensions = true;
     Check(!owner.ReadSetupDiagnostic(setupDiagnostic) && setupDiagnostic.version == 99,
           "safety-held state alone also refuses setup getter without output changes");
     Check(!owner.ReadRootsDiagnostic(rootsDiagnostic) && rootsUnchanged(), "safety-held peers also refuse optional roots logging untouched");
-    runtime.safetyHeldSuspensions = false;
-    runtime.setupTracing = true;
+    PresentOwnerDetail::runtime.safetyHeldSuspensions = false;
+    PresentOwnerDetail::runtime.setupTracing = true;
     SetupRefused(RenderSetupStage::NativeThreadStubMatch);
     SetupRefused(RenderSetupStage::TransactionPeers, RenderSetupErrorDomain::Detours, 123);
     FinishSetupChange(false, true);
-    runtime.inFlight.store(1);
+    PresentOwnerDetail::runtime.inFlight.store(1);
     Check(!owner.End(), "API6 native wrapper in flight retains its owner");
     Check(owner.ReadSetupDiagnostic(setupDiagnostic) && setupDiagnostic.failureStage == static_cast<unsigned>(RenderSetupStage::NativeThreadStubMatch) &&
               !setupDiagnostic.errorDomain && !setupDiagnostic.errorCode && setupDiagnostic.cleanupAttempted == 1 && !setupDiagnostic.cleanupComplete,
           "busy End preserves first refusal/error while marking incomplete cleanup");
-    runtime.inFlight.store(0);
+    PresentOwnerDetail::runtime.inFlight.store(0);
     Check(owner.End(), "API6 fixture drains without a frame sink or GPU command");
     Check(owner.ReadSetupDiagnostic(setupDiagnostic) && setupDiagnostic.stage == static_cast<unsigned>(RenderSetupStage::NativeThreadStubMatch) &&
               setupDiagnostic.failureStage == setupDiagnostic.stage && setupDiagnostic.cleanupAttempted == 1 && setupDiagnostic.cleanupComplete == 1 &&
@@ -1475,12 +1518,12 @@ int main(int argc, char** argv)
     std::thread lockedCallback(
         [&]
         {
-            runtime.inFlight.store(1);
+            PresentOwnerDetail::runtime.inFlight.store(1);
             AcquireSRWLockExclusive(&runtime.snapshotLock);
             SetEvent(lockedReady);
             WaitForSingleObject(lockedRelease, INFINITE);
             ReleaseSRWLockExclusive(&runtime.snapshotLock);
-            runtime.inFlight.store(0);
+            PresentOwnerDetail::runtime.inFlight.store(0);
             SetEvent(lockedDone);
         });
     WaitForSingleObject(lockedReady, INFINITE);
@@ -1489,10 +1532,10 @@ int main(int argc, char** argv)
               DuplicateHandle(GetCurrentProcess(), lockedCallback.native_handle(), GetCurrentProcess(), &retainedCallback, 0, FALSE, DUPLICATE_SAME_ACCESS),
           "owned failed-resume model retains the counted callback's actual suspension and handle");
     Check(!ResumeOwnedThread(retainedCallback, &RefuseThreadResume), "own-resume helper preserves failed counted callback for public End retry");
-    runtime.retainedSuspensions.push_back(retainedCallback);
+    PresentOwnerDetail::runtime.retainedSuspensions.push_back(retainedCallback);
     SetEvent(lockedRelease);
     owner.End();
-    Check(WaitForSingleObject(lockedDone, 1000) == WAIT_OBJECT_0 && !runtime.inFlight.load(),
+    Check(WaitForSingleObject(lockedDone, 1000) == WAIT_OBJECT_0 && !PresentOwnerDetail::runtime.inFlight.load(),
           "End retries a retained counted callback's resume before requiring its in-flight count or snapshot lock to drain");
     lockedCallback.join();
     Check(owner.End(), "a drained counted-callback retry remains cleanup-idempotent");
@@ -1600,7 +1643,7 @@ int main(int argc, char** argv)
     ownedQueue.calls = 0;
     Configure(image, Original, RenderObservationRoute::D3D12);
     EnableOwnership(image);
-    runtime.classifyCustomPresent = true;
+    runtime.classifyCustomPresent = PresentOwnerDetail::runtime.config.classifyCustomPresent = true;
     Put(object + 0x60, reinterpret_cast<std::uintptr_t>(&ownedSwapchain));
     Put(queueMember, reinterpret_cast<std::uintptr_t>(&ownedQueue));
     Check(HookPresent(viewport.data(), 1), "API4 absent classification forwards the original even when native QI fails");
@@ -1613,7 +1656,7 @@ int main(int argc, char** argv)
     {
         Configure(image, original, RenderObservationRoute::D3D12);
         EnableOwnership(image);
-        runtime.classifyCustomPresent = true;
+        runtime.classifyCustomPresent = PresentOwnerDetail::runtime.config.classifyCustomPresent = true;
         Put(object + 0x1d0, reinterpret_cast<std::uintptr_t>(ownedPresenter.data()));
         Put(object + 0x60, reinterpret_cast<std::uintptr_t>(&ownedSwapchain));
         Put(queueMember, reinterpret_cast<std::uintptr_t>(&ownedQueue));
@@ -1645,7 +1688,7 @@ int main(int argc, char** argv)
     configureClassification(OriginalException);
     Check(CatchOriginalException(viewport.data()), "API4 original SEH propagates after classification and metadata reads");
     owner.ReadState(state);
-    Check(!state.custom.status && !state.gpu.attempts && !state.acceptedSnapshots && !runtime.inFlight.load(),
+    Check(!state.custom.status && !state.gpu.attempts && !state.acceptedSnapshots && !PresentOwnerDetail::runtime.inFlight.load(),
           "API4 cannot publish classification for an original that never returned");
     configureClassification();
     AcquireSRWLockShared(&runtime.snapshotLock);
@@ -1710,7 +1753,7 @@ int main(int argc, char** argv)
     Check(CatchOriginalException(viewport.data()), "API3 original SEH still propagates after custom-present metadata queries");
     owner.ReadState(state);
     Check(ownedSwapchain.calls == beforeException + 1 && state.gpu.attempts == 0 && state.gpu.queryStage == 0 && state.acceptedSnapshots == 0 &&
-              runtime.inFlight.load() == 0,
+              PresentOwnerDetail::runtime.inFlight.load() == 0,
           "custom-present queries cannot publish completed probe evidence when original never returns");
     Configure(image, Original, RenderObservationRoute::D3D12);
     EnableOwnership(image);
@@ -1730,7 +1773,7 @@ int main(int argc, char** argv)
     {
         Configure(image, original, RenderObservationRoute::D3D12);
         EnableOwnership(image);
-        runtime.classifyCustomPresent = true;
+        runtime.classifyCustomPresent = PresentOwnerDetail::runtime.config.classifyCustomPresent = true;
         Put(object + 0x1d0, std::uintptr_t{0x1234});
         Put(object + 0x60, reinterpret_cast<std::uintptr_t>(&ownedSwapchain));
         Put(queueMember, reinterpret_cast<std::uintptr_t>(&ownedQueue));
@@ -1738,7 +1781,8 @@ int main(int argc, char** argv)
         ownedSwapchain.failRelease = true;
     };
     configureCleanupFailure(Original);
-    runtime.queryFrameBoundary = runtime.nativeDispatch = true;
+    runtime.queryFrameBoundary = PresentOwnerDetail::runtime.config.queryFrameBoundary = PresentOwnerDetail::runtime.queryFrameBoundary =
+        runtime.nativeDispatch = PresentOwnerDetail::runtime.config.nativeDispatch = PresentOwnerDetail::runtime.nativeDispatch = true;
     Check(HookPresent(viewport.data(), 1), "callback forwards original after an owned COM release fault");
     owner.ReadState(state);
     Check(!state.active && state.failureReason == static_cast<unsigned>(Failure::GpuOwnershipCleanup) && state.gpu.attempts == 1 &&
@@ -1765,10 +1809,10 @@ int main(int argc, char** argv)
     Check(CatchOriginalException(viewport.data()), "original SEH still propagates after a COM cleanup failure");
     owner.ReadState(state);
     Check(!state.active && state.failureReason == static_cast<unsigned>(Failure::GpuOwnershipCleanup) && state.gpu.attempts == 0 &&
-              state.acceptedSnapshots == 0 && runtime.inFlight.load() == 0,
+              state.acceptedSnapshots == 0 && PresentOwnerDetail::runtime.inFlight.load() == 0,
           "fatal COM cleanup failure remains visible when original never returns or publishes");
     callsAfterCleanup = ownedSwapchain.calls;
-    runtime.original = Original;
+    PresentOwnerDetail::runtime.original = Original;
     Check(HookPresent(viewport.data(), 1) && ownedSwapchain.calls == callsAfterCleanup, "original exception cannot erase a disarm or permit another COM query");
     configureCleanupFailure(Original);
     ownedSwapchain.changeAddress = object + 0x1d0;
@@ -1783,8 +1827,9 @@ int main(int argc, char** argv)
     {
         Configure(image, BoundaryFixtureOriginal, RenderObservationRoute::D3D12);
         EnableOwnership(image, 2, 1);
-        runtime.classifyCustomPresent = runtime.queryFrameBoundary = true;
-        PrimeBoundaryDiagnostic(runtime.generation.load());
+        runtime.classifyCustomPresent = PresentOwnerDetail::runtime.config.classifyCustomPresent = runtime.queryFrameBoundary =
+            PresentOwnerDetail::runtime.config.queryFrameBoundary = PresentOwnerDetail::runtime.queryFrameBoundary = true;
+        PrimeBoundaryDiagnostic(PresentOwnerDetail::runtime.generation.load());
     };
     configureBoundaryPublication();
     Check(HookPresent(viewport.data(), 1) && !HookPresent(viewport.data(), 0), "API5 completed scopes preserve both native original results");
@@ -1814,10 +1859,10 @@ int main(int argc, char** argv)
           "publication miss cannot attach new boundary counters to an old snapshot");
     Check(owner.ReadEndpointDiagnostic(endpointDiagnostic) && endpointDiagnostic.acceptedSnapshotsLow == 2,
           "missed native publication cannot update the separate endpoint diagnostic cache");
-    runtime.inFlight.store(1);
+    PresentOwnerDetail::runtime.inFlight.store(1);
     Check(!owner.End() && owner.ReadEndpointDiagnostic(endpointDiagnostic) && endpointDiagnostic.acceptedSnapshotsLow == 2,
           "inflight failed End retains the readable diagnostic and module lifetime");
-    runtime.inFlight.store(0);
+    PresentOwnerDetail::runtime.inFlight.store(0);
     Check(owner.End() && owner.ReadEndpointDiagnostic(endpointDiagnostic) && endpointDiagnostic.acceptedSnapshotsLow == 2,
           "successful End preserves the final scalar diagnostic until lease release");
     runtime.active.store(true);
@@ -1831,7 +1876,7 @@ int main(int argc, char** argv)
     Check(!state.active && state.failureReason == 10 && state.gpu.attempts == 3 && state.boundary.presentEntries == 2 && state.boundary.status == 2,
           "later fatal API3 cleanup retains explicitly historical boundary cache without new API5 calls");
     configureCleanupFailure(Original);
-    runtime.queryFrameBoundary = true;
+    runtime.queryFrameBoundary = PresentOwnerDetail::runtime.config.queryFrameBoundary = PresentOwnerDetail::runtime.queryFrameBoundary = true;
     HookPresent(viewport.data(), 1);
     owner.ReadState(state);
     Check(state.failureReason == 10 && state.gpu.attempts == 1 && !state.boundary.status && !state.boundary.presentEntries,
@@ -1841,7 +1886,8 @@ int main(int argc, char** argv)
     HookPresent(viewport.data(), 1);
     Check(CatchBoundaryException(viewport.data()), "boundary cleanup failure preserves original SEH propagation");
     owner.ReadState(state);
-    Check(!state.active && state.failureReason == 10 && state.boundary.presentEntries == 1 && state.gpu.attempts == 1 && runtime.inFlight == 0,
+    Check(!state.active && state.failureReason == 10 && state.boundary.presentEntries == 1 && state.gpu.attempts == 1 &&
+              PresentOwnerDetail::runtime.inFlight == 0,
           "fatal boundary cleanup survives original SEH while prior coherent snapshot remains intact");
     configureBoundaryPublication();
     HookPresent(viewport.data(), 1);
@@ -1876,12 +1922,13 @@ int main(int argc, char** argv)
     Configure(image, OriginalException, RenderObservationRoute::D3D12);
     Check(CatchOriginalException(viewport.data()), "D3D12 original SEH propagates");
     owner.ReadState(state);
-    Check(!state.observedRoute && !state.presenceKnownMask && !state.queuePresent && !state.lastOriginalReturned && runtime.inFlight.load() == 0,
+    Check(!state.observedRoute && !state.presenceKnownMask && !state.queuePresent && !state.lastOriginalReturned &&
+              PresentOwnerDetail::runtime.inFlight.load() == 0,
           "D3D12 exception never publishes a returned route");
     Configure(image, OriginalNested, RenderObservationRoute::D3D12);
     HookPresent(viewport.data(), 1);
     owner.ReadState(state);
-    Check(state.nestedCallbacks == 1 && !state.active && !state.observedRoute && !state.presenceKnownMask && runtime.inFlight.load() == 0,
+    Check(state.nestedCallbacks == 1 && !state.active && !state.observedRoute && !state.presenceKnownMask && PresentOwnerDetail::runtime.inFlight.load() == 0,
           "nested D3D12 callback disarms and unwinds without publishing");
     Configure(image, Original, RenderObservationRoute::D3D12);
     std::thread d3d12Engine([] { HookPresent(viewport.data(), 1); });
@@ -1919,7 +1966,7 @@ int main(int argc, char** argv)
 
     Configure(image, OriginalException);
     Check(CatchOriginalException(viewport.data()), "original SEH propagates");
-    Check(runtime.inFlight.load() == 0 && callbackDepth == 0, "SEH releases hook lifetime scope");
+    Check(PresentOwnerDetail::runtime.inFlight.load() == 0 && callbackDepth == 0, "SEH releases hook lifetime scope");
     owner.ReadState(state);
     Check(state.acceptedSnapshots == 0 && !state.lastOriginalReturned, "exception is not published as returned original");
     Configure(image, OriginalNested);
@@ -1928,7 +1975,7 @@ int main(int argc, char** argv)
     Check(state.nativePresentCallbacks == 2 && state.nestedCallbacks == 1 && !state.active &&
               state.failureReason == static_cast<unsigned>(Failure::NestedCallback),
           "nested callback forwards but disarms");
-    Check(runtime.inFlight.load() == 0 && callbackDepth == 0, "nested lifetime unwinds");
+    Check(PresentOwnerDetail::runtime.inFlight.load() == 0 && callbackDepth == 0, "nested lifetime unwinds");
 
     Configure(image);
     std::thread engine([] { HookPresent(viewport.data(), 1); });
@@ -1964,18 +2011,18 @@ int main(int argc, char** argv)
         Check(entered && resume, "owned cross-thread barriers");
         bool pending = false;
         Check(ChangeHooks(true, pending), "genuine Detours attach on owned test function");
-        runtime.hooked.store(true);
+        PresentOwnerDetail::runtime.hooked.store(true);
         PresentFunction volatile target = &OriginalBlocked;
         std::thread blocked([&] { target(viewport.data(), 1); });
         Check(WaitForSingleObject(entered, 2000) == WAIT_OBJECT_0, "actual detoured engine callback entered");
         Check(!owner.End(), "producer End disarms and retains active callback");
         owner.ReadState(state);
-        Check(!state.active && state.pendingCleanup && state.failureReason == 0 && runtime.hooked.load(),
+        Check(!state.active && state.pendingCleanup && state.failureReason == 0 && PresentOwnerDetail::runtime.hooked.load(),
               "busy cleanup is retryable without permanent failure");
-        Check(!ChangeHooks(false, pending) && pending && runtime.hooked.load(), "post-suspension inFlight check aborts detach safely");
+        Check(!ChangeHooks(false, pending) && pending && PresentOwnerDetail::runtime.hooked.load(), "post-suspension inFlight check aborts detach safely");
         SetEvent(resume);
         blocked.join();
-        Check(runtime.inFlight.load() == 0, "aborted transaction resumes owned engine thread");
+        Check(PresentOwnerDetail::runtime.inFlight.load() == 0, "aborted transaction resumes owned engine thread");
         Check(owner.End(), "producer cleanup retry genuinely detaches");
         owner.ReadState(state);
         Check(state.bound && !state.active && !state.pendingCleanup && state.nativePresentCallbacks == 1 && state.failureReason == 0,
@@ -2062,8 +2109,10 @@ int main(int argc, char** argv)
     // Begin must invalidate positive historical evidence rather than only zero.
     Configure(image, NativeDispatchFixtureOriginal, RenderObservationRoute::D3D12);
     EnableOwnership(image, 2, 1);
-    runtime.classifyCustomPresent = runtime.queryFrameBoundary = runtime.nativeDispatch = true;
-    PrimeNativeDispatchDiagnostic(runtime.generation.load());
+    runtime.classifyCustomPresent = PresentOwnerDetail::runtime.config.classifyCustomPresent = runtime.queryFrameBoundary =
+        PresentOwnerDetail::runtime.config.queryFrameBoundary = PresentOwnerDetail::runtime.queryFrameBoundary = runtime.nativeDispatch =
+            PresentOwnerDetail::runtime.config.nativeDispatch = PresentOwnerDetail::runtime.nativeDispatch = true;
+    PrimeNativeDispatchDiagnostic(PresentOwnerDetail::runtime.generation.load());
     HookPresent(viewport.data(), 1);
     Check(owner.End(), "direct callback cleanup");
     owner.ReadState(state);
@@ -2071,9 +2120,9 @@ int main(int argc, char** argv)
     Check(owner.ReadRootsDiagnostic(rootsDiagnostic) && rootsDiagnostic.version == 1 && rootsDiagnostic.acceptedSnapshotsLow == 1 &&
               rootsDiagnostic.dispatchEntriesLow == 1 && rootsDiagnostic.queryPhase == 1 && rootsDiagnostic.checkpoint == 31,
           "previous owned generation retains a positively published roots cache before the rejected new Begin");
-    runtime.nativeDispatch = true;
+    runtime.nativeDispatch = PresentOwnerDetail::runtime.config.nativeDispatch = PresentOwnerDetail::runtime.nativeDispatch = true;
     InitializeSetupDiagnostic(oldGeneration);
-    runtime.setup.transactionCommitted = runtime.setup.hooksCommitted = 1;
+    PresentOwnerDetail::runtime.setup.transactionCommitted = PresentOwnerDetail::runtime.setup.hooksCommitted = 1;
     FinishSetupChange(true, true);
     Check(owner.ReadSetupDiagnostic(setupDiagnostic) && setupDiagnostic.installSucceeded == 1,
           "owned getter fixture retains a completed previous-generation setup");
@@ -2084,7 +2133,7 @@ int main(int argc, char** argv)
           "retired observation cannot read a different generation's private diagnostic");
     setupDiagnostic.version = 99;
     Check(!owner.ReadSetupDiagnostic(setupDiagnostic) && setupDiagnostic.version == 99 && !nextOwner.ReadSetupDiagnostic(setupDiagnostic) &&
-              setupDiagnostic.version == 99 && !runtime.setup.version,
+              setupDiagnostic.version == 99 && !PresentOwnerDetail::runtime.setup.version,
           "new rejected Begin clears historical setup and neither old nor wrong-image lease exposes it");
     rootsDiagnostic = rootsSentinel;
     Check(!owner.ReadRootsDiagnostic(rootsDiagnostic) && rootsUnchanged() && !nextOwner.ReadRootsDiagnostic(rootsDiagnostic) && rootsUnchanged(),
@@ -2102,7 +2151,7 @@ int main(int argc, char** argv)
           "new generation cannot resurrect an old mailbox or revoke Core's previously taken reference");
     Check(ReleaseRenderDeviceReference(staleDeviceLease.device) && staleDevice.releases == 1 && !staleDevice.references,
           "Core releases its independent strong reference after native generation retirement");
-    Check(!runtime.modulePinned.load(), "synthetic fixtures never pin executable/module");
+    Check(!PresentOwnerDetail::runtime.modulePinned.load(), "synthetic fixtures never pin executable/module");
     CheckFrameBoundaryProbe(argv[3], argv[2], checks);
     VirtualFree(reinterpret_cast<void*>(image), 0, MEM_RELEASE);
     std::printf("Passed %u production native render observation checks\n", checks);

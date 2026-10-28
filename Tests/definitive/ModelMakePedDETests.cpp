@@ -181,6 +181,104 @@ namespace
     static_assert(std::is_same_v<decltype(&Model::MakePedModel), void (CModelInfoRequestDE::*)(const char*)>);
     static_assert(std::is_same_v<decltype(&Streaming::RequestSpecialModel), void (CStreamingDE::*)(DWORD, const char*, DWORD)>);
 
+    struct CreationOwner final : NativeModelClassificationAccess
+    {
+        explicit CreationOwner(Trace& trace) : trace(trace) {}
+        ClockResult CreateAndPublishPedModelMetadata(std::uint32_t modelIndex) noexcept override
+        {
+            trace.Add(1);
+            ++calls;
+            lastModel = modelIndex;
+            // This observes the new optional owner channel only. The actual
+            // native creation journal is not reimplemented in this SDK spy.
+            if (status == ClockResult::Ok || acknowledgePrefixBeforeRefusal)
+                ++acknowledgedPrefixes;
+            return status;
+        }
+        Trace&        trace;
+        std::uint32_t lastModel = 0;
+        unsigned      calls = 0, acknowledgedPrefixes = 0;
+        ClockResult   status = ClockResult::Ok;
+        bool          acknowledgePrefixBeforeRefusal = false;
+    };
+    class OwnerModel final : public DefaultModel
+    {
+    public:
+        using CModelInfoRequestDE::CreateAndPublishNativePedModel;
+        using DefaultModel::DefaultModel;
+    };
+    static_assert(std::is_same_v<decltype(&OwnerModel::CreateAndPublishNativePedModel), void (CModelInfoRequestDE::*)(std::uint32_t)>);
+    static_assert(std::is_same_v<decltype(&OwnerModel::MakePedModel), void (CModelInfoRequestDE::*)(const char*)>);
+
+    void CreationOwnerDispatchChecks()
+    {
+        const char texture[] = "original owner-dispatch texture";
+        for (const auto key : std::array<std::uint32_t, 5>{{0u, 7u, 20000u, 0x80000000u, 0xffffffffu}})
+        {
+            Trace          trace;
+            CreationOwner  classification(trace);
+            StreamingOwner streamingOwner(trace);
+            Streaming      streaming(streamingOwner);
+            Game           game(trace);
+            game.streaming = &streaming;
+            OwnerModel model(key, classification, game);
+            Check(!classification.calls && !game.reads && !streamingOwner.requests,
+                  "same-owner construction binding performs no hidden creation, classification or request");
+            CModelInfo& sdk = model;
+            sdk.MakePedModel(texture);
+            trace.Expect({1, 2, 3});
+            Check(classification.calls == 1 && classification.lastModel == key && classification.acknowledgedPrefixes == 1 && streamingOwner.requests == 1 &&
+                      streamingOwner.lastModel == key && streamingOwner.lastTexture == texture && streamingOwner.lastChannel == 0 && !sdk.GetRefCount(),
+                  "actual inherited creator forwards the complete unsigned key once to its original owner before the real streaming request");
+            streamingOwner.status = ClockResult::Expired;
+            Refuses([&] { sdk.MakePedModel(texture); },
+                    "DE streaming owner refused RequestSpecialModel: " + std::to_string(static_cast<unsigned>(ClockResult::Expired)));
+            trace.Expect({1, 2, 3});
+            Check(classification.calls == 2 && classification.acknowledgedPrefixes == 2 && streamingOwner.requests == 2 && !sdk.GetRefCount(),
+                  "a later request failure preserves the owner-acknowledged publication prefix and source repetition");
+        }
+        constexpr std::array<ClockResult, 14> refusals{
+            {ClockResult::InvalidArgument, ClockResult::NotInitialized, ClockResult::WrongThread, ClockResult::BindingChanged, ClockResult::ReadFailure,
+             ClockResult::WriteFailure, ClockResult::RestoreFailure, ClockResult::PatchFailure, ClockResult::Busy, ClockResult::Expired,
+             ClockResult::UnsupportedBuild, ClockResult::OwnerConflict, ClockResult::Stopped, ClockResult::OriginalException}};
+        for (const auto status : refusals)
+        {
+            Trace          trace;
+            CreationOwner  classification(trace);
+            StreamingOwner streamingOwner(trace);
+            Streaming      streaming(streamingOwner);
+            Game           game(trace);
+            game.streaming = &streaming;
+            OwnerModel model(0xffffffffu, classification, game);
+            classification.status = status;
+            const std::string expected = status == ClockResult::NotInitialized
+                                             ? "DE MakePedModel requires qualified native ped metadata creation and bank publication"
+                                             : "DE model owner refused ped metadata creation/publication: " + std::to_string(static_cast<unsigned>(status));
+            Refuses([&] { model.MakePedModel(texture); }, expected);
+            trace.Expect({1});
+            Check(classification.calls == 1 && classification.lastModel == 0xffffffffu && !classification.acknowledgedPrefixes && !game.reads &&
+                      !streamingOwner.requests,
+                  "new owner refusal remains explicit and blocks every streaming receiver without raw-key narrowing or fallback");
+        }
+        {
+            Trace          trace;
+            CreationOwner  classification(trace);
+            StreamingOwner streamingOwner(trace);
+            Streaming      streaming(streamingOwner);
+            Game           game(trace);
+            game.streaming = &streaming;
+            OwnerModel model(7u, classification, game);
+            classification.status = ClockResult::BindingChanged;
+            classification.acknowledgePrefixBeforeRefusal = true;
+            Refuses([&] { model.MakePedModel(texture); },
+                    "DE model owner refused ped metadata creation/publication: " + std::to_string(static_cast<unsigned>(ClockResult::BindingChanged)));
+            trace.Expect({1});
+            Check(classification.calls == 1 && classification.acknowledgedPrefixes == 1 && !game.reads && !streamingOwner.requests,
+                  "late native-owner refusal preserves its accepted prefix without SDK rollback, retry or a premature special request");
+        }
+        std::puts("Production actual model ped creation owner dispatch SDK fixture completed");
+    }
+
     void SuccessAndRepetitionChecks()
     {
         const char                       empty[] = "";
@@ -275,6 +373,7 @@ int main()
     {
         SuccessAndRepetitionChecks();
         PrefixAndRefusalChecks();
+        CreationOwnerDispatchChecks();
         std::puts("Production actual model MakePedModel SDK fixture completed");
         std::printf("Passed %u actual model MakePedModel SDK checks (%zu-bit)\n", checks, sizeof(void*) * 8);
         return 0;

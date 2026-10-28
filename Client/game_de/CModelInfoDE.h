@@ -37,6 +37,11 @@ namespace mta::game_de
         // opaque interface as a classic model or caching the animation value.
         std::uint32_t GetAnimFileIndex();
 
+        // Use the same existing classification owner for this distinct
+        // creation capability; construction parameters or raw getters
+        // cannot grant native allocation/publication authority.
+        void CreateAndPublishPedModelMetadata(std::uint32_t modelIndex);
+
         CModelInfoDE(std::uint32_t index, NativeModelClassificationAccess& owner) noexcept : model(index), access(owner) {}
 
     private:

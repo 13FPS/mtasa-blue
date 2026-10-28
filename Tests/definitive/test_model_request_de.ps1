@@ -34,6 +34,7 @@ $record['selectedScope']=$Scope
 $record['actualModelValiditySdkTested']=$false
 $record['actualModelDependencySdkTested']=$false
 $record['actualModelMakePedSdkTested']=$false
+$record['actualModelPedCreationOwnerDispatchSdkTested']=$false
 if ($Scope -eq 'Dependencies') {
     $record.scope='Actual Request dependency order and protected RequestModelDependencies/GetAnimFileIndex through current classification and required game/model/streaming interfaces. Focused vehicle animation wrap/sentinel/base queries, skin7 source lookups, diagnostic defaults/refusals and actual nested asynchronous requests; no request retry/reference or historical matrix replay.'
 }
@@ -122,6 +123,12 @@ try {
         $sourceNames += @(
             'Build/definitive-recovery/mta-model-make-ped-sdk-20261026/model-make-ped-sdk-source-ready.json',
             'Build/definitive-recovery/mta-model-make-ped-sdk-tests-20261026/model-make-ped-sdk-tests-source-ready.json')
+    }
+    if ($Scope -eq 'MakePedModel') {
+        $sourceNames += @(
+            'Build/definitive-recovery/mta-ped-model-creation-sdk-20261026/ped-model-creation-access-source-ready.json',
+            'Build/definitive-recovery/mta-ped-model-creation-sdk-20261026/ped-model-creation-sdk-source-ready.json',
+            'Build/definitive-recovery/mta-ped-model-creation-sdk-tests-20261026/ped-model-creation-sdk-tests-source-ready.json')
     }
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
@@ -265,7 +272,7 @@ try {
                 (Join-Path $PSScriptRoot $fixtureSource))+@($productionSources|ForEach-Object{Join-Path $taskRoot $_})+
                 @(('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'fixture.pdb')),('/Fe'+$executable),'/link','bcrypt.lib')
             $result=[ordered]@{architecture=$architecture;environment=$environmentResult;compile=$null;test=$null;checks=0;
-                pointerBits=$null;executable=$executable;executableSha256=$null;actualModelMakePedSdkTested=$false}
+                pointerBits=$null;executable=$executable;executableSha256=$null;actualModelMakePedSdkTested=$false;actualModelPedCreationOwnerDispatchSdkTested=$false}
             $record.results+=$result
             $result.compile=RunOwned $compiler $arguments $directory 'compile' 60000
             if($result.compile.exitCode -ne 0 -or $result.compile.timedOut){throw "$architecture actual MakePedModel SDK compilation failed."}
@@ -275,13 +282,15 @@ try {
             $summary=[regex]::Match($stdout.TrimEnd(),'(?:^|\r?\n)Passed (\d+) actual model MakePedModel SDK checks \((\d+)-bit\)$')
             if($summary.Success){$result.checks=[int]$summary.Groups[1].Value;$result.pointerBits=[int]$summary.Groups[2].Value}
             $result.actualModelMakePedSdkTested=$stdout.Contains('Production actual model MakePedModel SDK fixture completed')
+            $result.actualModelPedCreationOwnerDispatchSdkTested=$stdout.Contains('Production actual model ped creation owner dispatch SDK fixture completed')
             $expectedBits=if($architecture -eq 'x86'){32}else{64}
             if($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -le 0 -or $result.pointerBits -ne $expectedBits -or
-                -not $result.actualModelMakePedSdkTested){throw "$architecture actual MakePedModel SDK execution evidence missing or failed."}
+                -not $result.actualModelMakePedSdkTested -or -not $result.actualModelPedCreationOwnerDispatchSdkTested){throw "$architecture actual MakePedModel SDK execution evidence missing or failed."}
         }
         $record.actualModelMakePedSdkTested=@($record.results|Where-Object{-not $_.actualModelMakePedSdkTested}).Count -eq 0
+        $record.actualModelPedCreationOwnerDispatchSdkTested=@($record.results|Where-Object{-not $_.actualModelPedCreationOwnerDispatchSdkTested}).Count -eq 0
         $record.generatedFixture.defaultCreatorRefusalCovered=$record.actualModelMakePedSdkTested
-        $record.success=$record.results.Count -eq 2 -and $record.actualModelMakePedSdkTested
+        $record.success=$record.results.Count -eq 2 -and $record.actualModelMakePedSdkTested -and $record.actualModelPedCreationOwnerDispatchSdkTested
     } else {
     $environmentScript = Join-Path $outputRoot 'capture-msvc.cmd'
     @('@echo off',('call "{0}" -no_logo -arch=x64 -host_arch=x64 >nul' -f $developerCommand),

@@ -82,6 +82,7 @@
 #include "../../Client/game_de/CAnimBlockRequestDE.h"
 #include "NativeAnimationBlockFactoryFixture.h"
 #include "NativeCustomAnimSequenceStorageFixture.h"
+#include "../../Client/game_de/NativePedModelMetadataProfile.h"
 #include "../../Client/game_de/NativeAnimationSequenceRowCalls.h"
 #include "../../Client/game_de/NativeAnimationSequenceRowProfile.h"
 #include "../../Client/game_de/NativeAnimationSequenceCopyCalls.h"
@@ -8427,6 +8428,7 @@ namespace
 #include "NativeAnimationManagerOwnerTests.inl"
 
 #include "NativeCustomSequenceStorageOwnerTests.inl"
+#include "NativePedModelCreationRuntimeOwnerTests.inl"
 #include "AnimationSequenceStorageManager.generated.h"
 #include "NativeCustomAnimationResourcesOwnerTests.inl"
 #include "AnimationManagerRefs.generated.h"
@@ -8490,6 +8492,13 @@ static_assert(std::is_same_v<decltype(&PrivateAnimationFactoryManagerReceiver::G
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool pedCreationLifecycleWritten = argc == 3 && std::strcmp(argv[2], "--ped-model-creation-runtime-written") == 0;
+    const bool pedCreationLifecycleReadOnly = argc == 3 && std::strcmp(argv[2], "--ped-model-creation-runtime-read-only") == 0;
+    const bool pedCreationLifecycleUnknown = argc == 3 && std::strcmp(argv[2], "--ped-model-creation-runtime-unknown-allocation") == 0;
+    const bool pedCreationLifecycleUnpublished = argc == 3 && std::strcmp(argv[2], "--ped-model-creation-runtime-unpublished") == 0;
+    const bool pedCreationLifecycleOnly =
+        pedCreationLifecycleWritten || pedCreationLifecycleReadOnly || pedCreationLifecycleUnknown || pedCreationLifecycleUnpublished;
+
     const bool associationNodeArrayUnknownFree = argc == 3 && std::strcmp(argv[2], "--animation-association-node-array-unknown-free") == 0;
     const bool associationNodeArrayUnknownClear = argc == 3 && std::strcmp(argv[2], "--animation-association-node-array-unknown-clear") == 0;
     const bool associationNodeArrayOwnerLoss = argc == 3 && std::strcmp(argv[2], "--animation-association-node-array-clear-owner-loss") == 0;
@@ -8634,22 +8643,34 @@ int main(int argc, char** argv)
     const bool waterOnly = orientationWithWater || (argc == 3 && std::strcmp(argv[2], "--ped-water") == 0);
     const bool poseOnly = argc == 3 && std::strcmp(argv[2], "--ped-pose") == 0;
     const bool poolRegistryOnly = argc == 3 && std::strcmp(argv[2], "--ped-pool-registry") == 0;
-    Check((argc == 2 || constructorOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly ||
-           waterOnly || animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly ||
-           fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly ||
-           worldLineOnly || worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly ||
-           cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly ||
-           animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly ||
-           animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly ||
-           customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly ||
-           privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly ||
-           privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly ||
-           sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly ||
-           animationDefinitionBlockNamesOnly || animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly ||
-           animationStaticAssociationReadsOnly || staticAssociationWritesOnly || pedRenderOnly || privateAssociationsOnly || associationBonesOnly ||
-           associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
+    Check((argc == 2 || pedCreationLifecycleOnly || constructorOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly ||
+           poolRegistryOnly || poseOnly || waterOnly || animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly ||
+           areaSpecialOnly || areaOnly || specialOnly || fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly ||
+           constructorServicesOnly || worldGroundOnly || worldLineOnly || worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly ||
+           pedWeaponGrantOnly || worldIgnoreOnly || cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || pedMoveAnimOnly ||
+           playerNativePrerequisitesOnly || animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly ||
+           animationManagerRefsOnly || animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly ||
+           animationHierarchyBankOnly || customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly ||
+           privateHierarchyScalarsOnly || privateHierarchyNameOnly || privateHierarchyParentOnly || privateHierarchyEmptyOnly ||
+           freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly || customAnimationCleanupOnly ||
+           standaloneSequenceOperationsOnly || animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly ||
+           animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly || animationGroupValidityOnly ||
+           animationIdValidityOnly || animationAssociationGroupReadsOnly || animationStaticAssociationReadsOnly || staticAssociationWritesOnly ||
+           pedRenderOnly || privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (pedCreationLifecycleOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        PedMetadataLifecycleFixture::Run(fixture, pedCreationLifecycleReadOnly      ? 1u
+                                                  : pedCreationLifecycleUnknown     ? 2u
+                                                  : pedCreationLifecycleUnpublished ? 3u
+                                                                                    : 0u);
+        std::puts("Production ped metadata runtime lifecycle fixture completed");
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (associationNodeArrayOnly)
     {
         AnimationAssociationNodeArrayOwnerFixture::scenario = associationNodeArrayUnknownFree    ? 1u

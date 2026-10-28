@@ -27,5 +27,9 @@ namespace mta::game_de
         // Current qualified slot78 reads QWORD6c0; the native request caller
         // consumes only EAX. This observation never invokes an arbitrary slot.
         virtual ClockResult ReadModelAnimFileIndex(std::uint32_t, std::uint32_t&) noexcept { return ClockResult::NotInitialized; }
+        // Read-only owners cannot substitute a special streaming request
+        // for native creation and irreversible bank publication. The real
+        // owner must journal every entered effect before returning status.
+        virtual ClockResult CreateAndPublishPedModelMetadata(std::uint32_t) noexcept { return ClockResult::NotInitialized; }
     };
 }

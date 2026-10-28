@@ -1,6 +1,29 @@
 # MTA on Definitive Edition: reuse boundary
 
-## Current offline cohort: ped metadata storage (2026-10-26)
+## Current offline cohort: native special-ped creation (2026-10-28)
+
+MTA's existing `MakePedModel` now reaches the retained native owner before its
+special-model streaming request. Each call obtains its own 152-byte engine-heap
+allocation, applies MTA's manual zero-based ped defaults with the qualified DE
+vtable, shared collision model and animation sentinel, then publishes that
+object into the exact model-bank slot. The old slot value is borrowed for the
+comparison; it is never adopted or deleted.
+
+The collision default is accepted only after its native initialization effects
+and current pointer snapshots pass the existing game-thread owner checks.
+Allocation, initialization and publication have separate acknowledgements, so
+a later refusal cannot erase a completed effect or authorize replay. Accepted
+or uncertain publication retains the runtime and module. Only proved
+unpublished storage can take the guarded retirement path; unrelated clock and
+timing restoration can still finish while published metadata remains retained.
+
+Older owners explicitly refuse the new creation capability. The SDK keeps its
+full unsigned model key and creation-before-streaming order, including retained
+publication if the later request fails. Complete model factories, game-level
+disposal of published metadata, networking and playable full MTA remain pending.
+This batch is checked offline; the installed GTA candidate is unchanged.
+
+## Ped metadata storage (2026-10-26)
 
 Special-ped creation now has a fixed 152-byte storage path through the existing
 qualified engine heap and issued-allocation journal. A distinct metadata kind

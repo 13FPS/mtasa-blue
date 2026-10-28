@@ -111,6 +111,7 @@
 #include "NativeStreamingResourceCalls.h"
 #include "NativeModelReferenceTransactions.h"
 #include "NativeModelBackingReferenceController.h"
+#include "NativePedModelCreation.h"
 #include "NativeModelUnusedRemoval.h"
 #include "NativeModelBankProfile.h"
 #include <game/CModelRequestPolicy.h>
@@ -132,6 +133,8 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <list>
+#include <memory>
 #include <type_traits>
 #include <vector>
 #include <windows.h>
@@ -285,6 +288,7 @@ namespace mta::game_de
             ClockResult ReadModelInterface(std::uint32_t, std::uintptr_t&) noexcept override;
             ClockResult ReadModelRender(std::uint32_t, std::uintptr_t&) noexcept override;
             ClockResult ReadModelAnimFileIndex(std::uint32_t, std::uint32_t&) noexcept override;
+            ClockResult CreateAndPublishPedModelMetadata(std::uint32_t) noexcept override;
             ClockResult AdjustModelReference(std::uint32_t, int) noexcept override;
             ClockResult ReserveModelBackingReference(std::uint64_t, std::uint32_t, NativeModelBackingReferenceToken&) noexcept override;
             ClockResult BindModelBackingReference(const NativeModelBackingReferenceToken&) noexcept override;
@@ -567,7 +571,13 @@ namespace mta::game_de
             // counters cannot acknowledge it. No release/custom absence is
             // inferred by construction, destruction or another generation.
             NativeModelBackingReferenceController modelBackingReferences;
-            std::atomic<std::uint64_t>            referenceGeneration{0};
+            // Each explicit MakePedModel owns a fresh durable record before
+            // malloc. Published/unknown objects outlive SDK facades; no
+            // bank replacement, destructor or End may guess their release.
+            std::list<std::unique_ptr<NativePedModelCreation::Record>> pedModelCreations;
+            std::atomic<bool>                                          pedModelCreationBusy{false}, pedModelCreationRetained{false};
+            std::atomic<std::uint64_t>                                 pedModelCreationGeneration{0};
+            std::atomic<std::uint64_t>                                 referenceGeneration{0};
             // Native buffers remain with this runtime even if their SDK
             // publication fails. No producer/destructor may free them or
             // discard unknown entered effects while removing the callback.
@@ -700,9 +710,9 @@ namespace mta::game_de
 
         bool NativeLifetimeRetained() noexcept
         {
-            return runtime.modelBackingReferences.IsRetained() || runtime.pedReferences.IsRetained() || WorldIgnoreRetained() ||
-                   runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained() ||
-                   runtime.customSequences.HasPendingCleanup();
+            return runtime.pedModelCreationBusy.load() || runtime.pedModelCreationRetained.load() || runtime.modelBackingReferences.IsRetained() ||
+                   runtime.pedReferences.IsRetained() || WorldIgnoreRetained() || runtime.customSequences.IsRetained() ||
+                   runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained() || runtime.customSequences.HasPendingCleanup();
         }
 
         bool WeatherOverrideRetained() noexcept
@@ -2736,6 +2746,95 @@ namespace mta::game_de
         NativePedReferenceMemory PedReferenceMemory() noexcept
         {
             return NativePedReferenceMemory({runtime.image}, &CheckTimingOwner, &CheckPedReferenceRecoveryOwner, runtime.generation.load());
+        }
+
+        struct PedModelCreationScope
+        {
+            bool held = false;
+            PedModelCreationScope() noexcept
+            {
+                bool expected = false;
+                held = runtime.pedModelCreationBusy.compare_exchange_strong(expected, true, std::memory_order_acq_rel);
+            }
+            ~PedModelCreationScope()
+            {
+                if (held)
+                    runtime.pedModelCreationBusy.store(false, std::memory_order_release);
+            }
+        };
+
+        void PublishPedModelCreationDebt(std::uint64_t generation) noexcept
+        {
+            // Only the serialized owner inspects the list. Foreign teardown
+            // queries consume the conservative atomic busy/retained summary.
+            const bool retained = !runtime.pedModelCreations.empty();
+            runtime.pedModelCreationGeneration.store(retained ? generation : 0);
+            runtime.pedModelCreationRetained.store(retained);
+            if (retained)
+                runtime.restored.store(false);
+        }
+
+        bool PedModelCreationEntered(const NativePedModelCreation::Receipt& receipt) noexcept
+        {
+            return receipt.entered || receipt.allocation.entered || receipt.allocation.allocated || receipt.initEntered || receipt.initReturned ||
+                   receipt.publishEntered || receipt.publication.returned || receipt.publication.accepted || receipt.retirement.entered ||
+                   receipt.retirement.released;
+        }
+
+        ClockResult CheckPedModelCreationRecoveryOwner() noexcept
+        {
+            const auto generation = runtime.generation.load();
+            // Expiry/Stop cannot erase an unpublished allocation. Recovery is
+            // still this exact admitted natural timing callback, not End's
+            // producer thread or an SDK/CPU destructor with a borrowed tag.
+            if (callbackDepth != 1 || GetCurrentThreadId() != runtime.engineThread.load() || !timingCallbackGeneration ||
+                timingCallbackGeneration != generation || runtime.pedModelCreationGeneration.load() != generation ||
+                runtime.admissionGeneration.load() != generation || !runtime.admissionSerial.load())
+                return ClockResult::OwnerConflict;
+            return CheckBinding(false, true) && CheckTimingBinding() ? ClockResult::Ok : ClockResult::BindingChanged;
+        }
+
+        ClockResult RetireUnpublishedPedModelCreations() noexcept
+        {
+            if (!runtime.pedModelCreationRetained.load() && !runtime.pedModelCreationBusy.load())
+                return ClockResult::Ok;
+            PedModelCreationScope scope;
+            if (!scope.held)
+                return ClockResult::Busy;
+            const auto generation = runtime.generation.load();
+            const auto owner = CheckPedModelCreationRecoveryOwner();
+            if (owner != ClockResult::Ok)
+                return owner;
+            // Rotate retained/published rows so one irreversible object cannot
+            // starve a later proved-unpublished allocation of bounded cleanup.
+            std::size_t remaining = runtime.pedModelCreations.size() < 32 ? runtime.pedModelCreations.size() : 32;
+            while (remaining-- && !runtime.pedModelCreations.empty())
+            {
+                auto                            current = runtime.pedModelCreations.begin();
+                auto&                           record = **current;
+                ClockResult                     result = ClockResult::Ok;
+                NativePedModelCreation::Receipt receipt;
+                if (!record.CanDiscard() && record.OwnerGeneration() == generation && record.CanRetireUnpublished())
+                    result = NativePedModelCreation::RetireUnpublished(runtime.image, record, generation, &CheckPedModelCreationRecoveryOwner, &receipt);
+                // A known returned free is consumed even if its later owner
+                // check fails. Published/unknown records never take this path.
+                if (record.CanDiscard())
+                    runtime.pedModelCreations.erase(current);
+                else
+                    runtime.pedModelCreations.splice(runtime.pedModelCreations.end(), runtime.pedModelCreations, current);
+                if (result != ClockResult::Ok)
+                {
+                    PublishPedModelCreationDebt(generation);
+                    if (PedModelCreationEntered(receipt))
+                        Stop(result);
+                    return result;
+                }
+            }
+            PublishPedModelCreationDebt(generation);
+            // A healthy published/unknown record is retained, not a failure
+            // of unrelated clock/timing restoration. The atomic summary still
+            // keeps overall restoration, End and module release incomplete.
+            return ClockResult::Ok;
         }
 
         ClockResult CheckCustomAnimationSequenceRecoveryOwner() noexcept
@@ -4966,6 +5065,51 @@ namespace mta::game_de
                 output = next;
             return result;
         }
+        ClockResult NativeAccess::CreateAndPublishPedModelMetadata(std::uint32_t model) noexcept
+        {
+            const auto modelIndex = model;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            PedModelCreationScope scope;
+            if (!scope.held)
+                return ClockResult::Busy;
+            const auto generation = runtime.generation.load();
+            const auto retainedGeneration = runtime.pedModelCreationGeneration.load();
+            if (!generation || (retainedGeneration && retainedGeneration != generation))
+                return ClockResult::OwnerConflict;
+            // Prepare the CPU record before the first native allocator entry.
+            // This is per explicit call, never a per-model once/cache guard;
+            // the native record independently admits the full DWORD key.
+            try
+            {
+                auto record = std::make_unique<NativePedModelCreation::Record>();
+                runtime.pedModelCreations.push_back(std::move(record));
+            }
+            catch (...)
+            {
+                return ClockResult::WriteFailure;
+            }
+            auto&                           record = *runtime.pedModelCreations.back();
+            NativePedModelCreation::Receipt receipt;
+            result = NativePedModelCreation::CreateAndPublish(runtime.image, record, generation, modelIndex, &CheckTimingOwner, &receipt);
+            // The record owns the exact allocation/init/CAS receipt before any
+            // fallible caller acknowledgement or Stop. An old bank pointer is
+            // only a borrowed CAS value and is never adopted/deleted here.
+            if (record.CanDiscard())
+                runtime.pedModelCreations.pop_back();
+            PublishPedModelCreationDebt(generation);
+            if (result == ClockResult::Ok)
+            {
+                result = CheckTimingOwner();
+                if (result == ClockResult::Ok && runtime.generation.load() != generation)
+                    result = ClockResult::BindingChanged;
+            }
+            if (result != ClockResult::Ok && PedModelCreationEntered(receipt))
+                Stop(result);
+            return result;
+        }
+
         ClockResult NativeAccess::ReadModelInterface(std::uint32_t model, std::uintptr_t& output) noexcept
         {
             const auto     requestedModel = model;
@@ -6903,6 +7047,17 @@ namespace mta::game_de
                 clean = RestorePedReferences();
             if (clean && (runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained()))
                 clean = RestoreCustomAnimationSequences();
+            if (clean && (runtime.pedModelCreationBusy.load() || runtime.pedModelCreationRetained.load()))
+            {
+                // Only acknowledged unpublished storage can retire on this
+                // callback. A game-visible or unknown publication retains
+                // the owner/module; this never restores the old bank slot.
+                if (RetireUnpublishedPedModelCreations() != ClockResult::Ok)
+                {
+                    runtime.restored.store(false);
+                    return false;
+                }
+            }
             if (clean && runtime.modelBackingReferences.IsRetained())
             {
                 // Acquire-only cannot certify release/custom eligibility.
@@ -6920,10 +7075,11 @@ namespace mta::game_de
                     // rewinds the game clock or writes a restoration snapshot.
                     if (runtime.captured.load())
                         runtime.observed = current;
-                    runtime.restored.store(true);
+                    const bool metadataRetained = runtime.pedModelCreationBusy.load() || runtime.pedModelCreationRetained.load();
+                    runtime.restored.store(!metadataRetained);
                     runtime.ready.store(false);
                     runtime.timerReady.store(false);
-                    return true;
+                    return !metadataRetained;
                 }
                 runtime.counters.restoreFailures.fetch_add(1);
                 Stop(ClockResult::RestoreFailure);
@@ -6980,10 +7136,16 @@ namespace mta::game_de
                 runtime.timingRecovery.store(0);
                 runtime.timingCaptured.store(0);
                 runtime.timingGeneration.store(0);
-                runtime.restored.store(true);
+                const bool metadataRetained = runtime.pedModelCreationBusy.load() || runtime.pedModelCreationRetained.load();
+                // Clock/timing restoration has its own completed acknowledgement.
+                // A retained model must not make later callbacks rewind it again,
+                // while overall restoration/module release still remain blocked.
+                if (metadataRetained)
+                    runtime.nativeTouched.store(false);
+                runtime.restored.store(!metadataRetained);
                 runtime.ready.store(false);
                 runtime.timerReady.store(false);
-                return true;
+                return !metadataRetained;
             }
             runtime.counters.restoreFailures.fetch_add(1);
             Stop(ClockResult::RestoreFailure);

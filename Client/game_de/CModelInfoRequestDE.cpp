@@ -32,12 +32,12 @@ namespace mta::game_de
         RequireStreaming().RequestSpecialModel(GetModel(), texture, 0);
     }
 
-    void CModelInfoRequestDE::CreateAndPublishNativePedModel(std::uint32_t)
+    void CModelInfoRequestDE::CreateAndPublishNativePedModel(std::uint32_t modelIndex)
     {
-        // No existing read/reference provider proves creation or bank
-        // publication. A concrete native owner must provide both before
-        // this orchestration can issue even its first special request.
-        throw std::runtime_error("DE MakePedModel requires qualified native ped metadata creation and bank publication");
+        // The same retained owner now supplies this mandatory native prefix.
+        // Its optional default still refuses before any request, while an
+        // acknowledged publication remains intact if streaming later fails.
+        CreateAndPublishPedModelMetadata(modelIndex);
     }
 
     void CModelInfoRequestDE::Request(EModelRequestType type, const char* tag)

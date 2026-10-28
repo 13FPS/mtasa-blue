@@ -60,6 +60,19 @@ namespace mta::game_de
         // no loaded/type/bundle query, target dereference or ownership claim.
         return reinterpret_cast<RwObject*>(value);
     }
+    void CModelInfoDE::CreateAndPublishPedModelMetadata(std::uint32_t modelIndex)
+    {
+        const auto index = modelIndex;
+        const auto status = access.CreateAndPublishPedModelMetadata(index);
+        // Preserve the existing missing-provider refusal before the first
+        // streaming lookup. Other owner failures retain their exact status;
+        // neither path may turn an accepted native prefix into a retry.
+        if (status == ClockResult::NotInitialized)
+            throw std::runtime_error("DE MakePedModel requires qualified native ped metadata creation and bank publication");
+        if (status != ClockResult::Ok)
+            throw std::runtime_error("DE model owner refused ped metadata creation/publication: " + std::to_string(static_cast<unsigned>(status)));
+    }
+
     std::uint32_t CModelInfoDE::GetAnimFileIndex()
     {
         const auto    index = model;

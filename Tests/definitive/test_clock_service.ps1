@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
+    [ValidateSet('PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -23,6 +23,9 @@ $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;a
 # Historical markers start false and are set only by the branch that actually
 # executed. Focus mode must never inherit the cumulative suite's claims.
 $record['runScope'] = $Scope
+$record['nativePedModelCreationRuntimeTested']=$false
+$record['nativePedModelCreationRuntimeNoRewindTested']=$false
+$record['nativePedModelCreationRuntimeUnpublishedCleanupTested']=$false
 $record['nativeGameConstructorServicesOwnerTested'] = $false
 $record['actualGameConstructorServicesSdkOwnerTested'] = $false
 $record['nativePedOwnerSliceTested'] = $false
@@ -286,7 +289,7 @@ try {
         'Client/game_de/CPedTasksDE.h','Client/game_de/CPedTasksDE.cpp','Client/sdk/game/CPedTaskPolicy.h','Client/sdk/game/CPedIntelligence.h','Client/sdk/game/CTaskManager.h','Client/sdk/game/Task.h','Client/sdk/game/TaskTypes.h',
         'Client/sdk/game/CEntityFirePolicy.h','Client/game_de/NativePedFireAccess.h','Client/game_de/NativePedFireMemory.h','Client/game_de/NativePedFireMemory.cpp','Client/game_de/NativePedFireProfile.h','Client/game_de/CPedFireDE.h','Client/game_de/CPedFireDE.cpp','Client/game_de/NativePedCollisionAccess.h','Client/game_de/NativePedCollisionMemory.h','Client/game_de/NativePedCollisionMemory.cpp','Client/game_de/NativePedCollisionProfile.h','Client/game_de/CPedCollisionDE.h','Client/game_de/CPedCollisionDE.cpp',
         'Client/game_de/NativePedAreaAccess.h','Client/game_de/NativePedAreaMemory.h','Client/game_de/NativePedAreaMemory.cpp','Client/game_de/NativePedAreaProfile.h','Client/game_de/CPedAreaDE.h','Client/game_de/CPedAreaDE.cpp','Client/game_de/NativeStreamingSpecialModelCalls.h','Client/game_de/NativeStreamingSpecialModelCalls.cpp','Client/game_de/NativeStreamingSpecialModelProfile.h','Client/game_de/NativeStreamingFileIdsProfile.h','Client/game_de/NativeStreamingRemoveAdmission.h','Client/game_de/NativeStreamingRemoveMemory.h','Client/game_de/NativeModelReferenceHeap.h',
-        'Client/game_de/NativeAnimationBlockAccess.h','Client/game_de/NativeAnimationBlockMemory.h','Client/game_de/NativeAnimationBlockMemory.cpp','Client/game_de/NativeAnimationBlockProfile.h','Client/game_de/CAnimBlockDE.h','Client/game_de/CAnimBlockDE.cpp','Client/sdk/game/CAnimBlock.h','Client/game_de/CModelInfoRequestDE.h','Client/game_de/CModelInfoRequestDE.cpp','Client/sdk/game/CModelRequestPolicy.h','Client/game_de/CAnimBlockRequestDE.h','Client/game_de/CAnimBlockRequestDE.cpp','Client/sdk/game/CAnimBlockRequestPolicy.h',
+        'Client/game_de/NativeAnimationBlockAccess.h','Client/game_de/NativeAnimationBlockMemory.h','Client/game_de/NativeAnimationBlockMemory.cpp','Client/game_de/NativeAnimationBlockProfile.h','Client/game_de/CAnimBlockDE.h','Client/game_de/CAnimBlockDE.cpp','Client/sdk/game/CAnimBlock.h','Client/game_de/CModelInfoDE.h','Client/game_de/CModelInfoDE.cpp','Client/game_de/CModelInfoRequestDE.h','Client/game_de/CModelInfoRequestDE.cpp','Client/sdk/game/CModelRequestPolicy.h','Client/game_de/CAnimBlockRequestDE.h','Client/game_de/CAnimBlockRequestDE.cpp','Client/sdk/game/CAnimBlockRequestPolicy.h',
         'Client/game_de/NativePedOrientationAccess.h','Client/game_de/NativePedOrientationMemory.h','Client/game_de/NativePedOrientationMemory.cpp','Client/game_de/NativePedOrientationProfile.h','Client/game_de/NativePedPoseContext.h','Client/game_de/NativePedPoseContext.cpp','Client/game_de/CPedOrientationDE.h','Client/game_de/CPedOrientationDE.cpp','Client/sdk/game/CGameModelPreparationPolicy.h','Client/game_de/NativePedWaterTaskAccess.h','Client/game_de/NativePedWaterTaskReader.h','Client/game_de/NativePedWaterTaskReader.cpp','Client/game_de/NativePedWaterTaskProfile.h','Client/game_de/NativePedWaterFlagsAccess.h','Client/game_de/NativePedWaterFlagsMemory.h','Client/game_de/NativePedWaterFlagsMemory.cpp','Client/game_de/NativePedWaterFlagsProfile.h','Client/game_de/CPedWeaponStatsDE.h','Client/game_de/CPedWeaponStatsDE.cpp','Client/sdk/game/CPedWeaponStatPolicy.h','Client/game_de/CPedWaterDE.h','Client/game_de/CPedWaterDE.cpp','Client/game_de/CGameInitializationDE.h','Client/game_de/CGameInitializationDE.cpp','Client/sdk/game/CGameInitializationPolicy.h','Client/game_de/NativePedPlacementAccess.h','Client/game_de/NativePedPlacementMemory.h','Client/game_de/NativePedPlacementMemory.cpp','Client/game_de/NativePedPoseMutation.h','Client/game_de/CPedPoseDE.h','Client/game_de/CPedPoseDE.cpp','Client/sdk/game/CEntityPlacementPolicy.h','Client/game_de/NativePedTeleportAccess.h','Client/game_de/NativePedTeleportMemory.h','Client/game_de/NativePedTeleportMemory.cpp','Client/game_de/NativePedTeleportProfile.h',
         'Client/game_de/NativePedVelocityAccess.h','Client/game_de/NativePedVelocityMemory.h','Client/game_de/NativePedVelocityMemory.cpp','Client/game_de/NativePedVelocityProfile.h',
         'Client/sdk/game/CPoolSlotPolicy.h','Tests/definitive/NativePedVelocityOwnerTests.inl',
@@ -374,6 +377,12 @@ try {
         'Client/game_de/NativeModelObjectReader.h',
         'Client/game_de/NativeModelObjectReader.cpp',
         'Client/game_de/NativeModelObjectProfile.h',
+        'Client/game_de/NativePedModelMetadataStorageCalls.h',
+        'Client/game_de/NativePedModelCreation.h',
+        'Client/game_de/NativePedModelCreation.cpp',
+        'Client/game_de/NativePedModelDefaultCollision.h',
+        'Client/game_de/NativePedModelDefaultCollision.cpp',
+        'Client/game_de/NativePedModelMetadataProfile.h',
         'Client/game_de/NativeModelAnimationReader.h',
         'Client/game_de/NativeModelAnimationReader.cpp',
         'Client/game_de/NativeModelAnimationProfile.h',
@@ -601,6 +610,7 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
     $sourceNames += @('Client/game_de/NativeClothesDescriptorProfile.h','Client/game_de/NativeClothesDescriptorCalls.h','Client/game_de/NativeClothesDescriptorCalls.cpp','Tests/definitive/NativeClothesDescriptorFixture.h','Tests/definitive/NativeModuleClothesInitializerOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativePedMoveAnimAccess.h','Client/game_de/NativePedMoveAnimReader.h','Client/game_de/NativePedMoveAnimReader.cpp','Client/game_de/NativePedMoveAnimProfile.h','Client/game_de/CPlayerPedMoveAnimDE.h','Client/game_de/CPlayerPedMoveAnimDE.cpp','Client/game_de/CPlayerPedWantedDE.h','Tests/definitive/NativePedMoveAnimOwnerTests.inl','Tests/definitive/Write-PlayerMoveAnimFixture.ps1')
     $sourceNames += @('Client/game_de/NativePedRebuildAccess.h','Client/game_de/CPedRebuildDE.h','Client/game_de/CPedRebuildDE.cpp','Client/game_de/NativePedRebuildCalls.h','Client/game_de/NativePedRebuildCalls.cpp','Client/game_de/NativePedRebuildProfile.h','Tests/definitive/NativePedRebuildFixture.h','Tests/definitive/NativePedRebuildOwnerTests.inl','Tests/definitive/Write-PedRebuildFixture.ps1')
+    $sourceNames += @('Tests/definitive/NativePedModelCreationRuntimeOwnerTests.inl')
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
@@ -915,6 +925,10 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         (Join-Path $taskRoot 'Client/game_de/NativeModelBackingReferenceController.cpp'),
         # The shared controller now calls the separate zero-only removal helper.
         (Join-Path $taskRoot 'Client/game_de/NativeModelUnusedRemoval.cpp'),
+        # Runtime references the real creator/default-collision qualifiers in
+        # every scope. Link them once even when the selected fixture is older.
+        (Join-Path $taskRoot 'Client/game_de/NativePedModelCreation.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativePedModelDefaultCollision.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameInitializationDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameWeaponInfoDE.cpp'),
@@ -940,6 +954,9 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         (Join-Path $taskRoot 'Client/game_de/CAnimBlendAssociationDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeAnimationAssociationController.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CAnimBlockRequestDE.cpp'),
+        # RequestDE's inherited dependency getter and creator dispatch need
+        # the actual base implementation, even in a focused runtime scope.
+        (Join-Path $taskRoot 'Client/game_de/CModelInfoDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CModelInfoRequestDE.cpp'),
 
         (Join-Path $taskRoot 'Client/game_de/CStatsReadDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CStatsDE.cpp'),
@@ -1073,7 +1090,26 @@ namespace ClockPrivateHierarchyParentWriteFixture {
     if ($Scope -eq 'GarageNamed') { $fixtureArguments += '--garage-named' }
     if ($Scope -eq 'GaragePools') { $fixtureArguments += '--garage-pools' }
     if ($Scope -eq 'PedPoolRegistry') { $fixtureArguments += '--ped-pool-registry' }
-    if($Scope -eq 'AnimationAssociationNodeArray'){
+    if($Scope -eq 'PedModelCreationLifecycle'){
+        # Published and unknown records cannot be reset to fit a following case.
+        # Compile the actual runtime once and isolate only these four new cases.
+        $record['testRuns']=@();$record['testScenarioExecutables']=@();$texts=@()
+        foreach($scenario in @('written','read-only','unknown-allocation','unpublished')){
+            $scenarioRoot=Join-Path $outputRoot ('scenario-ped-model-runtime-'+$scenario)
+            [IO.Directory]::CreateDirectory($scenarioRoot)|Out-Null
+            $scenarioExecutable=Join-Path $scenarioRoot ([IO.Path]::GetFileName($executable))
+            if(Test-Path -LiteralPath $scenarioExecutable){throw 'Existing lifecycle evidence must not be overwritten'}
+            Copy-Item -LiteralPath $executable -Destination $scenarioExecutable
+            if((Sha $scenarioExecutable) -cne (Sha $executable)){throw 'Lifecycle child differs from the once-compiled actual runtime fixture'}
+            $record.testScenarioExecutables+=@{scenario=$scenario;path=$scenarioExecutable;sha256=(Sha $scenarioExecutable);directory=$scenarioRoot}
+            $run=RunBounded $scenarioExecutable @($scenarioRoot,('--ped-model-creation-runtime-'+$scenario)) ('test-ped-model-runtime-'+$scenario) 60000
+            $record.testRuns+=$run
+            $part=[IO.File]::ReadAllText($run.stdout)+[IO.File]::ReadAllText($run.stderr)
+            if($run.exitCode -ne 0 -or $run.timedOut -or $part -notmatch 'Passed (\d+) production clock service checks'){throw ('Ped metadata Runtime lifecycle '+$scenario+' failed')}
+            $record.checks += [int]$Matches[1];$texts+=$part
+        }
+        $record.testRun=$record.testRuns[-1];$text=$texts -join [Environment]::NewLine
+    } elseif($Scope -eq 'AnimationAssociationNodeArray'){
         $record['testRuns']=@();$record['testScenarioExecutables']=@();$texts=@()
         $selected=@(
             @{name='success';flag='--animation-association-node-array-success'},
@@ -1556,7 +1592,15 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if($Scope -eq 'AnimationAssociationNodeArray'){
+    if($Scope -eq 'PedModelCreationLifecycle'){
+        $record.nativePedModelCreationRuntimeNoRewindTested=$text.Contains('Production ped metadata runtime write restoration retained without rewind') -and
+            $text.Contains('Production ped metadata runtime read-only restoration retained without rewind') -and
+            $text.Contains('Production ped metadata runtime unknown allocation retained without replay')
+        $record.nativePedModelCreationRuntimeUnpublishedCleanupTested=$text.Contains('Production ped metadata runtime unpublished cleanup completed')
+        $record.nativePedModelCreationRuntimeTested=$record.nativePedModelCreationRuntimeNoRewindTested -and $record.nativePedModelCreationRuntimeUnpublishedCleanupTested
+        if(-not $record.nativePedModelCreationRuntimeTested){throw 'New actual Runtime lifecycle scope is incomplete'}
+        $record.productionNativeCallbackTested=$true
+    } elseif($Scope -eq 'AnimationAssociationNodeArray'){
         $record.nativeAnimationAssociationNodeArrayOwnerTested=$text.Contains('Production native animation association node-array owner fixture completed')
         $record.actualAnimationAssociationNodeArraySdkOwnerTested=$text.Contains('Production actual animation association node-array SDK owner fixture completed')
         $record.animationAssociationNodeArrayUnknownFreeRetained=$text.Contains('Production animation association node-array unknown free retained')

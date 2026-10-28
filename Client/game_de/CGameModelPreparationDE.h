@@ -55,6 +55,23 @@ namespace mta::game_de
                                                                          { MakePedModel(model, name, resolveStreaming); });
         }
 
+        void FixStartupModelCollision(std::uint32_t target, std::uint32_t source)
+        {
+            const auto status = owner.CopyStartupModelCollision(target, source);
+            if (status == ClockResult::NotInitialized)
+                throw std::runtime_error("DE startup collision repair requires the qualified native borrowed-pointer copy");
+            if (status != ClockResult::Ok)
+                throw std::runtime_error("DE model owner refused startup collision repair: " + std::to_string(static_cast<unsigned>(status)));
+        }
+
+        void SetupBrokenModels()
+        {
+            // Preserve MTA's two original conditional copies and accepted
+            // prefix. A later failure cannot undo or replay an earlier copy.
+            MtaGame::CGameModelPreparationPolicy::SetupBrokenModels([this](std::uint32_t target, std::uint32_t source)
+                                                                    { FixStartupModelCollision(target, source); });
+        }
+
     private:
         // No facade registry or native lifetime is manufactured here. The
         // existing owner's creation journal and streaming service retain it.

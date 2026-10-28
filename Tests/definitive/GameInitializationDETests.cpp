@@ -142,6 +142,7 @@ namespace
             return ClockResult::NotInitialized;
         }
         ClockResult         CreateAndPublishPedModelMetadata(std::uint32_t model) noexcept override;
+        ClockResult         CopyStartupModelCollision(std::uint32_t target, std::uint32_t source) noexcept override;
         ExistingOwner*      modelOwner = nullptr;
         unsigned            constructorRequires = 0, preparations = 0;
         const CClock*       requestedClock = nullptr;
@@ -208,6 +209,41 @@ namespace
         {
             return ClockResult::OriginalException;
         }
+    }
+    ClockResult ConstructorOwner::CopyStartupModelCollision(std::uint32_t target, std::uint32_t source) noexcept
+    {
+        if (!modelOwner)
+            return ClockResult::NotInitialized;
+        try
+        {
+            modelOwner->Current();
+            modelOwner->collisionRequests.emplace_back(target, source);
+            if (target == 3118)
+                modelOwner->Effect(2);
+            if (target == modelOwner->failCollisionTarget)
+                return ClockResult::OriginalException;
+            modelOwner->Current();
+            return ClockResult::Ok;
+        }
+        catch (...)
+        {
+            return ClockResult::OriginalException;
+        }
+    }
+    template <class Operation>
+    void CollisionRefuses(Operation operation)
+    {
+        bool refused = false;
+        try
+        {
+            operation();
+        }
+        catch (const std::runtime_error& error)
+        {
+            refused = error.what() ==
+                      std::string("DE model owner refused startup collision repair: ") + std::to_string(static_cast<unsigned>(ClockResult::OriginalException));
+        }
+        Check(refused, "actual collision service retains the exact translated owner refusal without retries");
     }
     class Garage final : public CGarage
     {
@@ -306,16 +342,6 @@ namespace
 
     protected:
         void RequireInitializationReady() override { owner.Preflight(); }
-        void FixStartupModelCollision(std::uint32_t target, std::uint32_t source) override
-        {
-            owner.Current();
-            owner.collisionRequests.emplace_back(target, source);
-            if (target == 3118)
-                owner.Effect(2);
-            if (target == owner.failCollisionTarget)
-                throw Failure(7);
-            owner.Current();
-        }
         void InitializeRenderer() override { owner.Effect(3); }
         void HideNativeMenu() override { owner.Effect(4); }
     };
@@ -380,7 +406,10 @@ namespace
             owner.effects.clear();
             owner.garageIds.clear();
             owner.failStep = failed;
-            FailsAt([&] { sdk.Initialize(); }, failed);
+            if (failed == 2)
+                CollisionRefuses([&] { sdk.Initialize(); });
+            else
+                FailsAt([&] { sdk.Initialize(); }, failed);
             const auto expected = failed == 0 ? 1 : expectedIds.size() + static_cast<std::size_t>(failed);
             Check(owner.effects.size() == expected && owner.effects.back() == failed,
                   "actual SDK effect exception preserves exactly its accepted prefix and calls no later step");
@@ -522,7 +551,7 @@ namespace
         owner.failMakeModel = ~std::uint32_t{};
         reset();
         owner.failCollisionTarget = 3553;
-        FailsAt([&] { sdk.Initialize(); }, 7);
+        CollisionRefuses([&] { sdk.Initialize(); });
         exactPrefix(44);
         Check(owner.collisionRequests == CollisionModels && owner.effects.size() == 18,
               "second collision-hook failure retains special models and first substitution without reaching renderer/menu");

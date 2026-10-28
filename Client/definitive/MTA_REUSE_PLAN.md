@@ -1,5 +1,20 @@
 # MTA on Definitive Edition: reuse boundary
 
+## Native startup collision repair (2026-10-28)
+
+The broken-model stage now uses MTA's original conditional collision-pointer
+copy through the retained native owner. It checks the target first, skips an
+absent or already repaired target, then resolves the source. An absent source
+is skipped; a present source with a null collision still performs the original
+nullable assignment. This removes the separate pure startup workaround hook.
+
+The native operation attempts one guarded compare/exchange against the null
+target field, with current bank, game-thread, owner and world checks around it.
+It borrows both collision identities without adopting or deleting their owners.
+Unknown or unverified entered effects retain their journal across Stop/End and
+module retirement. Cleanup never rewinds the copied field or retries the write;
+independent clock and timing restoration can complete while that debt remains.
+
 ## Concrete startup model assembly (2026-10-28)
 
 The real SA and DE MakePedModel implementations now share the same ordered

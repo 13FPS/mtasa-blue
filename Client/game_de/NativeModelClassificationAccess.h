@@ -35,5 +35,9 @@ namespace mta::game_de
         // This is collision-pointer identity, not a ped category or geometry
         // test. Older owners refuse without manufacturing a negative answer.
         virtual ClockResult ReadModelPlayerPredicate(std::uint32_t, bool&) noexcept { return ClockResult::NotInitialized; }
+        // Startup's nullable borrowed-pointer copy has no SetColModel policy,
+        // reference, deletion or adoption effects. The current owner journals
+        // an entered write before acknowledging this optional capability.
+        virtual ClockResult CopyStartupModelCollision(std::uint32_t, std::uint32_t) noexcept { return ClockResult::NotInitialized; }
     };
 }

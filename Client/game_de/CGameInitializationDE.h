@@ -35,10 +35,8 @@ namespace mta::game_de
         // capability and late GetStreaming(), without requiring a complete
         // CModelInfo facade for an as-yet nonexistent native slot.
 
-        // Preserve FixModelCol's exact conditional borrowed-pointer copy,
-        // including a null source collision. Native collision identity and
-        // ownership must be qualified; SetColModel is a different policy.
-        virtual void FixStartupModelCollision(std::uint32_t target, std::uint32_t source) = 0;
+        // Broken-model collision copies use the same current native owner;
+        // no complete model facade or general collision-ownership API is needed.
         // Classic Initialize is a typed CRenderWareSA method, absent from the
         // common renderer SDK. Keep its qualified DE counterpart mandatory
         // instead of inventing a common virtual or a successful no-op.

@@ -112,6 +112,7 @@
 #include "NativeModelReferenceTransactions.h"
 #include "NativeModelBackingReferenceController.h"
 #include "NativePedModelCreation.h"
+#include "NativeStartupModelCollision.h"
 #include "NativeModelUnusedRemoval.h"
 #include "NativeModelBankProfile.h"
 #include <game/CModelRequestPolicy.h>
@@ -290,6 +291,7 @@ namespace mta::game_de
             ClockResult ReadModelPlayerPredicate(std::uint32_t, bool&) noexcept override;
             ClockResult ReadModelAnimFileIndex(std::uint32_t, std::uint32_t&) noexcept override;
             ClockResult CreateAndPublishPedModelMetadata(std::uint32_t) noexcept override;
+            ClockResult CopyStartupModelCollision(std::uint32_t, std::uint32_t) noexcept override;
             ClockResult AdjustModelReference(std::uint32_t, int) noexcept override;
             ClockResult ReserveModelBackingReference(std::uint64_t, std::uint32_t, NativeModelBackingReferenceToken&) noexcept override;
             ClockResult BindModelBackingReference(const NativeModelBackingReferenceToken&) noexcept override;
@@ -578,7 +580,12 @@ namespace mta::game_de
             std::list<std::unique_ptr<NativePedModelCreation::Record>> pedModelCreations;
             std::atomic<bool>                                          pedModelCreationBusy{false}, pedModelCreationRetained{false};
             std::atomic<std::uint64_t>                                 pedModelCreationGeneration{0};
-            std::atomic<std::uint64_t>                                 referenceGeneration{0};
+            // Retain uncertain startup copies as acknowledgements only. None
+            // of their borrowed pointers may be freed, adopted or rolled back.
+            std::list<std::unique_ptr<NativeStartupModelCollision::Record>> startupCollisionCopies;
+            std::atomic<bool>                                               startupCollisionBusy{false}, startupCollisionRetained{false};
+            std::atomic<std::uint64_t>                                      startupCollisionGeneration{0};
+            std::atomic<std::uint64_t>                                      referenceGeneration{0};
             // Native buffers remain with this runtime even if their SDK
             // publication fails. No producer/destructor may free them or
             // discard unknown entered effects while removing the callback.
@@ -711,9 +718,10 @@ namespace mta::game_de
 
         bool NativeLifetimeRetained() noexcept
         {
-            return runtime.pedModelCreationBusy.load() || runtime.pedModelCreationRetained.load() || runtime.modelBackingReferences.IsRetained() ||
-                   runtime.pedReferences.IsRetained() || WorldIgnoreRetained() || runtime.customSequences.IsRetained() ||
-                   runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained() || runtime.customSequences.HasPendingCleanup();
+            return runtime.startupCollisionBusy.load() || runtime.startupCollisionRetained.load() || runtime.pedModelCreationBusy.load() ||
+                   runtime.pedModelCreationRetained.load() || runtime.modelBackingReferences.IsRetained() || runtime.pedReferences.IsRetained() ||
+                   WorldIgnoreRetained() || runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() ||
+                   runtime.privateAssociations.IsRetained() || runtime.customSequences.HasPendingCleanup();
         }
 
         bool WeatherOverrideRetained() noexcept
@@ -2747,6 +2755,30 @@ namespace mta::game_de
         NativePedReferenceMemory PedReferenceMemory() noexcept
         {
             return NativePedReferenceMemory({runtime.image}, &CheckTimingOwner, &CheckPedReferenceRecoveryOwner, runtime.generation.load());
+        }
+
+        struct StartupCollisionScope
+        {
+            bool held = false;
+            StartupCollisionScope() noexcept
+            {
+                bool expected = false;
+                held = runtime.startupCollisionBusy.compare_exchange_strong(expected, true, std::memory_order_acq_rel);
+            }
+            ~StartupCollisionScope()
+            {
+                if (held)
+                    runtime.startupCollisionBusy.store(false, std::memory_order_release);
+            }
+        };
+
+        void PublishStartupCollisionDebt(std::uint64_t generation) noexcept
+        {
+            const bool retained = !runtime.startupCollisionCopies.empty();
+            runtime.startupCollisionGeneration.store(retained ? generation : 0);
+            runtime.startupCollisionRetained.store(retained);
+            if (retained)
+                runtime.restored.store(false);
         }
 
         struct PedModelCreationScope
@@ -5111,6 +5143,49 @@ namespace mta::game_de
             return result;
         }
 
+        ClockResult NativeAccess::CopyStartupModelCollision(std::uint32_t target, std::uint32_t source) noexcept
+        {
+            const auto targetKey = target, sourceKey = source;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            StartupCollisionScope scope;
+            if (!scope.held)
+                return ClockResult::Busy;
+            const auto generation = runtime.generation.load();
+            const auto retainedGeneration = runtime.startupCollisionGeneration.load();
+            if (!generation || (retainedGeneration && retainedGeneration != generation) || runtime.startupCollisionRetained.load())
+                return ClockResult::OwnerConflict;
+            try
+            {
+                runtime.startupCollisionCopies.push_back(std::make_unique<NativeStartupModelCollision::Record>());
+            }
+            catch (...)
+            {
+                return ClockResult::WriteFailure;
+            }
+            auto&                                record = *runtime.startupCollisionCopies.back();
+            NativeStartupModelCollision::Receipt receipt;
+            result = NativeStartupModelCollision::Copy(runtime.image, record, generation, targetKey, sourceKey, &CheckTimingOwner, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = CheckTimingOwner();
+                if (result == ClockResult::Ok && runtime.generation.load() != generation)
+                    result = ClockResult::BindingChanged;
+                if (result != ClockResult::Ok)
+                    record.MarkUnacknowledged();
+            }
+            // A known skipped/rejected or verified copy has no owned native
+            // resource. Unknown entered work stays journaled across Stop/End;
+            // no teardown path retries it or restores the former null field.
+            if (record.CanDiscard())
+                runtime.startupCollisionCopies.pop_back();
+            PublishStartupCollisionDebt(generation);
+            if (result != ClockResult::Ok && receipt.entered)
+                Stop(result);
+            return result;
+        }
+
         ClockResult NativeAccess::ReadModelInterface(std::uint32_t model, std::uintptr_t& output) noexcept
         {
             const auto     requestedModel = model;
@@ -7088,7 +7163,8 @@ namespace mta::game_de
                     // rewinds the game clock or writes a restoration snapshot.
                     if (runtime.captured.load())
                         runtime.observed = current;
-                    const bool metadataRetained = runtime.pedModelCreationBusy.load() || runtime.pedModelCreationRetained.load();
+                    const bool metadataRetained = runtime.pedModelCreationBusy.load() || runtime.pedModelCreationRetained.load() ||
+                                                  runtime.startupCollisionBusy.load() || runtime.startupCollisionRetained.load();
                     runtime.restored.store(!metadataRetained);
                     runtime.ready.store(false);
                     runtime.timerReady.store(false);
@@ -7149,7 +7225,8 @@ namespace mta::game_de
                 runtime.timingRecovery.store(0);
                 runtime.timingCaptured.store(0);
                 runtime.timingGeneration.store(0);
-                const bool metadataRetained = runtime.pedModelCreationBusy.load() || runtime.pedModelCreationRetained.load();
+                const bool metadataRetained = runtime.pedModelCreationBusy.load() || runtime.pedModelCreationRetained.load() ||
+                                              runtime.startupCollisionBusy.load() || runtime.startupCollisionRetained.load();
                 // Clock/timing restoration has its own completed acknowledgement.
                 // A retained model must not make later callbacks rewind it again,
                 // while overall restoration/module release still remain blocked.

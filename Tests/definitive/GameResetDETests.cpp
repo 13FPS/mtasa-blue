@@ -260,6 +260,7 @@ namespace
         ClockResult SetTimeScale(float) noexcept override { reset_fixture::Unqualified("native time scale"); }
         ClockResult SetMinuteDuration(std::uint32_t) noexcept override { reset_fixture::Unqualified("native minute duration"); }
         ClockResult Pause(bool) noexcept override { reset_fixture::Unqualified("native timing pause"); }
+        ClockResult CopyStartupModelCollision(std::uint32_t, std::uint32_t) noexcept override { reset_fixture::Unqualified("startup collision"); }
         ClockResult RequireConstructorWeapons(const CClock* value, CWeaponStatManager*& output) noexcept override
         {
             ++constructorRequires;
@@ -362,12 +363,6 @@ namespace
             return defaultCapacity;
         }
         void RequireInitializationReady() override { reset_fixture::Unqualified("later Initialize preflight"); }
-        void FixStartupModelCollision(std::uint32_t target, std::uint32_t source) override
-        {
-            (void)target;
-            (void)source;
-            reset_fixture::Unqualified("startup collision");
-        }
         void InitializeRenderer() override { reset_fixture::Unqualified("renderer initialization"); }
         void HideNativeMenu() override { reset_fixture::Unqualified("native menu hide"); }
 

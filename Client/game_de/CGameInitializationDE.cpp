@@ -37,7 +37,6 @@ namespace mta::game_de
 
     void CGameInitializationDE::SetupBrokenModels()
     {
-        MtaGame::CGameModelPreparationPolicy::SetupBrokenModels([this](std::uint32_t target, std::uint32_t source)
-                                                                { FixStartupModelCollision(target, source); });
+        CGameModelPreparationDE(NativeWrites()).SetupBrokenModels();
     }
 }

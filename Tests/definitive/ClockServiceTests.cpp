@@ -3236,6 +3236,30 @@ namespace ClockPedRenderOwnerTest
 #include "../../Client/game_de/NativeModelArchiveReader.cpp"
 #include "../../Client/game_de/NativeStreamingModelGroupsReader.cpp"
 #include "../../Client/game_de/NativeStreamingCompletionContext.cpp"
+namespace ClockStartupCollisionAtomicTest
+{
+    std::uintptr_t image = 0;
+    unsigned       calls = 0, scenario = 0;
+    void*          Exchange(void* volatile* field, void* replacement, void* expected) noexcept
+    {
+        ++calls;
+        // Only the final guarded OS effect is faulted on owned CPU pages.
+        // The real NativeAccess method and native controller qualify it.
+        if (scenario == 1)
+            ::RaiseException(0xe0570328, 0, 0, nullptr);
+        auto* observed = ::InterlockedCompareExchangePointer(field, replacement, expected);
+        if (scenario == 2)
+            ::RaiseException(0xe0570329, 0, 0, nullptr);
+        if (scenario == 3)
+            ::InterlockedExchange(reinterpret_cast<volatile LONG*>(image + mta::game_de::NativeBorrowedGcProfile::markerRva), LONG{1});
+        return observed;
+    }
+}
+#pragma push_macro("InterlockedCompareExchangePointer")
+#undef InterlockedCompareExchangePointer
+#define InterlockedCompareExchangePointer ClockStartupCollisionAtomicTest::Exchange
+#include "../../Client/game_de/NativeStartupModelCollision.cpp"
+#pragma pop_macro("InterlockedCompareExchangePointer")
 #include "../../Client/game_de/NativeWorldGroundContext.cpp"
 #define MTA_DE_WORLD_GROUND_NATIVE_INVOKE ClockWorldGroundOwnerTest::Invoke
 #include "../../Client/game_de/NativeWorldGroundCalls.cpp"
@@ -8429,6 +8453,7 @@ namespace
 
 #include "NativeCustomSequenceStorageOwnerTests.inl"
 #include "NativePedModelCreationRuntimeOwnerTests.inl"
+#include "NativeStartupModelCollisionRuntimeOwnerTests.inl"
 #include "AnimationSequenceStorageManager.generated.h"
 #include "NativeCustomAnimationResourcesOwnerTests.inl"
 #include "AnimationManagerRefs.generated.h"
@@ -8492,6 +8517,11 @@ static_assert(std::is_same_v<decltype(&PrivateAnimationFactoryManagerReceiver::G
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool startupCollisionSuccess = argc == 3 && std::strcmp(argv[2], "--startup-collision-runtime-success") == 0;
+    const bool startupCollisionBefore = argc == 3 && std::strcmp(argv[2], "--startup-collision-runtime-unknown-before") == 0;
+    const bool startupCollisionAfter = argc == 3 && std::strcmp(argv[2], "--startup-collision-runtime-unknown-after") == 0;
+    const bool startupCollisionPost = argc == 3 && std::strcmp(argv[2], "--startup-collision-runtime-post-owner-loss") == 0;
+    const bool startupCollisionOnly = startupCollisionSuccess || startupCollisionBefore || startupCollisionAfter || startupCollisionPost;
     const bool pedCreationLifecycleWritten = argc == 3 && std::strcmp(argv[2], "--ped-model-creation-runtime-written") == 0;
     const bool pedCreationLifecycleReadOnly = argc == 3 && std::strcmp(argv[2], "--ped-model-creation-runtime-read-only") == 0;
     const bool pedCreationLifecycleUnknown = argc == 3 && std::strcmp(argv[2], "--ped-model-creation-runtime-unknown-allocation") == 0;
@@ -8643,15 +8673,15 @@ int main(int argc, char** argv)
     const bool waterOnly = orientationWithWater || (argc == 3 && std::strcmp(argv[2], "--ped-water") == 0);
     const bool poseOnly = argc == 3 && std::strcmp(argv[2], "--ped-pose") == 0;
     const bool poolRegistryOnly = argc == 3 && std::strcmp(argv[2], "--ped-pool-registry") == 0;
-    Check((argc == 2 || pedCreationLifecycleOnly || constructorOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly ||
-           poolRegistryOnly || poseOnly || waterOnly || animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly ||
-           areaSpecialOnly || areaOnly || specialOnly || fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly ||
-           constructorServicesOnly || worldGroundOnly || worldLineOnly || worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly ||
-           pedWeaponGrantOnly || worldIgnoreOnly || cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || pedMoveAnimOnly ||
-           playerNativePrerequisitesOnly || animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly ||
-           animationManagerRefsOnly || animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly ||
-           animationHierarchyBankOnly || customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly ||
-           privateHierarchyScalarsOnly || privateHierarchyNameOnly || privateHierarchyParentOnly || privateHierarchyEmptyOnly ||
+    Check((argc == 2 || startupCollisionOnly || pedCreationLifecycleOnly || constructorOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly ||
+           garagePoolsOnly || poolRegistryOnly || poseOnly || waterOnly || animationOnly || animationNameOnly || animationManagerOnly ||
+           animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly || fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly ||
+           gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly || worldLineOnly || worldAreaOnly || worldQueriesOnly ||
+           worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly || cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly ||
+           pedRebuildOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly || animationBlockRefsOnly || animationBlockFactoryOnly ||
+           customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly || animationGatewayOnly || customAnimationSequenceOnly ||
+           customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly || customAnimationSequenceNameOnly || freshCompressedSequenceOnly ||
+           privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly || privateHierarchyParentOnly || privateHierarchyEmptyOnly ||
            freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly || customAnimationCleanupOnly ||
            standaloneSequenceOperationsOnly || animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly ||
            animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly || animationGroupValidityOnly ||
@@ -8659,6 +8689,15 @@ int main(int argc, char** argv)
            pedRenderOnly || privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (startupCollisionOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        StartupCollisionRuntimeFixture::Run(fixture, startupCollisionBefore ? 1u : startupCollisionAfter ? 2u : startupCollisionPost ? 3u : 0u);
+        std::puts("Production startup collision runtime lifecycle fixture completed");
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (pedCreationLifecycleOnly)
     {
         ClockImageFixture fixture;

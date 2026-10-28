@@ -114,6 +114,7 @@ try {
         'Client/game_de/CWeaponInfoReadDE.h','Client/game_de/CWeaponInfoWriteDE.h','Client/game_de/CWeaponInfoDE.h','Client/game_de/CWeaponInfoBankDE.h','Client/game_de/CWeaponStatNativeDE.h','Client/game_de/CWeaponStatManagerPolicyDE.h','Client/game_de/CWeaponStatManagerDE.h','Client/game_de/NativeWeaponInfoReader.h','Client/game_de/NativeWeaponInfoProfile.h','Client/game_de/NativeWeaponInfoVectorProfile.h',
         'Client/sdk/game/CWeaponStatListPolicy.h','Client/sdk/game/CWeaponStartupPolicy.h'
     )
+    $sourceNames += @('Build/definitive-recovery/mta-startup-model-collision-20261028/startup-model-collision-api-source-ready.json','Build/definitive-recovery/mta-startup-model-collision-20261028/startup-model-collision-sdk-admission-ready.json','Build/definitive-recovery/mta-startup-model-collision-tests-20261028/startup-model-collision-sdk-tests-source-ready.json')
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })

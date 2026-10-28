@@ -116,6 +116,7 @@ try {
     $sourceNames += @('Client/game_de/CGameWorldDE.h','Client/sdk/game/CGameWorldPolicy.h','Client/sdk/game/CDummyPool.h','Client/game_de/CGameResetDE.h','Client/sdk/game/CGameResetPolicy.h','Client/game_de/NativeGameConstructorServices.h',
         'Client/sdk/game/CFireManager.h','Client/sdk/game/CCamera.h','Client/sdk/game/CHud.h','Client/sdk/game/CBuildingsPool.h',
         'Shared/sdk/SharedUtil.Misc.h','Tests/definitive/Write-GameWorldFixture.ps1')
+    $sourceNames += @('Build/definitive-recovery/mta-startup-model-collision-20261028/startup-model-collision-api-source-ready.json','Build/definitive-recovery/mta-startup-model-collision-20261028/startup-model-collision-sdk-admission-ready.json','Build/definitive-recovery/mta-startup-model-collision-tests-20261028/startup-model-collision-sdk-tests-source-ready.json')
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })

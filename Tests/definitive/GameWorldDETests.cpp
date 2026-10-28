@@ -329,6 +329,7 @@ namespace
         ClockResult SetTimeScale(float) noexcept override { world_fixture::Unqualified("time scale"); }
         ClockResult SetMinuteDuration(std::uint32_t) noexcept override { world_fixture::Unqualified("minute duration"); }
         ClockResult Pause(bool) noexcept override { world_fixture::Unqualified("pause"); }
+        ClockResult CopyStartupModelCollision(std::uint32_t, std::uint32_t) noexcept override { world_fixture::Unqualified("startup collision"); }
         ClockResult RequireConstructorWeapons(const CClock*, CWeaponStatManager*& output) noexcept override
         {
             ++consumptions;
@@ -392,12 +393,6 @@ namespace
         void ResetModelTextureDictionaries() override { world_fixture::Unqualified("texture dictionaries"); }
         int  GetResetBuildingPoolCapacity() const override { world_fixture::Unqualified("default capacity"); }
         void RequireInitializationReady() override { world_fixture::Unqualified("Initialize readiness"); }
-        void FixStartupModelCollision(std::uint32_t target, std::uint32_t source) override
-        {
-            (void)target;
-            (void)source;
-            world_fixture::Unqualified("startup collision");
-        }
         void InitializeRenderer() override { world_fixture::Unqualified("renderer"); }
         void HideNativeMenu() override { world_fixture::Unqualified("menu"); }
 

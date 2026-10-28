@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
+    [ValidateSet('StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -23,6 +23,9 @@ $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;a
 # Historical markers start false and are set only by the branch that actually
 # executed. Focus mode must never inherit the cumulative suite's claims.
 $record['runScope'] = $Scope
+$record['nativeStartupCollisionRuntimeTested']=$false
+$record['nativeStartupCollisionRuntimeDebtRetained']=$false
+$record['nativeStartupCollisionRuntimeIndependentRestoreTested']=$false
 $record['nativePedModelCreationRuntimeTested']=$false
 $record['nativePedModelCreationRuntimeNoRewindTested']=$false
 $record['nativePedModelCreationRuntimeUnpublishedCleanupTested']=$false
@@ -380,6 +383,8 @@ try {
         'Client/game_de/NativePedModelMetadataStorageCalls.h',
         'Client/game_de/NativePedModelCreation.h',
         'Client/game_de/NativePedModelCreation.cpp',
+        'Client/game_de/NativeStartupModelCollision.h',
+        'Client/game_de/NativeStartupModelCollision.cpp',
         'Client/game_de/NativePedModelDefaultCollision.h',
         'Client/game_de/NativePedModelDefaultCollision.cpp',
         'Client/game_de/NativePedModelMetadataProfile.h',
@@ -610,7 +615,9 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
     $sourceNames += @('Client/game_de/NativeClothesDescriptorProfile.h','Client/game_de/NativeClothesDescriptorCalls.h','Client/game_de/NativeClothesDescriptorCalls.cpp','Tests/definitive/NativeClothesDescriptorFixture.h','Tests/definitive/NativeModuleClothesInitializerOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativePedMoveAnimAccess.h','Client/game_de/NativePedMoveAnimReader.h','Client/game_de/NativePedMoveAnimReader.cpp','Client/game_de/NativePedMoveAnimProfile.h','Client/game_de/CPlayerPedMoveAnimDE.h','Client/game_de/CPlayerPedMoveAnimDE.cpp','Client/game_de/CPlayerPedWantedDE.h','Tests/definitive/NativePedMoveAnimOwnerTests.inl','Tests/definitive/Write-PlayerMoveAnimFixture.ps1')
     $sourceNames += @('Client/game_de/NativePedRebuildAccess.h','Client/game_de/CPedRebuildDE.h','Client/game_de/CPedRebuildDE.cpp','Client/game_de/NativePedRebuildCalls.h','Client/game_de/NativePedRebuildCalls.cpp','Client/game_de/NativePedRebuildProfile.h','Tests/definitive/NativePedRebuildFixture.h','Tests/definitive/NativePedRebuildOwnerTests.inl','Tests/definitive/Write-PedRebuildFixture.ps1')
-    $sourceNames += @('Tests/definitive/NativePedModelCreationRuntimeOwnerTests.inl')
+    $sourceNames += @('Tests/definitive/NativePedModelCreationRuntimeOwnerTests.inl','Tests/definitive/NativeStartupModelCollisionRuntimeOwnerTests.inl',
+        'Build/definitive-recovery/mta-startup-model-collision-20261028/startup-model-collision-runtime-admission-ready.json',
+        'Build/definitive-recovery/mta-startup-model-collision-20261028/startup-model-collision-runtime-tests-source-ready.json')
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
@@ -928,6 +935,8 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         # Runtime references the real creator/default-collision qualifiers in
         # every scope. Link them once even when the selected fixture is older.
         (Join-Path $taskRoot 'Client/game_de/NativePedModelCreation.cpp'),
+        # Collision is compiled once inside the actual Clock fixture with
+        # only its final OS atomic effect faulted on owned CPU pages.
         (Join-Path $taskRoot 'Client/game_de/NativePedModelDefaultCollision.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameInitializationDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameDE.cpp'),
@@ -1090,7 +1099,26 @@ namespace ClockPrivateHierarchyParentWriteFixture {
     if ($Scope -eq 'GarageNamed') { $fixtureArguments += '--garage-named' }
     if ($Scope -eq 'GaragePools') { $fixtureArguments += '--garage-pools' }
     if ($Scope -eq 'PedPoolRegistry') { $fixtureArguments += '--ped-pool-registry' }
-    if($Scope -eq 'PedModelCreationLifecycle'){
+    if($Scope -eq 'StartupModelCollisionLifecycle'){
+        # Compile once, then preserve each uncertain real runtime journal in
+        # its own bounded child; do not reset it for a subsequent scenario.
+        $record['testRuns']=@();$record['testScenarioExecutables']=@();$texts=@()
+        foreach($scenario in @('success','unknown-before','unknown-after','post-owner-loss')){
+            $scenarioRoot=Join-Path $outputRoot ('scenario-startup-collision-runtime-'+$scenario)
+            [IO.Directory]::CreateDirectory($scenarioRoot)|Out-Null
+            $scenarioExecutable=Join-Path $scenarioRoot ([IO.Path]::GetFileName($executable))
+            if(Test-Path -LiteralPath $scenarioExecutable){throw 'Existing collision runtime evidence must not be overwritten'}
+            Copy-Item -LiteralPath $executable -Destination $scenarioExecutable
+            if((Sha $scenarioExecutable) -cne (Sha $executable)){throw 'Runtime scenario executable differs from once-compiled fixture'}
+            $record.testScenarioExecutables+=@{scenario=$scenario;path=$scenarioExecutable;sha256=(Sha $scenarioExecutable);directory=$scenarioRoot}
+            $run=RunBounded $scenarioExecutable @($scenarioRoot,('--startup-collision-runtime-'+$scenario)) ('test-startup-collision-runtime-'+$scenario) 60000
+            $record.testRuns+=$run
+            $part=[IO.File]::ReadAllText($run.stdout)+[IO.File]::ReadAllText($run.stderr)
+            if($run.exitCode -ne 0 -or $run.timedOut -or $part -notmatch 'Passed (\d+) production clock service checks'){throw ('Startup collision Runtime lifecycle '+$scenario+' failed')}
+            $record.checks += [int]$Matches[1];$texts+=$part
+        }
+        $record.testRun=$record.testRuns[-1];$text=$texts -join [Environment]::NewLine
+    } elseif($Scope -eq 'PedModelCreationLifecycle'){
         # Published and unknown records cannot be reset to fit a following case.
         # Compile the actual runtime once and isolate only these four new cases.
         $record['testRuns']=@();$record['testScenarioExecutables']=@();$texts=@()
@@ -1592,7 +1620,16 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if($Scope -eq 'PedModelCreationLifecycle'){
+    if($Scope -eq 'StartupModelCollisionLifecycle'){
+        $record.nativeStartupCollisionRuntimeDebtRetained=$text.Contains('Production startup collision runtime unknown-before retained without replay') -and
+            $text.Contains('Production startup collision runtime unknown-after retained without rollback') -and
+            $text.Contains('Production startup collision runtime post-owner-loss retained without rewind')
+        $record.nativeStartupCollisionRuntimeIndependentRestoreTested=$record.nativeStartupCollisionRuntimeDebtRetained -and
+            $text.Contains('Production startup collision runtime verified copy retired without rollback')
+        $record.nativeStartupCollisionRuntimeTested=$record.nativeStartupCollisionRuntimeIndependentRestoreTested
+        if(-not $record.nativeStartupCollisionRuntimeTested){throw 'Actual startup collision Runtime lifecycle scope incomplete'}
+        $record.productionNativeCallbackTested=$true
+    } elseif($Scope -eq 'PedModelCreationLifecycle'){
         $record.nativePedModelCreationRuntimeNoRewindTested=$text.Contains('Production ped metadata runtime write restoration retained without rewind') -and
             $text.Contains('Production ped metadata runtime read-only restoration retained without rewind') -and
             $text.Contains('Production ped metadata runtime unknown allocation retained without replay')

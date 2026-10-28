@@ -1,5 +1,21 @@
 # MTA on Definitive Edition: reuse boundary
 
+## Actual native menu closing (2026-10-28)
+
+The later Initialize menu stage now reaches the real DE close method through
+an optional retained timing-owner capability. It invokes the whole native
+operation, including widget removal and the engine's input/audio work, instead
+of clearing a widget pointer or legacy screen count. The new abstract
+CGameNativeMenuDE supplies that stage above the owned renderer preparation.
+
+The route requires the current loaded world, engine thread, GC protocol and
+root/dependency identity. It admits an already empty legacy stack and keeps a
+one-shot acknowledgement. A false native return means no widget was owned;
+its native effects still need verified postconditions. The detached widget is
+not queried again. Unknown or unverified entered work retains the runtime and
+module across Stop/End without rollback or replay. This grants no main-menu
+application startup authority or complete game factory.
+
 ## Shared renderer preparation (2026-10-28)
 
 SA and DE now consume the same CPU texture-watch metadata and MTA's existing

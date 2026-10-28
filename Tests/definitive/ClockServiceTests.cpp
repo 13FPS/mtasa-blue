@@ -198,6 +198,8 @@
 #include "../../Client/game_de/CWorldIgnoreEntityDE.h"
 #include "../../Client/game_de/CCameraSphereVisibleDE.h"
 #include "../../Client/game_de/NativeCameraSphereVisibleCalls.h"
+#include "../../Client/game_de/NativeStartupMenuCalls.h"
+#include "NativeStartupMenuGraphFixture.h"
 #include "NativeCameraSphereVisibleFixture.h"
 #include "NativeWorldIgnoredEntityFixture.h"
 #include "../../Client/game_de/CWorldJetpackHeightDE.h"
@@ -3236,6 +3238,17 @@ namespace ClockPedRenderOwnerTest
 #include "../../Client/game_de/NativeModelArchiveReader.cpp"
 #include "../../Client/game_de/NativeStreamingModelGroupsReader.cpp"
 #include "../../Client/game_de/NativeStreamingCompletionContext.cpp"
+namespace ClockStartupMenuInvokeTest
+{
+    namespace Calls = mta::game_de::NativeStartupMenuCalls;
+    std::uintptr_t                   image = 0;
+    unsigned                         calls = 0, scenario = 0;
+    NativeStartupMenuFixture::Graph* menu = nullptr;
+    mta::game_de::ClockResult        Invoke(Calls::NativeFunction, std::uintptr_t, bool&, std::uint32_t&) noexcept;
+}
+#define MTA_DE_STARTUP_MENU_NATIVE_INVOKE ClockStartupMenuInvokeTest::Invoke
+#include "../../Client/game_de/NativeStartupMenuCalls.cpp"
+#undef MTA_DE_STARTUP_MENU_NATIVE_INVOKE
 namespace ClockStartupCollisionAtomicTest
 {
     std::uintptr_t image = 0;
@@ -8454,6 +8467,7 @@ namespace
 #include "NativeCustomSequenceStorageOwnerTests.inl"
 #include "NativePedModelCreationRuntimeOwnerTests.inl"
 #include "NativeStartupModelCollisionRuntimeOwnerTests.inl"
+#include "NativeStartupMenuRuntimeOwnerTests.inl"
 #include "AnimationSequenceStorageManager.generated.h"
 #include "NativeCustomAnimationResourcesOwnerTests.inl"
 #include "AnimationManagerRefs.generated.h"
@@ -8517,6 +8531,12 @@ static_assert(std::is_same_v<decltype(&PrivateAnimationFactoryManagerReceiver::G
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool startupMenuSuccess = argc == 3 && std::strcmp(argv[2], "--startup-menu-runtime-success") == 0;
+    const bool startupMenuAbsent = argc == 3 && std::strcmp(argv[2], "--startup-menu-runtime-no-widget") == 0;
+    const bool startupMenuBefore = argc == 3 && std::strcmp(argv[2], "--startup-menu-runtime-unknown-before") == 0;
+    const bool startupMenuAfter = argc == 3 && std::strcmp(argv[2], "--startup-menu-runtime-unknown-after") == 0;
+    const bool startupMenuPost = argc == 3 && std::strcmp(argv[2], "--startup-menu-runtime-post-owner-loss") == 0;
+    const bool startupMenuOnly = startupMenuSuccess || startupMenuAbsent || startupMenuBefore || startupMenuAfter || startupMenuPost;
     const bool startupCollisionSuccess = argc == 3 && std::strcmp(argv[2], "--startup-collision-runtime-success") == 0;
     const bool startupCollisionBefore = argc == 3 && std::strcmp(argv[2], "--startup-collision-runtime-unknown-before") == 0;
     const bool startupCollisionAfter = argc == 3 && std::strcmp(argv[2], "--startup-collision-runtime-unknown-after") == 0;
@@ -8673,8 +8693,8 @@ int main(int argc, char** argv)
     const bool waterOnly = orientationWithWater || (argc == 3 && std::strcmp(argv[2], "--ped-water") == 0);
     const bool poseOnly = argc == 3 && std::strcmp(argv[2], "--ped-pose") == 0;
     const bool poolRegistryOnly = argc == 3 && std::strcmp(argv[2], "--ped-pool-registry") == 0;
-    Check((argc == 2 || startupCollisionOnly || pedCreationLifecycleOnly || constructorOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly ||
-           garagePoolsOnly || poolRegistryOnly || poseOnly || waterOnly || animationOnly || animationNameOnly || animationManagerOnly ||
+    Check((argc == 2 || startupMenuOnly || startupCollisionOnly || pedCreationLifecycleOnly || constructorOnly || pedOwnerOnly || currentWeaponOnly ||
+           garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly || waterOnly || animationOnly || animationNameOnly || animationManagerOnly ||
            animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly || fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly ||
            gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly || worldLineOnly || worldAreaOnly || worldQueriesOnly ||
            worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly || cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly ||
@@ -8689,6 +8709,15 @@ int main(int argc, char** argv)
            pedRenderOnly || privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (startupMenuOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        StartupMenuRuntimeFixture::Run(fixture, startupMenuAbsent ? 1u : startupMenuBefore ? 2u : startupMenuAfter ? 3u : startupMenuPost ? 4u : 0u);
+        std::puts("Production startup menu runtime lifecycle fixture completed");
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (startupCollisionOnly)
     {
         ClockImageFixture fixture;

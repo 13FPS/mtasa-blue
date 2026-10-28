@@ -74,6 +74,7 @@
 #include "NativeAnimationManagerAccess.h"
 #include "NativeWeaponConstructorProgress.h"
 #include "NativeGameConstructorServices.h"
+#include "NativeStartupMenuAccess.h"
 #include <cstdint>
 
 class CStats;
@@ -142,7 +143,8 @@ namespace mta::game_de
                                    public NativeModelBackingReferenceAccess,
                                    public NativeNamedGarageAccess,
                                    public NativeAnimationBlockAccess,
-                                   public NativeAnimationManagerAccess
+                                   public NativeAnimationManagerAccess,
+                                   public NativeStartupMenuAccess
     {
     public:
         virtual ClockResult SetTimeScale(float value) noexcept = 0;

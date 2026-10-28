@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
+    [ValidateSet('StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -23,6 +23,9 @@ $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;a
 # Historical markers start false and are set only by the branch that actually
 # executed. Focus mode must never inherit the cumulative suite's claims.
 $record['runScope'] = $Scope
+$record['nativeStartupMenuRuntimeTested']=$false
+$record['nativeStartupMenuRuntimeDebtRetained']=$false
+$record['nativeStartupMenuRuntimeIndependentRestoreTested']=$false
 $record['nativeStartupCollisionRuntimeTested']=$false
 $record['nativeStartupCollisionRuntimeDebtRetained']=$false
 $record['nativeStartupCollisionRuntimeIndependentRestoreTested']=$false
@@ -618,6 +621,10 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
     $sourceNames += @('Tests/definitive/NativePedModelCreationRuntimeOwnerTests.inl','Tests/definitive/NativeStartupModelCollisionRuntimeOwnerTests.inl',
         'Build/definitive-recovery/mta-startup-model-collision-20261028/startup-model-collision-runtime-admission-ready.json',
         'Build/definitive-recovery/mta-startup-model-collision-20261028/startup-model-collision-runtime-tests-source-ready.json')
+    $sourceNames += @('Client/game_de/NativeStartupMenuAccess.h','Client/game_de/NativeStartupMenuCalls.h','Client/game_de/NativeStartupMenuCalls.cpp',
+        'Client/game_de/NativeStartupMenuProfile.h','Tests/definitive/NativeStartupMenuGraphFixture.h','Tests/definitive/NativeStartupMenuRuntimeOwnerTests.inl',
+        'Build/definitive-recovery/mta-native-menu-close-20261028/native-menu-close-source-ready.json',
+        'Build/definitive-recovery/mta-native-menu-close-20261028/tests/native-menu-tests-source-ready.json')
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
@@ -1099,7 +1106,26 @@ namespace ClockPrivateHierarchyParentWriteFixture {
     if ($Scope -eq 'GarageNamed') { $fixtureArguments += '--garage-named' }
     if ($Scope -eq 'GaragePools') { $fixtureArguments += '--garage-pools' }
     if ($Scope -eq 'PedPoolRegistry') { $fixtureArguments += '--ped-pool-registry' }
-    if($Scope -eq 'StartupModelCollisionLifecycle'){
+    if($Scope -eq 'StartupNativeMenuLifecycle'){
+        # Compile the actual runtime once; an unresolved native effect keeps
+        # its real journal until the corresponding isolated child exits.
+        $record['testRuns']=@();$record['testScenarioExecutables']=@();$texts=@()
+        foreach($scenario in @('success','no-widget','unknown-before','unknown-after','post-owner-loss')){
+            $scenarioRoot=Join-Path $outputRoot ('scenario-startup-menu-runtime-'+$scenario)
+            [IO.Directory]::CreateDirectory($scenarioRoot)|Out-Null
+            $scenarioExecutable=Join-Path $scenarioRoot ([IO.Path]::GetFileName($executable))
+            if(Test-Path -LiteralPath $scenarioExecutable){throw 'Existing native menu runtime evidence must not be overwritten'}
+            Copy-Item -LiteralPath $executable -Destination $scenarioExecutable
+            if((Sha $scenarioExecutable) -cne (Sha $executable)){throw 'Native menu scenario differs from once-compiled actual runtime fixture'}
+            $record.testScenarioExecutables+=@{scenario=$scenario;path=$scenarioExecutable;sha256=(Sha $scenarioExecutable);directory=$scenarioRoot}
+            $run=RunBounded $scenarioExecutable @($scenarioRoot,('--startup-menu-runtime-'+$scenario)) ('test-startup-menu-runtime-'+$scenario) 60000
+            $record.testRuns+=$run
+            $part=[IO.File]::ReadAllText($run.stdout)+[IO.File]::ReadAllText($run.stderr)
+            if($run.exitCode -ne 0 -or $run.timedOut -or $part -notmatch 'Passed (\d+) production clock service checks'){throw ('Native menu runtime lifecycle '+$scenario+' failed')}
+            $record.checks += [int]$Matches[1];$texts+=$part
+        }
+        $record.testRun=$record.testRuns[-1];$text=$texts -join [Environment]::NewLine
+    } elseif($Scope -eq 'StartupModelCollisionLifecycle'){
         # Compile once, then preserve each uncertain real runtime journal in
         # its own bounded child; do not reset it for a subsequent scenario.
         $record['testRuns']=@();$record['testScenarioExecutables']=@();$texts=@()
@@ -1620,7 +1646,16 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if($Scope -eq 'StartupModelCollisionLifecycle'){
+    if($Scope -eq 'StartupNativeMenuLifecycle'){
+        $record.nativeStartupMenuRuntimeDebtRetained=$text.Contains('Production startup menu runtime unknown-before retained without replay') -and
+            $text.Contains('Production startup menu runtime unknown-after retained without rollback') -and
+            $text.Contains('Production startup menu runtime post-owner-loss retained without rewind')
+        $record.nativeStartupMenuRuntimeIndependentRestoreTested=$record.nativeStartupMenuRuntimeDebtRetained -and
+            $text.Contains('Production startup menu runtime verified close retired') -and $text.Contains('Production startup menu runtime false no-widget retired')
+        $record.nativeStartupMenuRuntimeTested=$record.nativeStartupMenuRuntimeIndependentRestoreTested
+        if(-not $record.nativeStartupMenuRuntimeTested){throw 'Actual native menu runtime lifecycle scope incomplete'}
+        $record.productionNativeCallbackTested=$true
+    } elseif($Scope -eq 'StartupModelCollisionLifecycle'){
         $record.nativeStartupCollisionRuntimeDebtRetained=$text.Contains('Production startup collision runtime unknown-before retained without replay') -and
             $text.Contains('Production startup collision runtime unknown-after retained without rollback') -and
             $text.Contains('Production startup collision runtime post-owner-loss retained without rewind')

@@ -36,6 +36,15 @@ namespace mta::game_de
             std::uintptr_t                         detour = 0;
             bool                                   captured = false;
         };
+        struct PolicyRoots
+        {
+            std::uintptr_t viewportTable = 0, owner = 0, device = 0, manager = 0, managerTable = 0, queue = 0;
+            std::uintptr_t window = 0, swapchain = 0, chainTable = 0, target = 0, custom = 0;
+            std::uint32_t  width = 0, height = 0;
+        };
+        constexpr std::uint64_t admissionClosed = std::uint64_t{1} << 63;
+        constexpr std::uint64_t admissionChanging = std::uint64_t{1} << 62;
+        constexpr std::uint64_t admissionCountMask = 0xffffffffu;
         struct Runtime
         {
             std::uintptr_t image = 0, dxgi = 0;
@@ -56,6 +65,18 @@ namespace mta::game_de
             std::array<unsigned char, 5>  dispatchPatch{};
             bool                          prepared = false, endpoint = false, committed = false, keyReady = false;
             std::atomic<bool>             armed{false}, destroyed{false};
+            // Diagnostic closure excludes every old hash/lock/COM scope while
+            // policy-only lifecycle callbacks remain atomics-only.
+            std::atomic<std::uint64_t>        diagnosticAdmission{0};
+            bool                              diagnosticBoundaryEnabled = true;
+            std::atomic<std::uint64_t>        policyAdmission{admissionClosed}, policyGeneration{0}, policyEpoch{0};
+            std::atomic<NativePolicySelector> policySelector{nullptr};
+            std::atomic<unsigned>             policyLifecycle{0};
+            std::atomic<bool>                 policyPoisoned{false};
+            std::atomic<std::uintptr_t>       policyViewport{0};
+            std::atomic<DWORD>                policyThread{0};
+            PolicyRoots                       policyIdentity;
+
             std::atomic<unsigned>         inFlight{0}, resizing{0};
             std::atomic<std::uint64_t>    epoch{0}, resizeEntries{0}, notifyEntries{0}, foreignEntries{0};
             std::atomic<DWORD>            resizeThread{0}, notifyThread{0};
@@ -73,10 +94,44 @@ namespace mta::game_de
             SRWLOCK                     diagnosticLock = SRWLOCK_INIT;
             RenderEndpointDiagnosticV1  preparation, diagnostic;
         } runtime;
-        thread_local FrameBoundaryScope* scope = nullptr;
-        thread_local unsigned            presentDepth = 0;
-        thread_local unsigned            dispatchDepth = 0;
-        HRESULT STDMETHODCALLTYPE        HookNativeDispatch(IDXGISwapChain* chain, UINT interval, UINT flags, Present target);
+        thread_local FrameBoundaryScope*       scope = nullptr;
+        thread_local NativePresentPolicyScope* policyScope = nullptr;
+
+        bool TryCount(std::atomic<std::uint64_t>& admission) noexcept
+        {
+            for (unsigned attempt = 0; attempt != 16; ++attempt)
+            {
+                auto value = admission.load();
+                if ((value & (admissionClosed | admissionChanging)) || (value & admissionCountMask) == admissionCountMask)
+                    return false;
+                if (admission.compare_exchange_weak(value, value + 1))
+                    return true;
+            }
+            return false;
+        }
+        bool CountDiagnostic() noexcept
+        {
+            return runtime.armed.load() && TryCount(runtime.diagnosticAdmission);
+        }
+        void LeaveDiagnostic() noexcept
+        {
+            runtime.diagnosticAdmission.fetch_sub(1);
+        }
+        bool PolicyLifecycleEnabled() noexcept
+        {
+            // Installation resumes native peers before the worker publishes a
+            // policy. Count their originals too, so first adoption cannot miss
+            // a lifecycle callback already executing when Configure returns.
+            return runtime.nativeDispatch && runtime.prepared;
+        }
+        bool PolicyLifecycleClear(std::uint64_t epoch) noexcept
+        {
+            return !runtime.policyLifecycle.load() && runtime.policyEpoch.load() == epoch && !runtime.policyPoisoned.load();
+        }
+
+        thread_local unsigned     presentDepth = 0;
+        thread_local unsigned     dispatchDepth = 0;
+        HRESULT STDMETHODCALLTYPE HookNativeDispatch(IDXGISwapChain* chain, UINT interval, UINT flags, Present target);
         struct ResizeScope
         {
             std::uintptr_t viewport = 0, presenter = 0, device = 0;
@@ -674,6 +729,41 @@ namespace mta::game_de
                    a.selectorA == b.selectorA && a.selectorB == b.selectorB && a.nodeMask == b.nodeMask && a.tracked == b.tracked &&
                    a.alternate == b.alternate && a.gpuCount == b.gpuCount && a.afrCount == b.afrCount;
         }
+        bool ReadPolicyRoots(std::uintptr_t viewport, PolicyRoots& roots) noexcept
+        {
+            // This raw subset qualifies the current argument source, without
+            // asking COM, requiring GPU1/custom classification, or reading a
+            // diagnostic snapshot. Dimensions are fresh bookends, not identity.
+            return Read(viewport, roots.viewportTable) && roots.viewportTable == runtime.image + 0x4504060 && Read(viewport + 0x18, roots.owner) &&
+                   roots.owner && Read(viewport + 0x40, roots.window) && roots.window && Read(viewport + 0x4c, roots.width) && roots.width &&
+                   roots.width <= 32768 && Read(viewport + 0x50, roots.height) && roots.height && roots.height <= 32768 &&
+                   Read(roots.owner + 0x8a8, roots.device) && roots.device && Read(roots.device + 0x38, roots.manager) && roots.manager &&
+                   Read(roots.manager, roots.managerTable) && roots.managerTable == runtime.image + 0x44fbe88 && Read(roots.manager + 0x28, roots.queue) &&
+                   roots.queue && Read(viewport + 0x60, roots.swapchain) && roots.swapchain && Read(roots.swapchain, roots.chainTable) && roots.chainTable &&
+                   Read(roots.chainTable + 0x40, roots.target) && roots.target && Read(viewport + 0x1d0, roots.custom);
+        }
+        bool SamePolicyIdentity(const PolicyRoots& a, const PolicyRoots& b) noexcept
+        {
+            return a.viewportTable == b.viewportTable && a.owner == b.owner && a.device == b.device && a.manager == b.manager &&
+                   a.managerTable == b.managerTable && a.queue == b.queue && a.window == b.window && a.swapchain == b.swapchain &&
+                   a.chainTable == b.chainTable && a.target == b.target && a.custom == b.custom;
+        }
+        bool SamePolicyBookends(const PolicyRoots& a, const PolicyRoots& b) noexcept
+        {
+            return SamePolicyIdentity(a, b) && a.width == b.width && a.height == b.height;
+        }
+        bool DispatchLocationAdmitted() noexcept
+        {
+            return runtime.preparation.preparationGate == static_cast<unsigned>(RenderEndpointPrepareGate::Complete) ||
+                   (runtime.preparation.preparationGate == static_cast<unsigned>(RenderEndpointPrepareGate::LoadedCodeHash) &&
+                    runtime.preparation.preparationReason == static_cast<unsigned>(RenderEndpointPrepareReason::Mismatch) &&
+                    runtime.preparation.loadedEntryMatch == static_cast<unsigned>(RenderEndpointLoadedMatch::Mismatch));
+        }
+        bool CachedDxgiRetained() noexcept
+        {
+            return runtime.dxgi && runtime.modules[0].retained && runtime.modules[0].base == runtime.dxgi &&
+                   runtime.modules[0].owner == RenderEndpointOwnerClass::Dxgi;
+        }
         enum class IdentityResult
         {
             Unknown,
@@ -1007,16 +1097,16 @@ namespace mta::game_de
             state.lifecycleFlags = (runtime.resizing.load() ? 1u : 0u) | (runtime.destroyed.load() ? 2u : 0u);
             ReleaseSRWLockShared(&runtime.lifecycleLock);
         }
-        bool DispatchAssociationCurrent(const FrameBoundaryScope& selected, IDXGISwapChain* chain, Present target) noexcept
+        bool DispatchTargetCurrent(std::uintptr_t viewport, IDXGISwapChain* chain, Present target) noexcept
         {
             std::uintptr_t current = 0, table = 0, slot = 0;
-            const bool     locationAdmitted = runtime.preparation.preparationGate == static_cast<unsigned>(RenderEndpointPrepareGate::Complete) ||
-                                          (runtime.preparation.preparationGate == static_cast<unsigned>(RenderEndpointPrepareGate::LoadedCodeHash) &&
-                                           runtime.preparation.preparationReason == static_cast<unsigned>(RenderEndpointPrepareReason::Mismatch) &&
-                                           runtime.preparation.loadedEntryMatch == static_cast<unsigned>(RenderEndpointLoadedMatch::Mismatch));
-            return locationAdmitted && target && reinterpret_cast<std::uintptr_t>(target) == runtime.dxgi + runtime.presentCode.rva &&
-                   Read(selected.viewport + 0x60, current) && current == reinterpret_cast<std::uintptr_t>(chain) && Read(current, table) &&
-                   Read(table + 0x40, slot) && slot == reinterpret_cast<std::uintptr_t>(target);
+            return DispatchLocationAdmitted() && target && reinterpret_cast<std::uintptr_t>(target) == runtime.dxgi + runtime.presentCode.rva &&
+                   Read(viewport + 0x60, current) && current == reinterpret_cast<std::uintptr_t>(chain) && Read(current, table) && Read(table + 0x40, slot) &&
+                   slot == reinterpret_cast<std::uintptr_t>(target);
+        }
+        bool DispatchAssociationCurrent(const FrameBoundaryScope& selected, IDXGISwapChain* chain, Present target) noexcept
+        {
+            return DispatchTargetCurrent(selected.viewport, chain, target);
         }
         HRESULT PresentBody(IDXGISwapChain* chain, UINT interval, UINT flags, void* caller, Present target = nullptr, bool nativeDispatch = false)
         {
@@ -1088,7 +1178,20 @@ namespace mta::game_de
             // The native callsite supplies the target the game itself loaded.
             // Forward it once; no branch in a foreign DXGI hook is overwritten,
             // normalized, followed for admission, or selected as a replacement.
-            const auto result = (nativeDispatch ? target : runtime.present)(chain, interval, flags);
+            auto       selectedInterval = interval;
+            auto*      policy = nativeDispatch ? policyScope : nullptr;
+            const auto selector = policy ? runtime.policySelector.load() : nullptr;
+            if (selector)
+                selectedInterval = selector(*policy, reinterpret_cast<std::uintptr_t>(chain), reinterpret_cast<std::uintptr_t>(target), interval, flags, caller,
+                                            dispatchDepth);
+            // Only interval is selected. Target, flags, call count, HRESULT and
+            // exception propagation stay on the existing game-selected edge.
+            const auto result = (nativeDispatch ? target : runtime.present)(chain, selectedInterval, flags);
+            if (policy && policy->generation == runtime.policyGeneration.load() && policy->entered && runtime.policyViewport.load() == policy->viewport &&
+                policy->viewport &&
+                (result == DXGI_ERROR_DEVICE_REMOVED || result == DXGI_ERROR_DEVICE_RESET || result == DXGI_ERROR_DEVICE_HUNG ||
+                 result == DXGI_ERROR_DRIVER_INTERNAL_ERROR))
+                runtime.policyPoisoned.store(true);
             if (relevant)
             {
                 auto& state = nativeDispatch ? selected->nativeDispatch : selected->state;
@@ -1136,7 +1239,13 @@ namespace mta::game_de
             ResizeScope local;
             local.viewport = reinterpret_cast<std::uintptr_t>(viewport);
             local.previous = resizeScope;
-            const bool counted = runtime.armed.load();
+            const bool counted = CountDiagnostic();
+            const bool policyCounted = PolicyLifecycleEnabled();
+            if (policyCounted)
+            {
+                runtime.policyEpoch.fetch_add(1);
+                runtime.policyLifecycle.fetch_add(1);
+            }
             local.matching = counted && Identity(local.viewport, false);
             if (counted)
             {
@@ -1173,13 +1282,27 @@ namespace mta::game_de
                     runtime.resizing.fetch_sub(1);
                     ReleaseSRWLockExclusive(&runtime.lifecycleLock);
                 }
+                if (counted)
+                    LeaveDiagnostic();
+                if (policyCounted)
+                {
+                    runtime.policyEpoch.fetch_add(1);
+                    runtime.policyLifecycle.fetch_sub(1);
+                }
                 runtime.inFlight.fetch_sub(1);
             }
         }
         void HookNotify(void* presenter)
         {
             runtime.inFlight.fetch_add(1);
-            if (runtime.armed.load())
+            const bool counted = CountDiagnostic();
+            const bool policyCounted = PolicyLifecycleEnabled();
+            if (policyCounted)
+            {
+                runtime.policyEpoch.fetch_add(1);
+                runtime.policyLifecycle.fetch_add(1);
+            }
+            if (counted)
             {
                 std::uintptr_t device = 0, table = 0;
                 const bool     matching = resizeScope && resizeScope->matching && resizeScope->presenter == reinterpret_cast<std::uintptr_t>(presenter) &&
@@ -1205,13 +1328,29 @@ namespace mta::game_de
             }
             __finally
             {
+                if (counted)
+                    LeaveDiagnostic();
+                if (policyCounted)
+                {
+                    runtime.policyEpoch.fetch_add(1);
+                    runtime.policyLifecycle.fetch_sub(1);
+                }
                 runtime.inFlight.fetch_sub(1);
             }
         }
         void HookDestroy(void* viewport)
         {
             runtime.inFlight.fetch_add(1);
-            if (runtime.armed.load())
+            const bool counted = CountDiagnostic();
+            const bool policyCounted = PolicyLifecycleEnabled();
+            if (policyCounted)
+            {
+                runtime.policyEpoch.fetch_add(1);
+                runtime.policyLifecycle.fetch_add(1);
+                if (runtime.policyViewport.load() == reinterpret_cast<std::uintptr_t>(viewport))
+                    runtime.policyPoisoned.store(true);
+            }
+            if (counted)
             {
                 const auto identity = Identify(reinterpret_cast<std::uintptr_t>(viewport), false);
                 AcquireSRWLockExclusive(&runtime.lifecycleLock);
@@ -1231,9 +1370,209 @@ namespace mta::game_de
             }
             __finally
             {
+                if (counted)
+                    LeaveDiagnostic();
+                if (policyCounted)
+                {
+                    runtime.policyEpoch.fetch_add(1);
+                    runtime.policyLifecycle.fetch_sub(1);
+                }
                 runtime.inFlight.fetch_sub(1);
             }
         }
+    }
+
+    unsigned FrameBoundaryDiagnosticInFlight() noexcept
+    {
+        return static_cast<unsigned>(boundary_detail::runtime.diagnosticAdmission.load() & boundary_detail::admissionCountMask);
+    }
+    bool BeginSharedFrameBoundaryDiagnostic(std::uint64_t generation, bool boundaryEnabled) noexcept
+    {
+        using namespace boundary_detail;
+        if (!generation || (boundaryEnabled && (!runtime.prepared || !runtime.committed)))
+            return false;
+        auto expected = admissionClosed;
+        if (!runtime.diagnosticAdmission.compare_exchange_strong(expected, admissionClosed | admissionChanging))
+            return false;
+        runtime.armed.store(false);
+        // No policy state, hook, relay, endpoint admission or module reference
+        // is reset here. The old diagnostic counts have already drained.
+        runtime.epoch.store(0);
+        runtime.resizeEntries.store(0);
+        runtime.notifyEntries.store(0);
+        runtime.foreignEntries.store(0);
+        runtime.resizeThread.store(0);
+        runtime.notifyThread.store(0);
+        runtime.resizing.store(0);
+        runtime.destroyed.store(false);
+        runtime.identitySet = false;
+        runtime.identity = {};
+        runtime.addressIdentity = {};
+        runtime.key = {};
+        runtime.keyReady = BCryptGenRandom(nullptr, runtime.key.data(), static_cast<ULONG>(runtime.key.size()), BCRYPT_USE_SYSTEM_PREFERRED_RNG) >= 0;
+        if (!runtime.keyReady)
+        {
+            runtime.diagnosticAdmission.store(admissionClosed);
+            return false;
+        }
+        runtime.preparation.generationLow = static_cast<std::uint32_t>(generation);
+        runtime.preparation.generationHigh = static_cast<std::uint32_t>(generation >> 32);
+        AcquireSRWLockExclusive(&runtime.diagnosticLock);
+        runtime.diagnostic = runtime.preparation;
+        ReleaseSRWLockExclusive(&runtime.diagnosticLock);
+        runtime.diagnosticBoundaryEnabled = boundaryEnabled;
+        runtime.diagnosticAdmission.store(boundaryEnabled ? 0 : admissionClosed);
+        runtime.armed.store(boundaryEnabled);
+        return true;
+    }
+    bool ConfigureNativePresentPolicy(std::uint64_t generation, NativePolicySelector selector) noexcept
+    {
+        using namespace boundary_detail;
+        if (!generation || !selector || generation <= runtime.policyGeneration.load() || runtime.policySelector.load() || !runtime.prepared ||
+            !runtime.committed || !runtime.nativeDispatch || !runtime.dispatchPatched || runtime.dispatchProtectionPending || runtime.dispatchFlushPending ||
+            runtime.dispatchUnsafeWrite || runtime.dispatchFinalizePending || runtime.dispatchReleasePending || !CachedDxgiRetained() ||
+            !DispatchLocationAdmitted())
+            return false;
+        auto expected = admissionClosed;
+        if (!runtime.policyAdmission.compare_exchange_strong(expected, admissionClosed | admissionChanging))
+            return false;
+        runtime.policyIdentity = {};
+        runtime.policyViewport.store(0);
+        runtime.policyThread.store(0);
+        // Epoch/count belong to the installed hook, including callbacks that
+        // entered before this generation. Do not erase an active original.
+        runtime.policyPoisoned.store(false);
+        runtime.policyGeneration.store(generation);
+        runtime.policySelector.store(selector);
+        runtime.policyAdmission.store(0);
+        return true;
+    }
+    bool RetireNativePresentPolicy(std::uint64_t generation) noexcept
+    {
+        using namespace boundary_detail;
+        if (!generation || runtime.inFlight.load() || (runtime.policyAdmission.load() & admissionCountMask))
+            return false;
+        // A failed install can retire before Configure ever publishes a policy.
+        // It must not require invented setup just to unwind its real resources.
+        if (!runtime.policySelector.load())
+            return true;
+        if (generation != runtime.policyGeneration.load() || runtime.committed)
+            return false;
+        runtime.policyAdmission.fetch_or(admissionClosed);
+        runtime.policySelector.store(nullptr);
+        return true;
+    }
+    void EnterNativePresentPolicyScope(NativePresentPolicyScope& selected, std::uint64_t generation, std::uintptr_t image, void* viewport,
+                                       std::uint32_t callbackThread, unsigned depth) noexcept
+    {
+        using namespace boundary_detail;
+        if (selected.entered || !generation || generation != runtime.policyGeneration.load() || !runtime.policySelector.load() ||
+            !TryCount(runtime.policyAdmission))
+            return;
+        if (generation != runtime.policyGeneration.load() || image != runtime.image || !runtime.policySelector.load())
+        {
+            runtime.policyAdmission.fetch_sub(1);
+            return;
+        }
+        selected.generation = generation;
+        selected.image = image;
+        selected.viewport = reinterpret_cast<std::uintptr_t>(viewport);
+        selected.callbackThread = callbackThread;
+        selected.depth = depth;
+        selected.previous = policyScope;
+        selected.entered = true;
+        policyScope = &selected;
+    }
+    void LeaveNativePresentPolicyScope(NativePresentPolicyScope& selected) noexcept
+    {
+        using namespace boundary_detail;
+        if (!selected.entered)
+            return;
+        if (policyScope != &selected)
+        {
+            runtime.policyPoisoned.store(true);
+            return;
+        }
+        policyScope = selected.previous;
+        selected = {};
+        runtime.policyAdmission.fetch_sub(1);
+    }
+    bool NativePresentPolicyPoisoned(std::uint64_t generation) noexcept
+    {
+        using namespace boundary_detail;
+        return !generation || generation != runtime.policyGeneration.load() || runtime.policyPoisoned.load();
+    }
+    bool NativePolicyHooksCurrent(std::uint64_t generation) noexcept
+    {
+        using namespace boundary_detail;
+        return generation && generation == runtime.policyGeneration.load() && runtime.prepared && runtime.committed && runtime.nativeDispatch &&
+               runtime.dispatchPatched && !runtime.dispatchProtectionPending && !runtime.dispatchFlushPending && !runtime.dispatchUnsafeWrite &&
+               !runtime.dispatchFinalizePending && !runtime.dispatchReleasePending && CachedDxgiRetained() && DispatchLocationAdmitted() &&
+               CurrentWrapper(true) && CurrentCode(runtime.image, runtime.resizeCode, true) && CurrentCode(runtime.image, runtime.notifyCode, true) &&
+               CurrentCode(runtime.image, runtime.destroyCode, true) && (!runtime.endpoint || CurrentCode(runtime.dxgi, runtime.presentCode, true));
+    }
+    bool QualifyNativePresentPolicyEdge(const NativePresentPolicyScope& selected, std::uintptr_t chain, std::uintptr_t target, const void* caller,
+                                        unsigned depth) noexcept
+    {
+        using namespace boundary_detail;
+        if (policyScope != &selected || !selected.entered || !selected.generation || selected.generation != runtime.policyGeneration.load() ||
+            selected.image != runtime.image || !selected.viewport || selected.depth != 1 || depth != 1 || selected.callbackThread != GetCurrentThreadId() ||
+            reinterpret_cast<std::uintptr_t>(caller) != runtime.image + 0x1fd5ec2 || !runtime.policySelector.load() ||
+            (runtime.policyAdmission.load() & (admissionClosed | admissionChanging)) || runtime.policyPoisoned.load())
+            return false;
+        const auto adopted = runtime.policyViewport.load();
+        if (adopted && adopted != selected.viewport)
+            return false;
+        const auto epoch = runtime.policyEpoch.load();
+        if (!PolicyLifecycleClear(epoch))
+            return false;
+        if (!NativePolicyHooksCurrent(selected.generation))
+        {
+            runtime.policyPoisoned.store(true);
+            return false;
+        }
+        PolicyRoots first, again;
+        if (!ReadPolicyRoots(selected.viewport, first))
+        {
+            if (adopted)
+                runtime.policyPoisoned.store(true);
+            return false;
+        }
+        if (first.swapchain != chain || first.target != target ||
+            !DispatchTargetCurrent(selected.viewport, reinterpret_cast<IDXGISwapChain*>(chain), reinterpret_cast<Present>(target)) ||
+            !ReadPolicyRoots(selected.viewport, again) || !SamePolicyBookends(first, again))
+        {
+            if (adopted)
+                runtime.policyPoisoned.store(true);
+            return false;
+        }
+        if (!PolicyLifecycleClear(epoch))
+            return false;
+        DWORD expectedThread = 0;
+        runtime.policyThread.compare_exchange_strong(expectedThread, GetCurrentThreadId());
+        if (runtime.policyThread.load() != GetCurrentThreadId())
+            return false;
+        if (adopted)
+        {
+            if (!SamePolicyIdentity(runtime.policyIdentity, first))
+            {
+                runtime.policyPoisoned.store(true);
+                return false;
+            }
+        }
+        else
+        {
+            // Only the adopted producer can write this immutable tuple; nested
+            // scopes and foreign threads have already refused above.
+            runtime.policyIdentity = first;
+            runtime.policyViewport.store(selected.viewport);
+        }
+        if (!PolicyLifecycleClear(epoch))
+        {
+            runtime.policyPoisoned.store(true);
+            return false;
+        }
+        return true;
     }
 
     bool ReleaseRenderDeviceReference(ID3D12Device*& device) noexcept
@@ -1283,6 +1622,8 @@ namespace mta::game_de
     {
         using namespace boundary_detail;
         runtime.armed.store(false);
+        runtime.diagnosticBoundaryEnabled = true;
+        runtime.diagnosticAdmission.store(0);
         ReleaseNativeDispatchRelay();
         runtime.nativeDispatch = false;
         ReleaseFrameBoundaryDiagnosticModules();
@@ -1307,11 +1648,14 @@ namespace mta::game_de
         runtime.key = {};
         runtime.keyReady = BCryptGenRandom(nullptr, runtime.key.data(), static_cast<ULONG>(runtime.key.size()), BCRYPT_USE_SYSTEM_PREFERRED_RNG) >= 0;
     }
-    bool PrepareFrameBoundaryHooks(std::uintptr_t image, std::uint64_t generation, bool nativeDispatch, void* nativeWrapperHook) noexcept
+    bool PrepareFrameBoundaryHooks(std::uintptr_t image, std::uint64_t generation, bool nativeDispatch, void* nativeWrapperHook, bool policyOnly) noexcept
     {
         using namespace boundary_detail;
         runtime.image = image;
         runtime.nativeDispatch = nativeDispatch;
+        runtime.diagnosticBoundaryEnabled = !policyOnly;
+        if (policyOnly)
+            StopFrameBoundaryAdmission();
         runtime.wrapperHook = reinterpret_cast<std::uintptr_t>(nativeWrapperHook);
         if (!runtime.keyReady)
             return false;
@@ -1352,7 +1696,7 @@ namespace mta::game_de
         runtime.committed = install;
         if (!install)
         {
-            runtime.armed.store(false);
+            StopFrameBoundaryAdmission();
             return true;
         }
         // Inspect every committed hook even if an earlier read fails. No
@@ -1362,7 +1706,13 @@ namespace mta::game_de
         const bool destroy = CaptureOwnedPatch(runtime.image, runtime.destroyCode, 6, reinterpret_cast<void*>(&HookDestroy));
         const bool present = !runtime.endpoint || CaptureOwnedPatch(runtime.dxgi, runtime.presentCode, 5, reinterpret_cast<void*>(&HookPresent));
         const bool ok = resize && notify && destroy && present && (!runtime.nativeDispatch || CurrentWrapper(true));
-        runtime.armed.store(ok);
+        if (ok && runtime.diagnosticBoundaryEnabled)
+        {
+            runtime.diagnosticAdmission.store(0);
+            runtime.armed.store(true);
+        }
+        else
+            StopFrameBoundaryAdmission();
         return ok;
     }
     bool FrameBoundaryHooksOwned() noexcept
@@ -1381,6 +1731,7 @@ namespace mta::game_de
     void StopFrameBoundaryAdmission() noexcept
     {
         boundary_detail::runtime.armed.store(false);
+        boundary_detail::runtime.diagnosticAdmission.fetch_or(boundary_detail::admissionClosed);
     }
     bool ReadFrameBoundaryOwnedOriginal(std::uintptr_t address, void* output, std::size_t bytes) noexcept
     {
@@ -1396,6 +1747,22 @@ namespace mta::game_de
                                  bool                                    captureDeviceWindow) noexcept
     {
         using namespace boundary_detail;
+        if (!CountDiagnostic())
+            return;
+        selected.diagnosticCounted = true;
+        if (runtime.policySelector.load())
+        {
+            selected.policyGeneration = runtime.policyGeneration.load();
+            selected.policyEpoch = runtime.policyEpoch.load();
+            // A lifecycle original may have entered before shared diagnostic
+            // admission opened. Its installed-hook count still excludes us.
+            if (runtime.policyLifecycle.load() || runtime.policyEpoch.load() != selected.policyEpoch)
+            {
+                selected.diagnosticCounted = false;
+                LeaveDiagnostic();
+                return;
+            }
+        }
         selected.image = image;
         selected.viewport = reinterpret_cast<std::uintptr_t>(viewport);
         selected.callbackThread = callbackThread;
@@ -1451,6 +1818,8 @@ namespace mta::game_de
     void LeaveFrameBoundaryScope(FrameBoundaryScope& selected) noexcept
     {
         using namespace boundary_detail;
+        if (!selected.diagnosticCounted)
+            return;
         CopyLifecycle(selected.state);
         // A later lifecycle conflict invalidates a completed association, but
         // cannot rewrite an earlier negative result into a different query stage.
@@ -1477,9 +1846,30 @@ namespace mta::game_de
                 selected.nativeDispatch.factsMask &= 127u;
             }
         }
+        const bool policyConflict = selected.policyGeneration && (selected.policyGeneration != runtime.policyGeneration.load() ||
+                                                                  runtime.policyLifecycle.load() || selected.policyEpoch != runtime.policyEpoch.load());
+        if (policyConflict)
+        {
+            // An independent lifecycle callback that predates diagnostic begin
+            // cannot acquire the new diagnostic ticket retroactively. Refuse
+            // its epoch overlap before the manager publishes any completion.
+            for (auto* state : {&selected.state, &selected.nativeDispatch})
+            {
+                const bool coherent = state->status == static_cast<unsigned>(BoundaryStatus::ObservedCoherent);
+                if (coherent || state->status == static_cast<unsigned>(BoundaryStatus::PresentFailed))
+                {
+                    if (coherent)
+                        ++state->rejectedEntries;
+                    state->status = static_cast<unsigned>(BoundaryStatus::ResizeOverlap);
+                    state->factsMask &= 127u;
+                }
+            }
+        }
         scope = selected.previous;
         selected.viewport = selected.swapchain = selected.nativeSwapchain = selected.image = 0;
         selected.previous = nullptr;
+        selected.diagnosticCounted = false;
+        LeaveDiagnostic();
     }
     void PublishFrameBoundaryEndpointDiagnostic(const FrameBoundaryScope& selected, std::uint64_t acceptedSnapshots) noexcept
     {

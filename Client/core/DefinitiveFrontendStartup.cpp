@@ -534,6 +534,46 @@ namespace DefinitiveFrontendStartup
             return result;
         }
 
+        Status BeginPresentation(mta::game_de::PresentationPolicyStateV1& output) noexcept
+        {
+            const auto admitted = CheckClockAdmission();
+            if (admitted != Status::Ok)
+                return admitted;
+            // This opt-in completed Core is the real control-plane producer.
+            // Generic CPU/frontend Begin remains free of native hook effects.
+            mta::game_de::PresentationPolicyStateV1 current;
+            if (core->m_DefinitiveAdapter.ReadPresentationPolicy(current) && mta::game_de::InstalledPresentationProvider(current, current.generation, owner))
+            {
+                output = current;
+                return Status::Ok;
+            }
+            try
+            {
+                return core->m_DefinitiveAdapter.BeginPresentationPolicy(output) ? Status::Ok : Status::Failed;
+            }
+            catch (...)
+            {
+                return Status::Failed;
+            }
+        }
+
+        Status BorrowPresentation(mta::game_de::NativePresentationPolicyBorrow& output) noexcept
+        {
+            const auto admitted = CheckClockAdmission();
+            if (admitted != Status::Ok)
+                return admitted;
+            return core->m_DefinitiveAdapter.BorrowPresentationPolicy(output) ? Status::Ok : Status::Failed;
+        }
+
+        Status EndPresentation() noexcept
+        {
+            if (clockPending || !lastClockRetired)
+                return Status::Busy;
+            if (!core || !core->m_DefinitiveAdapter.IsStarted())
+                return Status::Stopped;
+            return core->m_DefinitiveAdapter.EndPresentationPolicy() ? Status::Ok : Status::Busy;
+        }
+
         Status CheckClockAdmission() const noexcept
         {
             if (clockPending || !lastClockRetired)
@@ -665,9 +705,31 @@ namespace DefinitiveFrontendStartup
         }
     }
 
-    Status PulseOwner(void* handle) noexcept
+    Status BeginPresentationOwner(void* handle, mta::game_de::PresentationPolicyStateV1& state) noexcept
     {
         Operation  operation;
+        const auto result = operation.Validate(handle);
+        return result == Status::Ok ? activeStartup->BeginPresentation(state) : result;
+    }
+
+    Status BorrowPresentationOwner(void* handle, mta::game_de::NativePresentationPolicyBorrow& borrow) noexcept
+    {
+        Operation  operation;
+        const auto result = operation.Validate(handle);
+        return result == Status::Ok ? activeStartup->BorrowPresentation(borrow) : result;
+    }
+
+    Status EndPresentationOwner(void* handle) noexcept
+    {
+        Operation  operation;
+        const auto result = operation.Validate(handle);
+        return result == Status::Ok ? activeStartup->EndPresentation() : result;
+    }
+
+    Status PulseOwner(void* handle) noexcept
+    {
+        Operation operation;
+
         const auto status = operation.Validate(handle);
         if (status != Status::Ok)
             return status;

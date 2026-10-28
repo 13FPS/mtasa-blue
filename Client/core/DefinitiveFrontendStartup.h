@@ -7,6 +7,7 @@
 
 #include "DefinitiveFrontend.h"
 #include "DefinitiveInputReference.h"
+#include <game/CGamePresentationPolicy.h>
 #include <array>
 #include <cstdint>
 
@@ -83,9 +84,14 @@ namespace DefinitiveFrontendStartup
     // Internal frontend creation pins the same owner lock before touching the
     // Core singleton. Only an authorized owner-thread view may reuse its lock;
     // clock callbacks must refuse borrowing before allocating GUI owners.
-    bool   AcquireFrontendBorrow(bool& ownsLock) noexcept;
-    void   ReleaseFrontendBorrow(bool ownsLock) noexcept;
-    void*  BeginOwner() noexcept;
+    bool  AcquireFrontendBorrow(bool& ownsLock) noexcept;
+    void  ReleaseFrontendBorrow(bool ownsLock) noexcept;
+    void* BeginOwner() noexcept;
+    // Explicit policy admission occurs on the completed Core producer before
+    // Clock admission. Borrowing rechecks that installed provider for CGame.
+    Status BeginPresentationOwner(void* handle, mta::game_de::PresentationPolicyStateV1& state) noexcept;
+    Status BorrowPresentationOwner(void* handle, mta::game_de::NativePresentationPolicyBorrow& borrow) noexcept;
+    Status EndPresentationOwner(void* handle) noexcept;
     Status PulseOwner(void* handle) noexcept;
     Status BindOwner(void* handle) noexcept;
     Status ReadOwner(void* handle, std::uint32_t* output, std::uint32_t count) noexcept;

@@ -56,7 +56,7 @@ void CGameAdapterModule::SetError(const char* error) noexcept
         // Native render and clock leases can retain allocator-owning peers.
         // Capacity is reserved before Begin; diagnostics must not grow it
         // until the provider acknowledges cleanup.
-        if ((m_renderObservationV6 || m_clockDiagnostics || m_localLeaseDiagnostics) && std::strlen(error) > m_error.capacity())
+        if ((m_renderObservationV6 || m_clockDiagnostics || m_localLeaseDiagnostics || m_presentationDiagnostics) && std::strlen(error) > m_error.capacity())
         {
             m_error.clear();
             return;
@@ -137,6 +137,14 @@ bool CGameAdapterModule::Start(CCoreInterface* owner, const std::wstring& absolu
         static_assert(sizeof(function) == sizeof(entry));
         std::memcpy(&function, &entry, sizeof(function));
     };
+    resolveClock(m_presentationFunctions.begin, "BeginGamePresentationPolicyV1");
+    resolveClock(m_presentationFunctions.bind, "BindGamePresentationClientV1");
+    resolveClock(m_presentationFunctions.disable, "DisableGamePresentationVSyncV1");
+    resolveClock(m_presentationFunctions.retire, "RetireGamePresentationClientV1");
+    resolveClock(m_presentationFunctions.read, "ReadGamePresentationPolicyV1");
+    resolveClock(m_presentationFunctions.end, "EndGamePresentationPolicyV1");
+    if (!m_presentationFunctions.Complete())
+        m_presentationFunctions = {};
     resolveClock(m_clockBegin, "BeginGameClockServiceV1");
     resolveClock(m_clockSubmit, "SubmitGameClockCommandV1");
     resolveClock(m_clockRenew, "RenewGameClockServiceV1");
@@ -227,7 +235,7 @@ bool CGameAdapterModule::RequireOwnerThread(const char* operation)
     }
     if (m_ownerThread != GetCurrentThreadId())
     {
-        if (m_renderObservationV6 || m_clockDiagnostics || m_localLeaseDiagnostics)
+        if (m_renderObservationV6 || m_clockDiagnostics || m_localLeaseDiagnostics || m_presentationDiagnostics)
             SetError("Game adapter callback requires its owning Core thread");
         else
             m_error = std::string(operation) + ": game adapter callback requires its owning Core thread";
@@ -243,7 +251,7 @@ bool CGameAdapterModule::RecordStatus(mta::game_de::Status status, const char* o
         m_error.clear();
         return true;
     }
-    if (m_renderObservationV6 || m_clockDiagnostics || m_localLeaseDiagnostics)
+    if (m_renderObservationV6 || m_clockDiagnostics || m_localLeaseDiagnostics || m_presentationDiagnostics)
     {
         // Stack formatting avoids even a temporary CRT allocation after a
         // provider failure has retained suspended peers for cleanup retry.
@@ -265,6 +273,124 @@ bool CGameAdapterModule::RecordStatus(mta::game_de::Status status, const char* o
     return false;
 }
 
+bool CGameAdapterModule::BeginPresentationPolicy(mta::game_de::PresentationPolicyStateV1& state)
+{
+    using namespace mta::game_de;
+    if (!RequireOwnerThread("BeginPresentationPolicy") || !RequireClockRetired() || !RequireLocalInputRetired())
+        return false;
+    if (!m_presentationFunctions.Complete() || m_presentationAttemptPending)
+    {
+        SetError("Presentation policy requires the complete optional group and retirement of the prior attempt");
+        return false;
+    }
+    // Native Begin may retain an allocator/loader owner even on failure.
+    // Reserve diagnostics now, and keep the module until explicit retirement.
+    try
+    {
+        m_error.reserve(512);
+        if (m_presentationBorrow)
+            m_presentationBorrow->revoked = true;
+        m_presentationBorrow = PresentationPolicyBorrowLifetime::Create();
+        if (!m_presentationBorrow)
+            return false;
+    }
+    catch (...)
+    {
+        return false;
+    }
+    m_presentationDiagnostics = true;
+    m_presentationAttemptPending = true;
+    m_presentationCleanupPossible = true;
+    PresentationPolicyStateV1 next;
+    const auto                status = m_presentationFunctions.begin(PresentationPolicyVersionV1, m_adapter, m_ownerIdentity, &next);
+    if (next.size == sizeof(next) && next.version == PresentationPolicyVersionV1 && next.producerThread == m_ownerThread && !next.reserved[0] &&
+        !next.reserved[1])
+    {
+        state = next;
+        m_presentationGeneration = next.generation;
+    }
+    if (status == Status::Ok && !InstalledPresentationProvider(next, m_presentationGeneration, m_ownerThread))
+    {
+        SetError("Presentation provider did not acknowledge a healthy installed current generation; cleanup retained");
+        return false;
+    }
+    if (status == Status::Ok)
+        m_presentationCleanupPossible = false;
+    return RecordStatus(status, "BeginPresentationPolicy");
+}
+
+bool CGameAdapterModule::ReadPresentationPolicy(mta::game_de::PresentationPolicyStateV1& state) noexcept
+{
+    using namespace mta::game_de;
+    if (!m_adapter || m_ownerThread != GetCurrentThreadId() || !m_presentationFunctions.Complete())
+        return false;
+    PresentationPolicyStateV1 next;
+    const auto                status = m_presentationFunctions.read(PresentationPolicyVersionV1, m_adapter, m_ownerIdentity, &next);
+    if (status != Status::Ok || next.size != sizeof(next) || next.version != PresentationPolicyVersionV1 || next.reserved[0] || next.reserved[1])
+        return false;
+    state = next;
+    return true;
+}
+
+bool CGameAdapterModule::BorrowPresentationPolicy(mta::game_de::NativePresentationPolicyBorrow& borrow) noexcept
+{
+    using namespace mta::game_de;
+    if (!m_adapter || m_ownerThread != GetCurrentThreadId() || !m_presentationAttemptPending || m_clockAttemptPending || !m_presentationBorrow ||
+        m_presentationBorrow->revoked || m_presentationBorrow->consumed || m_presentationBorrow->client.clientGeneration)
+        return false;
+    PresentationPolicyStateV1 state;
+    if (!ReadPresentationPolicy(state) || !InstalledPresentationProvider(state, m_presentationGeneration, m_ownerThread) || state.clientActive)
+        return false;
+    NativePresentationPolicyBorrow next;
+    next.functions = m_presentationFunctions;
+    next.adapter = m_adapter;
+    next.core = m_ownerIdentity;
+    next.providerGeneration = m_presentationGeneration;
+    next.producerThread = m_ownerThread;
+    next.ownerClient = &m_presentationBorrow->client;
+    next.lifetime = m_presentationBorrow;
+    borrow = next;
+    return true;
+}
+
+bool CGameAdapterModule::RetirePresentationClient() noexcept
+{
+    using namespace mta::game_de;
+    if (m_adapter && m_ownerThread != GetCurrentThreadId())
+        return false;
+    if (!m_presentationBorrow)
+        return true;
+    // Existing wrappers retain this producer-only state after Core is gone;
+    // they must stop before any call through the DLL's borrowed exports.
+    m_presentationBorrow->revoked = true;
+    if (!m_presentationBorrow->client.clientGeneration)
+        return true;
+    if (!m_adapter || m_ownerThread != GetCurrentThreadId() || !m_presentationFunctions.Complete())
+        return false;
+    // Revoke the exact CGame client before any Clock callback is retired.
+    const auto status = m_presentationFunctions.retire(PresentationPolicyVersionV1, m_adapter, m_ownerIdentity, &m_presentationBorrow->client);
+    if (status != Status::Ok)
+        return false;
+    m_presentationBorrow->client = {};
+    return true;
+}
+
+bool CGameAdapterModule::EndPresentationPolicy() noexcept
+{
+    using namespace mta::game_de;
+    if (!m_presentationAttemptPending)
+        return true;
+    if (!m_adapter || m_ownerThread != GetCurrentThreadId() || !m_presentationFunctions.Complete() || !RetirePresentationClient() || m_clockAttemptPending)
+        return false;
+    if (m_presentationFunctions.end(PresentationPolicyVersionV1, m_adapter, m_ownerIdentity, m_presentationGeneration) != Status::Ok)
+        return false;
+    m_presentationAttemptPending = false;
+    m_presentationGeneration = 0;
+    m_presentationDiagnostics = false;
+    m_presentationCleanupPossible = false;
+    return true;
+}
+
 bool CGameAdapterModule::Pulse()
 {
     return RequireOwnerThread("Pulse") && RecordStatus(m_adapter->Pulse(), "Pulse");
@@ -272,6 +398,11 @@ bool CGameAdapterModule::Pulse()
 
 bool CGameAdapterModule::RequireClockRetired()
 {
+    if (m_presentationCleanupPossible)
+    {
+        SetError("Retire the failed presentation attempt before another service or loader lookup");
+        return false;
+    }
     if (!m_clockAttemptPending)
         return true;
     SetError("End or reset the native clock attempt before starting another service");
@@ -288,9 +419,25 @@ bool CGameAdapterModule::RequireLocalInputRetired()
 
 bool CGameAdapterModule::Reset()
 {
-    if (!RequireOwnerThread("Reset") || !EndNativeRenderObservation() || !RecordStatus(m_adapter->Reset(), "Reset"))
+    // A live facade borrows this slot. Reset may not erase its construction
+    // epoch or invalidate that dependency behind the object's lifetime.
+    if (!RequireOwnerThread("Reset"))
+        return false;
+    if (m_presentationBorrow && m_presentationBorrow->client.clientGeneration)
+    {
+        SetError("Retire the constructed presentation client before adapter Reset");
+        return false;
+    }
+    if (!EndNativeRenderObservation() || !RecordStatus(m_adapter->Reset(), "Reset"))
         return false;
     m_clockAttemptPending = false;
+    m_presentationAttemptPending = false;
+    m_presentationDiagnostics = false;
+    m_presentationCleanupPossible = false;
+    m_presentationGeneration = 0;
+    if (m_presentationBorrow)
+        m_presentationBorrow->revoked = true;
+    m_presentationBorrow.reset();
     m_constructorPreparationGeneration = 0;
     m_localLeaseAttemptPending = false;
     m_localLeaseGeneration = 0;
@@ -1737,6 +1884,10 @@ void CGameAdapterModule::Stop() noexcept
         SetError("Game adapter teardown requires its owning Core thread; module retained");
         return;
     }
+    // A borrowed facade cannot keep intent alive while the adapter retires
+    // Clock/M-held work. Export pointers were resolved before admission.
+    if (!RetirePresentationClient())
+        return;
     if (m_adapter && m_localLeaseAttemptPending)
     {
         if (m_localLeaseGeneration)
@@ -1771,6 +1922,14 @@ void CGameAdapterModule::Stop() noexcept
         FreeLibrary(static_cast<HMODULE>(m_module));
         m_module = nullptr;
     }
+    m_presentationFunctions = {};
+    if (m_presentationBorrow)
+        m_presentationBorrow->revoked = true;
+    m_presentationBorrow.reset();
+    m_presentationGeneration = 0;
+    m_presentationAttemptPending = false;
+    m_presentationDiagnostics = false;
+    m_presentationCleanupPossible = false;
     m_ownerThread = 0;
     m_ownerIdentity = nullptr;
     m_frontendLeaseBegin = nullptr;

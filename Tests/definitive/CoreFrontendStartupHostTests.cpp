@@ -1418,7 +1418,7 @@ int wmain(int argc, wchar_t** argv)
         const std::wstring          mode(argv[2]);
         Check(root.is_absolute() && (mode == L"normal" || mode == L"gated" || mode == L"frontend-failure" || mode == L"backend-failure" || mode == L"runtime" ||
                                      mode == L"runtime-persistence" || mode == L"runtime-frontend-failure" || mode == L"runtime-backend-failure" ||
-                                     mode == L"runtime-interaction" || mode == L"runtime-locale-failure"),
+                                     mode == L"runtime-interaction" || mode == L"runtime-locale-failure" || mode == L"presentation-policy"),
               "explicit completed-Core lifecycle case selected");
         Check(!std::filesystem::exists(root / L"server"), "owned frontend has no local-server startup assets");
         Owned owned;
@@ -1467,6 +1467,58 @@ int wmain(int argc, wchar_t** argv)
         setGameRoot(gameWide.data(), gameWide.size());
         Check(!owned.beginStartup(0) && !owned.beginStartup(Startup::ApiVersion + 1),
               "wrong frontend startup versions remain rejected with both explicit directories ready");
+        if (mode == L"presentation-policy")
+        {
+            using BeginPresentation = Startup::Status (*)(void*, mta::game_de::PresentationPolicyStateV1*);
+            const auto beginPresentation = Export<BeginPresentation>(owned.core, "MTA_BeginDEFrontendPresentationPolicyV1");
+            const auto endPresentation = Export<Startup::Status (*)(void*)>(owned.core, "MTA_EndDEFrontendPresentationPolicyV1");
+            owned.startup = owned.beginStartup(Startup::ApiVersion);
+            Check(owned.startup && StartupState(owned)[Startup::Phase] == 2, "generic completed Core still begins without presentation hook admission");
+            mta::game_de::PresentationPolicyStateV1 policy;
+            Check(beginPresentation(owned.startup, nullptr) == Startup::Status::InvalidArgument, "actual Core policy export rejects null state");
+            auto malformed = policy;
+            malformed.version = 0;
+            Check(beginPresentation(owned.startup, &malformed) == Startup::Status::InvalidArgument, "actual Core policy export rejects wrong ABI");
+            Check(beginPresentation(reinterpret_cast<void*>(std::uintptr_t{1}), &policy) == Startup::Status::InvalidArgument,
+                  "actual completed controller rejects arbitrary policy handle");
+            Startup::Status foreign = Startup::Status::Ok;
+            std::thread     other([&] { foreign = beginPresentation(owned.startup, &policy); });
+            other.join();
+            Check(foreign == Startup::Status::WrongThread, "actual completed controller requires its genuine Core producer");
+            Check(beginPresentation(owned.startup, &policy) == Startup::Status::Failed,
+                  "actual full Core/provider refuses this hashed non-game host before native hook");
+            Check(endPresentation(owned.startup) == Startup::Status::Ok, "actual completed Core retires failed policy admission explicitly");
+            auto terminal = StartupState(owned);
+            Check(terminal[Startup::Phase] == 2 && terminal[Startup::CoreRetained] && terminal[Startup::BackendStarted] && !terminal[Startup::FullMtaReady] &&
+                      !terminal[Startup::GameplayReady] && owned.pulseStartup(owned.startup) == Startup::Status::Ok,
+                  "policy refusal keeps completed Core usable without promoting gameplay factory");
+            Check(owned.shutdownStartup(owned.startup) == Startup::Status::Ok, "actual completed Core shutdown retires provider before module unload");
+            terminal = StartupState(owned);
+            const auto stale = owned.startup;
+            Check(terminal[Startup::Phase] == 4 && terminal[Startup::CleanupComplete] && !terminal[Startup::BackendStarted],
+                  "policy host reaches actual stopped Core");
+            Check(owned.releaseStartup(owned.startup) == Startup::Status::Ok, "actual completed controller releases after policy retirement");
+            owned.startup = nullptr;
+            Check(beginPresentation(stale, &policy) == Startup::Status::InvalidArgument && endPresentation(stale) == Startup::Status::InvalidArgument,
+                  "released completed owner cannot revive presentation provider");
+            bool preserved = true;
+            for (std::uint32_t index = 0; index < legacy.size(); ++index)
+                preserved = preserved && readLegacy(index) == legacy[index];
+            Check(preserved, "policy handoff preserves legacy Startup8 diagnostics");
+            Check(FreeLibrary(owned.core) != FALSE, "unload actual newly rebuilt Core after policy refusal cleanup");
+            owned.core = nullptr;
+            Check(!GetModuleHandleW(L"core.dll") && !GetModuleHandleW(L"game_de.dll") && !GetModuleHandleW(L"xmll.dll"),
+                  "actual Core policy modules retire completely");
+            std::ofstream result(root / L"frontend-startup-result.json", std::ios::binary);
+            result << "{\"success\":true,\"checks\":" << checks
+                   << ",\"actualCompletedCorePresentationPolicyTested\":true,\"actualCorePresentationWrongImageRetirementTested\":true,"
+                      "\"nativePositivePolicyTested\":false,\"fullGameFactoryReady\":false,\"fullMtaReady\":false}";
+            result.close();
+            if (!result)
+                throw std::runtime_error("focused completed Core report write failed");
+            std::printf("Passed %u actual MTA frontend startup host checks\n", checks);
+            return 0;
+        }
         if (mode.rfind(L"runtime", 0) == 0)
         {
             Startup::Snapshot  startup{};

@@ -7,6 +7,7 @@
 #include "NativePresentOwner.h"
 #include "NativeFrameBoundaryProbe.h"
 #include "NativeServiceAdmission.h"
+#include "NativePresentTransitionGate.h"
 #include <algorithm>
 #include <atomic>
 #include <limits>
@@ -102,25 +103,33 @@ namespace mta::game_de
         };
         struct Runtime
         {
-            std::atomic<bool>                  apiBusy{false}, bound{false}, hooked{false}, modulePinned{false};
-            std::atomic<unsigned>              inFlight{0};
-            std::atomic<std::uint64_t>         generation{0}, admissionGeneration{0}, admissionSerial{0};
-            DWORD                              producerThread = 0;
-            std::uintptr_t                     image = 0;
-            PresentFunction                    original = nullptr;
-            const RouteDescriptor*             route = nullptr;
-            NativePresentOwner::Config         config;
-            bool                               queryFrameBoundary = false, nativeDispatch = false;
-            NativePresentOwner::Consumer       consumer = nullptr;
-            NativePresentOwner::FailureHandler failureHandler = nullptr;
-            bool                               detached = false, consumerCleanupComplete = false, releaseFailureAfterSnapshot = false;
-            ThreadHandles                      retainedSuspensions;
-            bool                               safetyHeldSuspensions = false;
-            NextThread                         nextThread = nullptr;
-            CompareThreadObjects               compareThreadObjects = nullptr;
-            std::uintptr_t                     nextThreadImage = 0;
-            RenderSetupDiagnosticV1            setup;
-            bool                               setupTracing = false;
+            std::atomic<bool>                               apiBusy{false}, bound{false}, hooked{false}, modulePinned{false};
+            std::atomic<unsigned>                           inFlight{0};
+            std::atomic<std::uint64_t>                      generation{0}, admissionGeneration{0}, admissionSerial{0};
+            DWORD                                           producerThread = 0;
+            std::uintptr_t                                  image = 0;
+            PresentFunction                                 original = nullptr;
+            const RouteDescriptor*                          route = nullptr;
+            NativePresentOwner::Config                      config;
+            bool                                            queryFrameBoundary = false, nativeDispatch = false;
+            std::atomic<NativePresentOwner::Consumer>       consumer{nullptr};
+            std::atomic<NativePresentOwner::FailureHandler> failureHandler{nullptr};
+            std::atomic<std::uint64_t>                      policyGeneration{0}, diagnosticDispatch{std::uint64_t{1} << 63};
+            std::atomic<bool> policyActive{false}, policyRetiring{false}, diagnosticBound{false}, sharedDiagnostic{false}, diagnosticActive{false};
+            std::atomic<NativePresentOwner::PolicyIntent> intent{nullptr};
+            std::atomic<ClockResult>                      policyFailure{ClockResult::NotInitialized};
+            std::atomic<std::uint64_t>                    policyCallbacks{0}, policyApplied{0}, policyRejected{0};
+            NativePresentTransitionGate::Registration     registration;
+            DWORD                                         hookProducerThread = 0;
+            bool                                          policyInstalling = false;
+            bool                                          detached = false, consumerCleanupComplete = false, releaseFailureAfterSnapshot = false;
+            ThreadHandles                                 retainedSuspensions;
+            bool                                          safetyHeldSuspensions = false;
+            NextThread                                    nextThread = nullptr;
+            CompareThreadObjects                          compareThreadObjects = nullptr;
+            std::uintptr_t                                nextThreadImage = 0;
+            RenderSetupDiagnosticV1                       setup;
+            bool                                          setupTracing = false;
         };
         // The actual hook, trampoline and recovery state outlive every consumer
         // object. Failed detach never leaves callable storage in a destructor.
@@ -128,8 +137,8 @@ namespace mta::game_de
         thread_local unsigned callbackDepth = 0;
         void                  Fail(Failure failure) noexcept
         {
-            if (runtime.failureHandler)
-                runtime.failureHandler(static_cast<std::uint32_t>(failure));
+            if (const auto handler = runtime.failureHandler.load())
+                handler(static_cast<std::uint32_t>(failure));
             else
                 StopFrameBoundaryAdmission();
         }
@@ -311,20 +320,74 @@ namespace mta::game_de
                    BCryptHashData(hash.hash, code.data(), static_cast<ULONG>(route.presentBytes), 0) >= 0 && hash.Finish(route.presentHash);
         }
 
+        constexpr std::uint64_t diagnosticClosed = std::uint64_t{1} << 63;
+        bool                    EnterDiagnostic() noexcept
+        {
+            auto observed = runtime.diagnosticDispatch.load();
+            for (unsigned attempt = 0; attempt != 16; ++attempt)
+            {
+                if ((observed & diagnosticClosed) || observed == diagnosticClosed - 1)
+                    return false;
+                if (runtime.diagnosticDispatch.compare_exchange_weak(observed, observed + 1))
+                    return true;
+            }
+            return false;
+        }
+        std::uint32_t SelectPolicyInterval(const NativePresentPolicyScope& scope, std::uintptr_t chain, std::uintptr_t target, std::uint32_t incoming,
+                                           std::uint32_t flags, const void* caller, unsigned depth) noexcept
+        {
+            const auto generation = runtime.policyGeneration.load();
+            if (!generation || scope.generation != generation || !runtime.policyActive.load())
+                return incoming;
+            runtime.policyCallbacks.fetch_add(1);
+            NativePresentTransitionGate::Read read;
+            if (NativePresentTransitionGate::TryRead(runtime.registration, read) != ClockResult::Ok)
+            {
+                runtime.policyRejected.fetch_add(1);
+                return incoming;
+            }
+            const auto intent = runtime.intent.load();
+            const bool qualified = runtime.policyActive.load() && !runtime.policyRetiring.load() && generation == runtime.policyGeneration.load() && intent &&
+                                   intent(generation) && QualifyNativePresentPolicyEdge(scope, chain, target, caller, depth) &&
+                                   !NativePresentPolicyPoisoned(generation) && NativePolicyHooksCurrent(generation);
+            // Only this finite allocation-free decision belongs to the Clock
+            // cooperation read. Never carry it into original Present or COM.
+            const auto released = read.Release();
+            if (!qualified || released != ClockResult::Ok || !runtime.policyActive.load() || runtime.policyRetiring.load() ||
+                generation != runtime.policyGeneration.load() || !intent(generation))
+            {
+                runtime.policyRejected.fetch_add(1);
+                return incoming;
+            }
+            (void)flags;  // Every incoming bit is forwarded by the native edge.
+            runtime.policyApplied.fetch_add(1);
+            return 0;
+        }
         bool HookPresent(void* viewport, std::uint32_t syncInterval)
         {
             runtime.inFlight.fetch_add(1);
             ++callbackDepth;
+            NativePresentPolicyScope scope{};
+            const auto               policy = runtime.policyGeneration.load();
+            if (policy)
+                EnterNativePresentPolicyScope(scope, policy, runtime.image, viewport, GetCurrentThreadId(), callbackDepth);
+            bool diagnostic = false;
             __try
             {
+                const auto consumer = runtime.consumer.load();
+                // The legacy bounded owner retains its existing full callback
+                // lifetime. A shared diagnostic additionally owns an admission
+                // count through original AND its post-original COM publication.
+                diagnostic = policy && consumer && EnterDiagnostic();
                 const NativePresentOwner::CallbackContext context{runtime.original, runtime.generation.load(), callbackDepth};
-                // The consumer is static pinned-module code, registered before
-                // attach and retained through detach/drain. It holds no owner
-                // object pointer and receives the exact real original target.
-                return runtime.consumer ? runtime.consumer(context, viewport, syncInterval) : runtime.original(viewport, syncInterval);
+                return consumer && (!policy || diagnostic) ? consumer(context, viewport, syncInterval) : runtime.original(viewport, syncInterval);
             }
             __finally
             {
+                if (diagnostic)
+                    runtime.diagnosticDispatch.fetch_sub(1);
+                if (policy)
+                    LeaveNativePresentPolicyScope(scope);
                 --callbackDepth;
                 runtime.inFlight.fetch_sub(1);
             }
@@ -923,11 +986,13 @@ namespace mta::game_de
         {
             State state;
             state.generation = runtime.generation.load();
-            state.bound = runtime.bound.load();
+            state.bound = runtime.sharedDiagnostic.load() ? runtime.diagnosticBound.load() : runtime.bound.load();
             state.hooked = runtime.hooked.load();
             state.modulePinned = runtime.modulePinned.load();
             state.retained = runtime.safetyHeldSuspensions || !runtime.retainedSuspensions.empty();
-            state.pendingHookWork = state.hooked || NativeDispatchPatchPresent() || state.retained;
+            state.pendingHookWork = runtime.sharedDiagnostic.load() ? !runtime.detached || (runtime.diagnosticDispatch.load() & ~diagnosticClosed) ||
+                                                                          FrameBoundaryDiagnosticInFlight() || state.retained
+                                                                    : state.hooked || NativeDispatchPatchPresent() || state.retained;
             state.producerThread = runtime.producerThread;
             state.image = runtime.image;
             state.route = runtime.route;
@@ -947,6 +1012,33 @@ namespace mta::game_de
         }
         bool Reserve(const Operation& operation, const Config& config, Consumer consumer, FailureHandler failure, std::uint64_t& generation) noexcept
         {
+            if (runtime.policyGeneration.load())
+            {
+                if (!operation.acquired || !consumer || !failure || runtime.diagnosticActive.load() || !runtime.policyActive.load() ||
+                    runtime.policyRetiring.load() || NativePresentPolicyPoisoned(runtime.policyGeneration.load()) || !runtime.hooked.load() ||
+                    !NativePolicyHooksCurrent(runtime.policyGeneration.load()) || config.route != RenderObservationRoute::D3D12 || !config.queryGpuOwnership ||
+                    !config.classifyCustomPresent || !config.queryFrameBoundary || !config.nativeDispatch ||
+                    (config.captureDevice && config.captureDeviceWindow) || runtime.admissionSerial.load() ||
+                    (runtime.diagnosticDispatch.load() & ~diagnosticClosed) || FrameBoundaryDiagnosticInFlight() ||
+                    runtime.generation.load() == (std::numeric_limits<std::uint64_t>::max)())
+                    return false;
+                Admission::Token claim;
+                if (!Admission::TryAcquire(Admission::Category::Render, claim))
+                    return false;
+                generation = runtime.generation.fetch_add(1) + 1;
+                runtime.admissionSerial.store(claim.serial);
+                runtime.admissionGeneration.store(generation);
+                runtime.producerThread = GetCurrentThreadId();
+                runtime.config = config;
+                runtime.consumer.store(consumer);
+                runtime.failureHandler.store(failure);
+                runtime.sharedDiagnostic.store(true);
+                runtime.diagnosticActive.store(true);
+                runtime.diagnosticBound.store(false);
+                runtime.detached = false;
+                runtime.consumerCleanupComplete = false;
+                return true;
+            }
             if (!operation.acquired || !consumer || !failure ||
                 (config.captureDeviceWindow && (config.captureDevice || !config.nativeDispatch || !config.queryFrameBoundary)) || runtime.hooked.load() ||
                 NativeDispatchPatchPresent() || !runtime.retainedSuspensions.empty() || runtime.inFlight.load() || FrameBoundaryInFlight() ||
@@ -978,6 +1070,14 @@ namespace mta::game_de
         {
             if (!CurrentOperation(operation, generation) || GetCurrentThreadId() != runtime.producerThread)
                 return false;
+            if (runtime.sharedDiagnostic.load())
+            {
+                if (!BeginSharedFrameBoundaryDiagnostic(generation, runtime.config.queryFrameBoundary))
+                    return false;
+                runtime.diagnosticBound.store(true);
+                runtime.diagnosticDispatch.store(0);
+                return true;
+            }
             const auto& config = runtime.config;
             const auto  route = config.route;
             const bool  queryGpuOwnership = config.queryGpuOwnership, classifyCustomPresent = config.classifyCustomPresent;
@@ -993,9 +1093,10 @@ namespace mta::game_de
                 return false;
             }
 #endif
-            if (!runtime.route || ((queryGpuOwnership || classifyCustomPresent) && route != RenderObservationRoute::D3D12) ||
-                (classifyCustomPresent && !queryGpuOwnership) || (queryFrameBoundary && (!classifyCustomPresent || route != RenderObservationRoute::D3D12)) ||
-                (nativeDispatch && !queryFrameBoundary) || (captureDevice && !nativeDispatch))
+            if (!runtime.route || (!runtime.policyInstalling && (((queryGpuOwnership || classifyCustomPresent) && route != RenderObservationRoute::D3D12) ||
+                                                                 (classifyCustomPresent && !queryGpuOwnership) ||
+                                                                 (queryFrameBoundary && (!classifyCustomPresent || route != RenderObservationRoute::D3D12)) ||
+                                                                 (nativeDispatch && !queryFrameBoundary) || (captureDevice && !nativeDispatch))))
             {
                 Fail(Failure::UnsupportedRoute);
                 runtime.releaseFailureAfterSnapshot = true;
@@ -1023,7 +1124,8 @@ namespace mta::game_de
             runtime.modulePinned.store(true);
             if (nativeDispatch)
                 InitializeSetupDiagnostic(generation);
-            if (queryFrameBoundary && !PrepareFrameBoundaryHooks(runtime.image, generation, nativeDispatch, reinterpret_cast<void*>(&HookPresent)))
+            if (queryFrameBoundary &&
+                !PrepareFrameBoundaryHooks(runtime.image, generation, nativeDispatch, reinterpret_cast<void*>(&HookPresent), runtime.policyInstalling))
             {
                 SetupRefused(RenderSetupStage::PrepareFrameBoundary);
                 runtime.setupTracing = false;
@@ -1054,7 +1156,11 @@ namespace mta::game_de
         void StopBoundaryAdmission(const Operation& operation, std::uint64_t generation) noexcept
         {
             if (CurrentOperation(operation, generation))
+            {
+                if (runtime.sharedDiagnostic.load())
+                    runtime.diagnosticDispatch.fetch_or(diagnosticClosed);
                 StopFrameBoundaryAdmission();
+            }
         }
         bool Detach(const Operation& operation, std::uint64_t generation) noexcept
         {
@@ -1064,6 +1170,17 @@ namespace mta::game_de
             {
                 Fail(Failure::WrongProducerThread);
                 return false;
+            }
+            if (runtime.sharedDiagnostic.load())
+            {
+                runtime.diagnosticDispatch.fetch_or(diagnosticClosed);
+                StopFrameBoundaryAdmission();
+                if ((runtime.diagnosticDispatch.load() & ~diagnosticClosed) || FrameBoundaryDiagnosticInFlight())
+                    return false;
+                runtime.consumer.store(nullptr);
+                runtime.failureHandler.store(nullptr);
+                runtime.detached = true;
+                return true;
             }
             SetupCleanup(false);
             // A counted callback may be the thread whose resume failed. Cleanup
@@ -1098,6 +1215,16 @@ namespace mta::game_de
         }
         bool CompleteCleanup(const Operation& operation, std::uint64_t generation) noexcept
         {
+            if (runtime.sharedDiagnostic.load())
+            {
+                if (!CurrentOperation(operation, generation) || GetCurrentThreadId() != runtime.producerThread || !runtime.detached ||
+                    (runtime.diagnosticDispatch.load() & ~diagnosticClosed) || FrameBoundaryDiagnosticInFlight())
+                    return false;
+                // The diagnostic owns COM, but the persistent policy owns the
+                // common hooks, relay and DXGI reference until its final End.
+                runtime.consumerCleanupComplete = true;
+                return true;
+            }
             if (!CurrentOperation(operation, generation) || GetCurrentThreadId() != runtime.producerThread || !runtime.detached || runtime.hooked.load() ||
                 NativeDispatchPatchPresent() || runtime.inFlight.load() || FrameBoundaryInFlight() || runtime.safetyHeldSuspensions ||
                 !runtime.retainedSuspensions.empty())
@@ -1111,9 +1238,147 @@ namespace mta::game_de
         }
         bool Release(const Operation& operation, std::uint64_t generation) noexcept
         {
+            if (runtime.sharedDiagnostic.load())
+            {
+                if (!CurrentOperation(operation, generation) || !runtime.detached || !runtime.consumerCleanupComplete ||
+                    (runtime.diagnosticDispatch.load() & ~diagnosticClosed) || FrameBoundaryDiagnosticInFlight() || !ReleaseAdmission(generation))
+                    return false;
+                runtime.producerThread = runtime.hookProducerThread;
+                runtime.diagnosticActive.store(false);
+                runtime.diagnosticBound.store(false);
+                return true;
+            }
             return CurrentOperation(operation, generation) && runtime.detached && runtime.consumerCleanupComplete && !runtime.hooked.load() &&
                    !NativeDispatchPatchPresent() && !runtime.inFlight.load() && !FrameBoundaryInFlight() && !runtime.safetyHeldSuspensions &&
                    runtime.retainedSuspensions.empty() && ReleaseAdmission(generation);
+        }
+        bool SharedDiagnostic(std::uint64_t generation) noexcept
+        {
+            return generation && generation == runtime.generation.load() && runtime.sharedDiagnostic.load();
+        }
+        PolicyState ReadPolicyState() noexcept
+        {
+            PolicyState state;
+            state.generation = runtime.policyGeneration.load();
+            state.hooked = state.generation && runtime.hooked.load();
+            state.poisoned = state.generation && NativePresentPolicyPoisoned(state.generation);
+            state.active = state.generation && runtime.policyActive.load() && !state.poisoned;
+            state.retiring = runtime.policyRetiring.load();
+            state.pendingCleanup = state.generation && (state.retiring || state.poisoned || !state.active);
+            state.modulePinned = runtime.modulePinned.load();
+            state.failure = runtime.policyFailure.load();
+            state.callbacks = runtime.policyCallbacks.load();
+            state.applied = runtime.policyApplied.load();
+            state.rejected = runtime.policyRejected.load();
+            return state;
+        }
+        ClockResult BeginPolicy(const Operation& operation, PolicyIntent intent, std::uint64_t& generation) noexcept
+        {
+            if (!operation.acquired)
+                return ClockResult::Busy;
+            if (!intent)
+                return ClockResult::InvalidArgument;
+            if (runtime.policyGeneration.load() || runtime.hooked.load() || NativeDispatchPatchPresent() || runtime.inFlight.load() ||
+                FrameBoundaryInFlight() || runtime.admissionSerial.load() || !runtime.retainedSuspensions.empty() || runtime.safetyHeldSuspensions ||
+                runtime.generation.load() == (std::numeric_limits<std::uint64_t>::max)())
+                return ClockResult::Busy;
+            Admission::Token claim;
+            if (!Admission::TryAcquire(Admission::Category::Render, claim))
+                return ClockResult::Busy;
+            generation = runtime.generation.fetch_add(1) + 1;
+            runtime.policyGeneration.store(generation);
+            runtime.admissionSerial.store(claim.serial);
+            runtime.admissionGeneration.store(generation);
+            runtime.hookProducerThread = runtime.producerThread = GetCurrentThreadId();
+            runtime.image = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
+            runtime.config = {RenderObservationRoute::D3D12, false, false, true, true, false, false};
+            runtime.route = &d3d12Route;
+            runtime.queryFrameBoundary = runtime.nativeDispatch = true;
+            runtime.consumer.store(nullptr);
+            runtime.failureHandler.store(nullptr);
+            runtime.intent.store(intent);
+            runtime.policyActive.store(false);
+            runtime.policyRetiring.store(false);
+            runtime.policyCallbacks.store(0);
+            runtime.policyApplied.store(0);
+            runtime.policyRejected.store(0);
+            runtime.sharedDiagnostic.store(false);
+            runtime.diagnosticActive.store(false);
+            runtime.diagnosticDispatch.store(diagnosticClosed);
+            runtime.bound.store(false);
+            runtime.detached = runtime.consumerCleanupComplete = runtime.releaseFailureAfterSnapshot = false;
+            runtime.policyInstalling = true;
+            ResetFrameBoundaryObservation();
+            const bool installed = Install(operation, generation);
+            runtime.policyInstalling = false;
+            auto result = installed ? NativePresentTransitionGate::RegisterOwner(generation, runtime.registration) : ClockResult::PatchFailure;
+            if (result == ClockResult::Ok && !ConfigureNativePresentPolicy(generation, &SelectPolicyInterval))
+                result = ClockResult::BindingChanged;
+            if (result == ClockResult::Ok && !ReleaseAdmission(generation))
+                result = ClockResult::RestoreFailure;
+            runtime.policyFailure.store(result);
+            if (result == ClockResult::Ok)
+                runtime.policyActive.store(true);
+            else
+                runtime.policyRetiring.store(true);
+            return result;
+        }
+        ClockResult RetirePolicy(std::uint64_t generation) noexcept
+        {
+            if (!runtime.policyGeneration.load())
+                return generation ? ClockResult::OwnerConflict : ClockResult::Ok;
+            if (!generation || generation != runtime.policyGeneration.load())
+                return ClockResult::OwnerConflict;
+            // This is safe even while Clock has parked the native producer:
+            // retirement disarms only atomics; no hook/loader/COM operation runs.
+            runtime.policyActive.store(false);
+            runtime.policyRetiring.store(true);
+            return ClockResult::Ok;
+        }
+        ClockResult EndPolicy(const Operation& operation, std::uint64_t generation) noexcept
+        {
+            if (!runtime.policyGeneration.load())
+                return ClockResult::Ok;
+            if (!operation.acquired)
+                return ClockResult::Busy;
+            if (!generation || generation != runtime.policyGeneration.load())
+                return ClockResult::OwnerConflict;
+            if (GetCurrentThreadId() != runtime.hookProducerThread)
+                return ClockResult::WrongThread;
+            RetirePolicy(generation);
+            if (runtime.diagnosticActive.load())
+                return ClockResult::Busy;
+            const auto current = runtime.generation.load();
+            if (!runtime.admissionSerial.load())
+            {
+                Admission::Token claim;
+                if (!Admission::TryAcquire(Admission::Category::Render, claim))
+                    return ClockResult::Busy;
+                runtime.admissionSerial.store(claim.serial);
+                runtime.admissionGeneration.store(current);
+            }
+            // A live Clock lease excludes this transition claim. Once acquired,
+            // no new Clock can enter loader or hook retirement below.
+            StopFrameBoundaryAdmission();
+            runtime.sharedDiagnostic.store(false);
+            if (!Detach(operation, current))
+                return ClockResult::Busy;
+            if (runtime.registration.IsSet())
+            {
+                const auto result = NativePresentTransitionGate::UnregisterOwner(runtime.registration);
+                if (result != ClockResult::Ok)
+                    return result;
+                runtime.registration = {};
+            }
+            if (!RetireNativePresentPolicy(generation))
+                return ClockResult::Busy;
+            if (!CompleteCleanup(operation, current) || !Release(operation, current))
+                return ClockResult::RestoreFailure;
+            runtime.intent.store(nullptr);
+            runtime.policyGeneration.store(0);
+            runtime.policyRetiring.store(false);
+            runtime.policyFailure.store(ClockResult::Ok);
+            return ClockResult::Ok;
         }
         bool ReadSetupDiagnostic(std::uint64_t generation, RenderSetupDiagnosticV1& state) noexcept
         {
@@ -1123,9 +1388,9 @@ namespace mta::game_de
             Operation operation;
             if (!operation.acquired)
                 return false;
-            if (!generation || generation != runtime.generation.load() || GetCurrentThreadId() != runtime.producerThread || !runtime.nativeDispatch ||
-                runtime.safetyHeldSuspensions || !runtime.retainedSuspensions.empty() || runtime.setup.version != RenderSetupDiagnosticVersionV1 ||
-                runtime.setup.generationLow != static_cast<std::uint32_t>(generation) ||
+            if (runtime.policyGeneration.load() || !generation || generation != runtime.generation.load() || GetCurrentThreadId() != runtime.producerThread ||
+                !runtime.nativeDispatch || runtime.safetyHeldSuspensions || !runtime.retainedSuspensions.empty() ||
+                runtime.setup.version != RenderSetupDiagnosticVersionV1 || runtime.setup.generationLow != static_cast<std::uint32_t>(generation) ||
                 runtime.setup.generationHigh != static_cast<std::uint32_t>(generation >> 32))
                 return false;
             // The operation guard protects this worker-owned cache across leases.

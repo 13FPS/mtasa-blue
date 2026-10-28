@@ -10,6 +10,8 @@ $scratch=Join-Path $taskRoot ('Build/tmp/native-present-owner-'+$run)
 [void][IO.Directory]::CreateDirectory($outputRoot)
 [void][IO.Directory]::CreateDirectory($scratch)
 $sourceNames=@('Client/game_de/NativePresentOwner.h','Client/game_de/NativePresentOwner.cpp',
+    'Client/game_de/NativePresentTransitionGate.h','Client/game_de/NativePresentTransitionGate.cpp',
+    'Client/sdk/game/CGameClockService.h','Client/sdk/game/CGameAdapter.h',
     'Client/game_de/NativeRenderObservation.h','Client/game_de/NativeRenderObservation.cpp',
     'Client/game_de/NativeServiceAdmission.h',
     'Client/game_de/NativeFrameBoundaryProbe.h','Client/game_de/NativeFrameBoundaryProbe.cpp',
@@ -67,6 +69,7 @@ try{
     # Other probes remain their real production implementations.
     $arguments=$common+@('/W4','/WX',(Join-Path $PSScriptRoot 'NativePresentOwnerTests.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeFrameBoundaryProbe.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativePresentTransitionGate.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeD3D12OwnershipProbe.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeCustomPresentProbe.cpp'),
         ('/Fo'+$scratch+[IO.Path]::DirectorySeparatorChar),('/Fe'+$executable),'/link','/INCREMENTAL:NO','bcrypt.lib','user32.lib')+$objects

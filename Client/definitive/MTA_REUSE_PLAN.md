@@ -1,3 +1,11 @@
+## Persistent native presentation and Core handoff (2026-10-28)
+
+The shared native hook owner now separates persistent presentation policy from bounded render diagnostics. The policy changes only the final game-selected native interval. Target, flags, return value and original call count remain on the existing path. Fresh raw viewport/swapchain/lifecycle checks and a short Clock cooperation read precede the decision; that read ends before original Present. Steady policy callbacks use module-owned atomic records and retain no Core or CGame object pointer.
+
+The actual Core adapter module resolves one complete optional six-export group before admission. A healthy installed provider precedes a separate producer/client-generation borrow, consumed by an abstract CGame SDK mixin for DisableVSync. Client retirement disarms intent before Clock teardown; shared hooks and module storage remain until final detach and recovery complete. Diagnostic shutdown keeps its original deadline and retires its COM work without destroying a retained policy owner. The full CGame factory remains unavailable.
+
+Borrow storage uses the Windows process heap so a late wrapper can release revoked state after Core/provider unload without invoking Core code or a foreign static CRT allocator. The normal Core and backend profiles use /MT; a shared-CRT assumption is explicitly rejected. This startup batch requires focused owner/probe/handoff checks, one exact backend DLL, fresh complete Core and current GUI/CEGUI builds, and the completed Core presentation host. It does not claim native-game validation or playable multiplayer.
+
 ## Full classic garage identity range (2026-10-28)
 
 The actual classic MTA getter reference now covers SDK IDs 0 through 49 in two stable snapshots. Each available position independently matches one classic authored garage, and the source-defined legacy size tuple is qualified against its authored upper Z before any DE comparison. All fifty identities then match exactly against the complete passive DE bank: ten API float32 words plus directly exposed upper Z, with one distinct match per ID. Names and native row order do not choose the mapping.

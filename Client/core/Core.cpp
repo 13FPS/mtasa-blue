@@ -227,6 +227,18 @@ CORE_API void* MTA_BeginDEFrontendStartup(std::uint32_t version)
     return DefinitiveFrontendStartup::BeginOwner();
 }
 
+CORE_API DefinitiveFrontendStartup::Status MTA_BeginDEFrontendPresentationPolicyV1(void* handle, mta::game_de::PresentationPolicyStateV1* state)
+{
+    if (!state || state->size != sizeof(*state) || state->version != mta::game_de::PresentationPolicyVersionV1 || state->reserved[0] || state->reserved[1])
+        return DefinitiveFrontendStartup::Status::InvalidArgument;
+    return DefinitiveFrontendStartup::BeginPresentationOwner(handle, *state);
+}
+
+CORE_API DefinitiveFrontendStartup::Status MTA_EndDEFrontendPresentationPolicyV1(void* handle)
+{
+    return DefinitiveFrontendStartup::EndPresentationOwner(handle);
+}
+
 CORE_API DefinitiveFrontendStartup::Status MTA_PulseDEFrontendStartup(void* handle)
 {
     return DefinitiveFrontendStartup::PulseOwner(handle);

@@ -12,6 +12,41 @@
 
 namespace mta::game_de
 {
+    // This separate TLS record comes only from the real manager's natural
+    // wrapper callback. It grants no GPU/COM diagnostic status or native lease.
+    struct NativePresentPolicyScope
+    {
+        std::uint64_t             generation = 0;
+        std::uintptr_t            image = 0, viewport = 0;
+        std::uint32_t             callbackThread = 0;
+        unsigned                  depth = 0;
+        NativePresentPolicyScope* previous = nullptr;
+        bool                      entered = false;
+    };
+    using NativePolicySelector = std::uint32_t (*)(const NativePresentPolicyScope&, std::uintptr_t chain, std::uintptr_t target, std::uint32_t incoming,
+                                                   std::uint32_t flags, const void* caller, unsigned dispatchDepth) noexcept;
+
+    // One worker serializes configuration/retirement under the actual manager's
+    // transition ownership. Configure requires the existing retained DXGI ref.
+    // Retire follows final detach/drain and M unregister; immediate producer
+    // retirement only disarms the manager's intent while this storage remains.
+    bool ConfigureNativePresentPolicy(std::uint64_t generation, NativePolicySelector selector) noexcept;
+    bool RetireNativePresentPolicy(std::uint64_t generation) noexcept;
+    void EnterNativePresentPolicyScope(NativePresentPolicyScope& scope, std::uint64_t generation, std::uintptr_t image, void* viewport,
+                                       std::uint32_t callbackThread, unsigned depth) noexcept;
+    void LeaveNativePresentPolicyScope(NativePresentPolicyScope& scope) noexcept;
+    // The real manager holds only its M short read around qualification and its
+    // atomic decision, then explicitly releases it before returning an interval.
+    // No original, COM, hash, loader or SRW operation occurs in qualification.
+    bool QualifyNativePresentPolicyEdge(const NativePresentPolicyScope& scope, std::uintptr_t chain, std::uintptr_t target, const void* caller,
+                                        unsigned dispatchDepth) noexcept;
+    bool NativePresentPolicyPoisoned(std::uint64_t generation) noexcept;
+    bool NativePolicyHooksCurrent(std::uint64_t generation) noexcept;
+    // Shared begin resets only diagnostic state. The caller owns Render and has
+    // already closed/drained both its consumer and this diagnostic scope count.
+    bool     BeginSharedFrameBoundaryDiagnostic(std::uint64_t generation, bool boundaryEnabled) noexcept;
+    unsigned FrameBoundaryDiagnosticInFlight() noexcept;
+
     struct DeviceWindowCandidate
     {
         void*         window = nullptr;
@@ -45,6 +80,8 @@ namespace mta::game_de
         std::uintptr_t                image = 0, viewport = 0, swapchain = 0, nativeSwapchain = 0;
         std::uint32_t                 callbackThread = 0;
         bool                          knownPresenter = false, cleanupFailed = false, entered = false, dispatchEntered = false;
+        bool                          diagnosticCounted = false;
+        std::uint64_t                 policyEpoch = 0, policyGeneration = 0;
         std::uint64_t                 epoch = 0;
         void (*cleanupFailure)() noexcept = nullptr;
         FrameBoundaryScope*   previous = nullptr;
@@ -56,10 +93,11 @@ namespace mta::game_de
     };
     // Prepare is worker-only and performs no COM calls. Change appends to the
     // observer's existing all-thread Detours transaction; it never commits one.
-    bool PrepareFrameBoundaryHooks(std::uintptr_t image, std::uint64_t generation = 0, bool nativeDispatch = false, void* nativeWrapperHook = nullptr) noexcept;
-    bool ChangeFrameBoundaryHooks(bool install) noexcept;
-    bool FrameBoundaryHooksCommitted(bool install) noexcept;
-    bool FrameBoundaryHooksOwned() noexcept;
+    bool     PrepareFrameBoundaryHooks(std::uintptr_t image, std::uint64_t generation = 0, bool nativeDispatch = false, void* nativeWrapperHook = nullptr,
+                                       bool policyOnly = false) noexcept;
+    bool     ChangeFrameBoundaryHooks(bool install) noexcept;
+    bool     FrameBoundaryHooksCommitted(bool install) noexcept;
+    bool     FrameBoundaryHooksOwned() noexcept;
     unsigned FrameBoundaryInFlight() noexcept;
     void     StopFrameBoundaryAdmission() noexcept;
     void     ResetFrameBoundaryObservation() noexcept;

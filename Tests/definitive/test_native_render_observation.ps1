@@ -9,6 +9,8 @@ $outputRoot = Join-Path $taskRoot ('Build/mta-native-render-observation/' + (Get
 New-Item -ItemType Directory -Path $outputRoot | Out-Null
 $sourceNames = @('Client/game_de/NativeRenderObservation.h','Client/game_de/NativeRenderObservation.cpp',
     'Client/game_de/NativePresentOwner.h','Client/game_de/NativePresentOwner.cpp',
+    'Client/game_de/NativePresentTransitionGate.h','Client/game_de/NativePresentTransitionGate.cpp',
+    'Client/sdk/game/CGameClockService.h','Client/sdk/game/CGameAdapter.h',
     'Client/game_de/NativeServiceAdmission.h',
     'Client/game_de/premake5.lua','vendor/detours/premake5.lua',
     'Client/game_de/NativeD3D12OwnershipProbe.h','Client/game_de/NativeD3D12OwnershipProbe.cpp',
@@ -98,6 +100,7 @@ $executable = Join-Path $outputRoot 'native_render_observation_tests.exe'
 $objects = @('detours.obj','modules.obj','disasm.obj','image.obj','creatwth.obj') | ForEach-Object { Join-Path $outputRoot $_ }
 $arguments = $common + @('/W4','/WX',(Join-Path $PSScriptRoot 'NativeRenderObservationTests.cpp'),
     (Join-Path $PSScriptRoot 'NativeFrameBoundaryProbeTests.cpp'),
+    (Join-Path $taskRoot 'Client/game_de/NativePresentTransitionGate.cpp'),
     (Join-Path $taskRoot 'Client/game_de/NativeD3D12OwnershipProbe.cpp'),
     (Join-Path $taskRoot 'Client/game_de/NativeCustomPresentProbe.cpp'),('/Fo'+$outputRoot+[IO.Path]::DirectorySeparatorChar),('/Fe'+$executable),'/link','bcrypt.lib','user32.lib')+$objects
 $compilerOutput = @(& $compiler @arguments 2>&1)
@@ -120,6 +123,7 @@ $unavailableCommon=@($common | Where-Object { $_ -ne '/DDETOURS_MTA_VM_TRANSACTI
 $unavailableArguments=$unavailableCommon+@('/W4','/WX','/DMTA_TEST_NATIVE_DISPATCH_UNAVAILABLE',
     (Join-Path $PSScriptRoot 'NativeRenderObservationTests.cpp'),
     (Join-Path $taskRoot 'Client/game_de/NativeFrameBoundaryProbe.cpp'),
+    (Join-Path $taskRoot 'Client/game_de/NativePresentTransitionGate.cpp'),
     (Join-Path $taskRoot 'Client/game_de/NativeD3D12OwnershipProbe.cpp'),
     (Join-Path $taskRoot 'Client/game_de/NativeCustomPresentProbe.cpp'),
     ('/Fo'+$unavailableRoot+[IO.Path]::DirectorySeparatorChar),('/Fe'+$unavailableExecutable),'/link','bcrypt.lib','user32.lib')+$objects

@@ -29,6 +29,7 @@
 #include "NativeGameTimeReader.h"
 #include "NativeGameStateReader.h"
 #include "NativeRenderObservation.h"
+#include "NativePresentationPolicyOwner.h"
 
 #include <atomic>
 #include <array>
@@ -560,6 +561,86 @@ namespace mta::game_de
                 return result;
             }
 
+            enum class PresentationAction
+            {
+                Begin,
+                Bind,
+                Disable,
+                Retire,
+                Read,
+                End
+            };
+
+            static Status PresentationService(IGameAdapter* adapter, CCoreInterface* core, PresentationAction action, std::uint64_t generation,
+                                              const void* identity, const PresentationPolicyClientV1* input, PresentationPolicyClientV1* client,
+                                              PresentationPolicyStateV1* output) noexcept
+            {
+                if (!TryAcquireSRWLockShared(&frontendAdapterLock))
+                    return Status::Unsupported;
+                GameAdapter* selected = nullptr;
+                Status       status = Status::InvalidArgument;
+                for (auto* current = frontendAdapters; current; current = current->nextFrontendAdapter)
+                {
+                    if (static_cast<IGameAdapter*>(current) != adapter)
+                        continue;
+                    status = current->Access();
+                    if (status != Status::Ok || current->owner != core)
+                    {
+                        if (status == Status::Ok)
+                            status = Status::InvalidArgument;
+                        break;
+                    }
+                    bool available = false;
+                    if (!current->presentationOperation.compare_exchange_strong(available, true))
+                        status = Status::Unsupported;
+                    else
+                        selected = current;
+                    break;
+                }
+                // Attach/detach may suspend a peer in registry code. The
+                // per-object pin prevents Release without holding that lock.
+                ReleaseSRWLockShared(&frontendAdapterLock);
+                if (!selected)
+                    return status;
+                ClockResult result = ClockResult::InvalidArgument;
+                switch (action)
+                {
+                    case PresentationAction::Begin:
+                        result = selected->presentation.Begin(*output);
+                        break;
+                    case PresentationAction::Bind:
+                        result = selected->presentation.BindClient(generation, identity, *client);
+                        break;
+                    case PresentationAction::Disable:
+                        result = selected->presentation.DisableVSync(*input);
+                        break;
+                    case PresentationAction::Retire:
+                        result = selected->presentation.RetireClient(*input);
+                        break;
+                    case PresentationAction::Read:
+                        result = selected->presentation.ReadState(*output);
+                        break;
+                    case PresentationAction::End:
+                        result = selected->presentation.End(generation);
+                        break;
+                }
+                selected->presentationOperation.store(false);
+                switch (result)
+                {
+                    case ClockResult::Ok:
+                        return Status::Ok;
+                    case ClockResult::InvalidArgument:
+                        return Status::InvalidArgument;
+                    case ClockResult::WrongThread:
+                        return Status::WrongThread;
+                    case ClockResult::NotInitialized:
+                    case ClockResult::Stopped:
+                        return Status::NotInitialized;
+                    default:
+                        return Status::Unsupported;
+                }
+            }
+
             Status Initialize(CCoreInterface* newOwner) noexcept override
             {
                 if (!newOwner)
@@ -570,6 +651,11 @@ namespace mta::game_de
                     return Status::WrongThread;
                 if (owner && owner != newOwner)
                     return Status::InvalidArgument;
+                // Bind only the retained registry object's admitted Core/thread.
+                // This is control-plane identity, not the native Present thread.
+                const auto policy = presentation.BindOwner(newOwner, currentThread, this);
+                if (policy != ClockResult::Ok)
+                    return policy == ClockResult::WrongThread ? Status::WrongThread : Status::Unsupported;
                 owner = newOwner;
                 initialized = true;
                 return Status::Ok;
@@ -582,7 +668,10 @@ namespace mta::game_de
                 const auto status = Access();
                 if (status != Status::Ok)
                     return status;
-                if (!nativeClock.End() || !EndMovement())
+                // Client intent must stop before M's Clock retirement. The
+                // shared present hook retires last, after Clock releases it.
+                if (presentationOperation.load() || presentation.RetireAll() != ClockResult::Ok || !nativeClock.End() ||
+                    presentation.End() != ClockResult::Ok || presentation.Pending() || !EndMovement())
                     return Status::Unsupported;
                 Clear();
                 return Status::Ok;
@@ -593,7 +682,10 @@ namespace mta::game_de
                 const auto status = Access();
                 if (status != Status::Ok)
                     return status;
-                if (!nativeClock.End() || !EndMovement())
+                // Client intent must stop before M's Clock retirement. The
+                // shared present hook retires last, after Clock releases it.
+                if (presentationOperation.load() || presentation.RetireAll() != ClockResult::Ok || !nativeClock.End() ||
+                    presentation.End() != ClockResult::Ok || presentation.Pending() || !EndMovement())
                     return Status::Unsupported;
                 Clear();
                 initialized = false;
@@ -604,7 +696,9 @@ namespace mta::game_de
             {
                 // A live detour still references this module's state. A caller
                 // cannot turn failed cleanup into a dangling callback by Release.
-                if ((ownerThread.load() && ownerThread.load() != GetCurrentThreadId()) || !nativeClock.End() || !EndMovement())
+                if ((ownerThread.load() && ownerThread.load() != GetCurrentThreadId()) || presentationOperation.load() ||
+                    presentation.RetireAll() != ClockResult::Ok || !nativeClock.End() || presentation.End() != ClockResult::Ok || presentation.Pending() ||
+                    !EndMovement())
                     return;
                 delete this;
             }
@@ -1154,15 +1248,17 @@ namespace mta::game_de
             bool                           hasInputState = false;
             static constexpr std::uint64_t BaseCapabilities =
                 static_cast<std::uint64_t>(AdapterCapability::ObservationIngest) | static_cast<std::uint64_t>(AdapterCapability::MtaInputSynthesis);
-            std::atomic<std::uint64_t> capabilities{BaseCapabilities};
-            NativePadReader            nativePad;
-            NativeMovementInput        nativeMovement;
-            NativePadUpdateControl     nativePadUpdate;
-            NativeClockService         nativeClock;
-            NativeGameTimeReader       nativeGameTime;
-            NativeGameStateReader      nativeGameState;
-            std::atomic<bool>          constructorPreparationMode{false}, constructorPreparationNotified{false};
-            std::atomic<std::uint64_t> constructorPreparationGeneration{0};
+            std::atomic<std::uint64_t>    capabilities{BaseCapabilities};
+            NativePadReader               nativePad;
+            NativeMovementInput           nativeMovement;
+            NativePadUpdateControl        nativePadUpdate;
+            NativeClockService            nativeClock;
+            NativePresentationPolicyOwner presentation;
+            std::atomic<bool>             presentationOperation{false};
+            NativeGameTimeReader          nativeGameTime;
+            NativeGameStateReader         nativeGameState;
+            std::atomic<bool>             constructorPreparationMode{false}, constructorPreparationNotified{false};
+            std::atomic<std::uint64_t>    constructorPreparationGeneration{0};
             // The hook retains this adapter until End retires it. Publications
             // expose only counts/masks, never a borrowed UClass address.
             std::atomic<bool>          applicationObservationMode{false};
@@ -1676,6 +1772,61 @@ namespace mta::game_de
             GameRenderObservationV6*     nextDiagnosticLease = nullptr;
             bool                         deviceRequested = false, deviceWindowRequested = false, beginAttempted = false;
         };
+    }
+
+    namespace
+    {
+        bool ValidPresentationClient(const PresentationPolicyClientV1* client) noexcept
+        {
+            return client && client->size == sizeof(*client) && client->version == PresentationPolicyVersionV1 && client->providerGeneration &&
+                   client->clientGeneration && client->clientIdentity && client->producerThread && !client->reserved;
+        }
+        bool ValidPresentationState(const PresentationPolicyStateV1* state) noexcept
+        {
+            return state && state->size == sizeof(*state) && state->version == PresentationPolicyVersionV1 && !state->reserved[0] && !state->reserved[1];
+        }
+    }
+    extern "C" Status BeginGamePresentationPolicyV1(std::uint32_t version, IGameAdapter* adapter, CCoreInterface* core,
+                                                    PresentationPolicyStateV1* output) noexcept
+    {
+        if (version != PresentationPolicyVersionV1 || !adapter || !core || !ValidPresentationState(output))
+            return Status::InvalidArgument;
+        return GameAdapter::PresentationService(adapter, core, GameAdapter::PresentationAction::Begin, 0, nullptr, nullptr, nullptr, output);
+    }
+    extern "C" Status BindGamePresentationClientV1(std::uint32_t version, IGameAdapter* adapter, CCoreInterface* core, std::uint64_t generation,
+                                                   const void* identity, PresentationPolicyClientV1* output) noexcept
+    {
+        if (version != PresentationPolicyVersionV1 || !adapter || !core || !generation || !identity || !output || output->size != sizeof(*output) ||
+            output->version != PresentationPolicyVersionV1 || output->reserved)
+            return Status::InvalidArgument;
+        return GameAdapter::PresentationService(adapter, core, GameAdapter::PresentationAction::Bind, generation, identity, nullptr, output, nullptr);
+    }
+    extern "C" Status DisableGamePresentationVSyncV1(std::uint32_t version, IGameAdapter* adapter, CCoreInterface* core,
+                                                     const PresentationPolicyClientV1* client) noexcept
+    {
+        if (version != PresentationPolicyVersionV1 || !adapter || !core || !ValidPresentationClient(client))
+            return Status::InvalidArgument;
+        return GameAdapter::PresentationService(adapter, core, GameAdapter::PresentationAction::Disable, 0, nullptr, client, nullptr, nullptr);
+    }
+    extern "C" Status RetireGamePresentationClientV1(std::uint32_t version, IGameAdapter* adapter, CCoreInterface* core,
+                                                     const PresentationPolicyClientV1* client) noexcept
+    {
+        if (version != PresentationPolicyVersionV1 || !adapter || !core || !ValidPresentationClient(client))
+            return Status::InvalidArgument;
+        return GameAdapter::PresentationService(adapter, core, GameAdapter::PresentationAction::Retire, 0, nullptr, client, nullptr, nullptr);
+    }
+    extern "C" Status ReadGamePresentationPolicyV1(std::uint32_t version, IGameAdapter* adapter, CCoreInterface* core,
+                                                   PresentationPolicyStateV1* output) noexcept
+    {
+        if (version != PresentationPolicyVersionV1 || !adapter || !core || !ValidPresentationState(output))
+            return Status::InvalidArgument;
+        return GameAdapter::PresentationService(adapter, core, GameAdapter::PresentationAction::Read, 0, nullptr, nullptr, nullptr, output);
+    }
+    extern "C" Status EndGamePresentationPolicyV1(std::uint32_t version, IGameAdapter* adapter, CCoreInterface* core, std::uint64_t generation) noexcept
+    {
+        if (version != PresentationPolicyVersionV1 || !adapter || !core)
+            return Status::InvalidArgument;
+        return GameAdapter::PresentationService(adapter, core, GameAdapter::PresentationAction::End, generation, nullptr, nullptr, nullptr, nullptr);
     }
 
     extern "C" IGameAdapter* CreateGameAdapter(std::uint32_t abiVersion) noexcept

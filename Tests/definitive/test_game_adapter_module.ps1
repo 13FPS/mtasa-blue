@@ -329,6 +329,9 @@ $sourceNames += @('Client/game_de/NativePedWeaponClearAccess.h','Client/game_de/
 $sourceNames += @('Client/game_de/NativeWorldIgnoreEntityAccess.h','Client/game_de/CWorldIgnoreEntityDE.h','Client/game_de/CWorldIgnoreEntityDE.cpp','Client/game_de/NativeWorldIgnoredEntityMemory.h','Client/game_de/NativeWorldIgnoredEntityMemory.cpp','Client/game_de/NativeWorldIgnoredEntityProfile.h')
 $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/game_de/CCameraSphereVisibleDE.h','Client/game_de/CCameraSphereVisibleDE.cpp','Client/game_de/NativeCameraSphereVisibleCalls.h','Client/game_de/NativeCameraSphereVisibleCalls.cpp','Client/game_de/NativeCameraSphereVisibleProfile.h')
 $sourceNames += @('Client/game_de/WeaponFireHandlerAccess.h','Client/game_de/CWeaponFireBulletDE.h','Client/game_de/CWeaponFireBulletDE.cpp','Client/sdk/game/CWeaponFireBulletPolicy.h')
+$sourceNames += @('Client/sdk/game/CGamePresentationPolicy.h','Client/game_de/NativePresentationPolicyAccess.h',
+    'Client/game_de/CGamePresentationPolicyDE.h','Client/game_de/NativePresentationPolicyOwner.h','Client/game_de/NativePresentationPolicyOwner.cpp',
+    'Client/game_de/NativePresentTransitionGate.h','Client/game_de/NativePresentTransitionGate.cpp')
 $sourceHashes = @($sourceNames | ForEach-Object {
     $taskPath = Join-Path $taskRoot $_
     [ordered]@{ path=$_; exists=(Test-Path -LiteralPath $taskPath); sha256=$(if (Test-Path -LiteralPath $taskPath) {
@@ -548,6 +551,7 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
         (Join-Path $taskRoot 'Client/game_de/NativeClockService.cpp'), (Join-Path $taskRoot 'Client/game_de/NativeStartGameCalls.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeGameTimeReader.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeMovementInput.cpp'), (Join-Path $taskRoot 'Client/game_de/NativeRenderObservation.cpp'), (Join-Path $taskRoot 'Client/game_de/NativePresentOwner.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativePresentationPolicyOwner.cpp'), (Join-Path $taskRoot 'Client/game_de/NativePresentTransitionGate.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeD3D12OwnershipProbe.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeCustomPresentProbe.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeFrameBoundaryProbe.cpp'), ('/I' + $detoursSourceRoot),

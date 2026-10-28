@@ -11,6 +11,7 @@
 #include <cstdint>
 #include "../sdk/game/CGameRenderObservation.h"
 #include "../sdk/game/CGameRenderSetupDiagnostic.h"
+#include "../sdk/game/CGameClockService.h"
 
 namespace mta::game_de::NativePresentOwner
 {
@@ -64,6 +65,21 @@ namespace mta::game_de::NativePresentOwner
         std::uintptr_t         image = 0;
         const RouteDescriptor* route = nullptr;
     };
+
+    using PolicyIntent = bool (*)(std::uint64_t) noexcept;
+    struct PolicyState
+    {
+        std::uint64_t generation = 0, callbacks = 0, applied = 0, rejected = 0;
+        bool          hooked = false, active = false, retiring = false, poisoned = false, pendingCleanup = false, modulePinned = false;
+        ClockResult   failure = ClockResult::NotInitialized;
+    };
+    // The installed policy has a separate epoch from bounded diagnostic leases.
+    // Its only callback borrow is static code; client/CGame storage is never read.
+    ClockResult BeginPolicy(const Operation&, PolicyIntent, std::uint64_t&) noexcept;
+    ClockResult RetirePolicy(std::uint64_t) noexcept;
+    ClockResult EndPolicy(const Operation&, std::uint64_t) noexcept;
+    PolicyState ReadPolicyState() noexcept;
+    bool        SharedDiagnostic(std::uint64_t) noexcept;
 
     std::uint64_t CurrentGeneration() noexcept;
     bool          ModulePinned() noexcept;

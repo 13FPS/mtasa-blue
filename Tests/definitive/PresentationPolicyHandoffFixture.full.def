@@ -1,0 +1,12 @@
+; Owned test fixture only. Keep the partial End export genuinely absent.
+EXPORTS
+    CreateGameAdapter
+    BeginGamePresentationPolicyV1
+    BindGamePresentationClientV1
+    DisableGamePresentationVSyncV1
+    RetireGamePresentationClientV1
+    ReadGamePresentationPolicyV1
+    EndGamePresentationPolicyV1
+    PresentationHandoffFixtureControlV1
+    ReadPresentationHandoffFixtureV1
+    CreatePresentationHandoffStorageV1

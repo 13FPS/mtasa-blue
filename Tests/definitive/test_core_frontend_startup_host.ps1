@@ -10,11 +10,12 @@ param(
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedXmllSha256,
     [string]$Unifont='Build/gui-asset-cache/unifont-16.0.04.ttf',
     [switch]$BindingPersistenceOnly,
-    [switch]$InteractionServicesOnly
+    [switch]$InteractionServicesOnly,
+    [switch]$PresentationPolicyOnly
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
-if ($BindingPersistenceOnly -and $InteractionServicesOnly) { throw 'Choose one focused actual-host case group.' }
+if (@(@($BindingPersistenceOnly,$InteractionServicesOnly,$PresentationPolicyOnly)|Where-Object {$_}).Count -gt 1) { throw 'Choose one focused actual-host case group.' }
 if ([IntPtr]::Size -ne 8) { throw 'The owned frontend requires native x64 PowerShell.' }
 $taskRoot=(Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $outputRoot=Join-Path $taskRoot ('Build/mta-core-frontend-startup-host/'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N'))
@@ -39,11 +40,13 @@ $sourceNames=@('Tests/definitive/CoreFrontendStartupHostTests.cpp','Tests/defini
     'Client/core/CCredits.cpp','Client/core/CQuestionBox.cpp','Client/core/CNewsBrowser.cpp','Client/core/CLocalization.cpp','Client/core/CClientVariables.cpp',
     'Client/core/CVersionUpdater.cpp','Client/core/CVersionUpdater.h','Client/core/ServerBrowser/CServerCache.cpp','Client/core/ServerBrowser/CServerCache.h',
     'Client/definitive/coreconfig.xml','Client/gui/Main.cpp','Client/gui/CGUI_Impl.cpp','Client/gui/D3D12GuiRenderer.cpp')
+$sourceNames+=@('Client/sdk/game/CGamePresentationPolicy.h','Client/game_de/NativePresentationPolicyOwner.h','Client/game_de/NativePresentationPolicyOwner.cpp',
+    'Client/game_de/NativePresentationPolicyAccess.h','Client/game_de/CGamePresentationPolicyDE.h')
 $sourceNames+=@(Get-ChildItem -LiteralPath (Join-Path $taskRoot 'Client/sdk/gui') -File -Filter '*.h' | ForEach-Object { [IO.Path]::GetRelativePath($taskRoot,$_.FullName) })
 $certificates=@();$selectedArtifacts=@();$sourceHashes=@();$artifacts=@();$assets=@();$windowsFonts=@();$systemDlls=@();$runs=@()
 $compileExit=$null;$testExit=$null;$testCount=0;$timedOut=$false;$failure=$null;$compilerRecord=$null
 $sourceUnchanged=$true;$artifactsUnchanged=$true;$assetsUnchanged=$true;$certificatesUnchanged=$true;$platformUnchanged=$true
-$caseNames=@(if($BindingPersistenceOnly){'runtime-persistence'}elseif($InteractionServicesOnly){'runtime-interaction','runtime-locale-failure'}else{'normal','gated','frontend-failure','backend-failure','runtime','runtime-frontend-failure','runtime-backend-failure','runtime-persistence','runtime-interaction','runtime-locale-failure'})
+$caseNames=@(if($PresentationPolicyOnly){'presentation-policy'}elseif($BindingPersistenceOnly){'runtime-persistence'}elseif($InteractionServicesOnly){'runtime-interaction','runtime-locale-failure'}else{'normal','gated','frontend-failure','backend-failure','runtime','runtime-frontend-failure','runtime-backend-failure','runtime-persistence','runtime-interaction','runtime-locale-failure'})
 try {
     # Both DLLs are normal build artifacts with complete current declared input
     # certificates. This rejects an old GUI/consumer pairing before execution.
@@ -208,7 +211,12 @@ try {
             $hostResult=Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json -DateKind String
             $runtimeCase=$case.StartsWith('runtime',[StringComparison]::Ordinal)
             $successfulRuntime=$case -in @('runtime','runtime-persistence','runtime-interaction')
-            if ($hostResult.success -ne $true -or $hostResult.checks -ne $count -or
+            if ($case -eq 'presentation-policy' -and ($hostResult.success -ne $true -or $hostResult.checks -ne $count -or
+                $hostResult.actualCompletedCorePresentationPolicyTested -ne $true -or $hostResult.actualCorePresentationWrongImageRetirementTested -ne $true -or
+                $hostResult.nativePositivePolicyTested -ne $false -or $hostResult.fullGameFactoryReady -ne $false -or $hostResult.fullMtaReady -ne $false)) {
+                throw 'Focused actual rebuilt Core presentation report differs.'
+            }
+            if ($case -ne 'presentation-policy' -and ($hostResult.success -ne $true -or $hostResult.checks -ne $count -or
                 $hostResult.completedOwnerClockApiVersion -ne 1 -or $hostResult.completedOwnerClockFields -ne 96 -or
                 $hostResult.completedOwnerClockAdmissionVerified -ne (-not $runtimeCase) -or $hostResult.completedOwnerClockNativeWorkloadVerified -ne $false -or
                 $hostResult.completedOwnerClockPublishedSamples -ne 0 -or
@@ -220,7 +228,7 @@ try {
                 $hostResult.localInputApiVersion -ne 1 -or $hostResult.localInputFields -ne 32 -or
                 $hostResult.localInputAdmissionVerified -ne $runtimeCase -or $hostResult.localInputWrongImageVerified -ne $successfulRuntime -or
                 $hostResult.localInputNativeMovementVerified -ne $false -or
-                @($hostResult.startupTerminal).Count -ne 32 -or @($hostResult.frontendTerminal).Count -ne 32) {
+                @($hostResult.startupTerminal).Count -ne 32 -or @($hostResult.frontendTerminal).Count -ne 32)) {
                 throw "Actual host clock/unchanged frontend report differs: $case"
             }
             if ($runtimeCase) {
@@ -243,7 +251,7 @@ try {
                     $hostResult.bindingPersistenceAdmissionVerified -ne $true)) {
                     throw 'Actual optional durable movement persistence or atomic failure proof differs.'
                 }
-            } elseif (@($hostResult.runtimeTerminal | Where-Object { $_ -ne 0 }).Count -ne 0) {
+            } elseif ($case -ne 'presentation-policy' -and @($hostResult.runtimeTerminal | Where-Object { $_ -ne 0 }).Count -ne 0) {
                 throw "Historical startup case unexpectedly populated runtime state: $case"
             }
         }
@@ -266,8 +274,11 @@ try {
     $success=$null -eq $failure -and $compileExit -eq 0 -and $testExit -eq 0 -and $testCount -gt 0 -and $runs.Count -eq $caseNames.Count -and
         @($runs | Where-Object { -not $_.success }).Count -eq 0 -and -not $timedOut -and $sourceUnchanged -and $artifactsUnchanged -and
         $assetsUnchanged -and $certificatesUnchanged -and $platformUnchanged
-    $legacySuiteSuccess=$success -and -not $BindingPersistenceOnly
+    $legacySuiteSuccess=$success -and -not $BindingPersistenceOnly -and -not $PresentationPolicyOnly
     $receipt=[ordered]@{schema='mta_owned_frontend_startup_host_tests_v1';recordedAt=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=$success;
+        focusedPresentationPolicyOnly=[bool]$PresentationPolicyOnly;
+        actualCompletedCorePresentationPolicyTested=($success -and $PresentationPolicyOnly -and @($runs|Where-Object {$_.case -eq 'presentation-policy' -and $_.actualHostResult.actualCompletedCorePresentationPolicyTested -eq $true}).Count -eq 1);
+        actualCorePresentationWrongImageRetirementTested=($success -and $PresentationPolicyOnly -and @($runs|Where-Object {$_.case -eq 'presentation-policy' -and $_.actualHostResult.actualCorePresentationWrongImageRetirementTested -eq $true}).Count -eq 1);
         focusedBindingPersistenceOnly=[bool]$BindingPersistenceOnly;focusedInteractionServicesOnly=[bool]$InteractionServicesOnly;selectedCases=$caseNames;
         failure=$failure;compileExit=$compileExit;testExit=$testExit;checks=$testCount;timedOut=$timedOut;cases=$runs;
         sourceHashes=$sourceHashes;sourceUnchanged=$sourceUnchanged;sourceSnapshotScope='Fixture plus complete current declared Core and GUI normal-build inputs; a declared superset, not an independently recovered compiler-read trace.';
@@ -283,7 +294,7 @@ try {
         actualRuntimePartialFailureCleanupVerified=($success -and @($runs | Where-Object { $_.case -in @('runtime-frontend-failure','runtime-backend-failure') -and $_.actualHostResult.runtimeFailureCleanupVerified -eq $true }).Count -eq 2);
         frontendRuntimeNativeViewVerified=$false;
         localInputRuntimeApiVersion=1;localInputRuntimeFields=32;
-        actualLocalInputOwnerArgumentAndThreadAdmissionVerified=($success -and @($runs | Where-Object { $_.case.StartsWith('runtime') -and $_.actualHostResult.localInputAdmissionVerified -eq $true }).Count -eq @($runs | Where-Object { $_.case.StartsWith('runtime') }).Count);
+        actualLocalInputOwnerArgumentAndThreadAdmissionVerified=($success -and -not $PresentationPolicyOnly -and @($runs | Where-Object { $_.case.StartsWith('runtime') -and $_.actualHostResult.localInputAdmissionVerified -eq $true }).Count -eq @($runs | Where-Object { $_.case.StartsWith('runtime') }).Count);
         actualLocalInputWrongImageRefusalAndFollowingGuiReuseVerified=($success -and @($runs | Where-Object { $_.case -eq 'runtime' -and $_.actualHostResult.localInputWrongImageVerified -eq $true }).Count -eq 1);
         localInputNativeMovementVerified=$false;
         optionalBindingPersistenceApiVersion=1;optionalBindingPersistenceAcrossViewsAndFreshCoreVerified=($success -and @($runs | Where-Object { $_.case -eq 'runtime-persistence' -and $_.actualHostResult.bindingPersistenceRestartVerified -eq $true }).Count -eq 1);
@@ -291,7 +302,7 @@ try {
         actualMtaSessionBindingsSettingsOnOwnedWarp=$legacySuiteSuccess;actualSixMovementBindingsApplyAndCancelVerified=$legacySuiteSuccess;reservedConsoleKeyCaptureAndFocusLossVerified=$legacySuiteSuccess;modalCaptureRetiredDuringFrontendTeardownVerified=$legacySuiteSuccess;
         cpuFrontendTeardownWhileGpuRetainedVerified=$legacySuiteSuccess;startupFailureOwnerCleanupVerified=$legacySuiteSuccess;normalFrontendReacquireVerified=$legacySuiteSuccess;completedCoreRetainedAfterFrontendReleaseVerified=$legacySuiteSuccess;backendFailureOwnerCleanupVerified=$legacySuiteSuccess;
         configurationCopiesUnchanged=$assetsUnchanged;installedFilesChanged=$false;gameLaunched=$false;gameAttached=$false;engineInputSuppressionVerified=$false;fullMtaReady=$false;
-        scope=$(if($BindingPersistenceOnly){'One focused runtime-persistence case using actual Core/CKeyBinds/XML and real MTA Settings on owned WARP. Hidden owner opt-in precedes every GUI view and local-input Configure; two views retain the selected path and Cancel state; final retirement followed by a fresh Core/runtime proves generated movement-file reload before input borrows the manager. Exercises invalid handles/versions/paths/thread/XML, actual nonruntime-owner refusal, armed-input/visible/stopped-view Busy, stopped/stale-owner refusal, all six movements, delayed file creation, locked-destination atomic-save failure preserving file and manager, unchanged baseconfig and unrelated bind counts. Does not run historical frontend/failure matrix or opt into any user profile. No native engine input, GTA, network, or playable multiplayer claim.'}else{'Completed real Core and actual Game DE lifecycle, borrowed actual MTA menu/credits/console/configured bindings and existing session-only settings on a private WARP target. All four historical cases remain; three additive Runtime64 cases prove one actual Core/backend and one XML/CVars/CKeyBinds owner across two freshly borrowed GUI views, Apply I then hide/release then identical real bind record and Cancel O, neutral hidden input, unchanged disk configuration, stopped-unreleased borrower exclusion and final manager/CVars/XML/backend retirement. XML/backend preparation failures retain inspectable owners until explicit cleanup. Fixture GUI observation forwards actual widgets/callbacks. Includes completed-owner Clock API1/Read96 admission and actual wrong-image refusal in historical routes, while Runtime refuses clock and all legacy mutating owner routes. Startup32 and Persistent288 are unchanged. No positive native clock or runtime-view workload is claimed. Disposable SanAndreas.exe is this hashed owned host, not GTA. No engine facade stubs, native engine binding, game/device attachment, native hooks, full multiplayer startup or visible GTA claim. One additive durable runtime case covers hidden-owner fixture-only persistence before GUI/input borrowing and a fresh Core reload.'})}
+        scope=$(if($PresentationPolicyOnly){'One focused actual newly rebuilt Core presentation path: generic completed CPU startup stays hook-free; explicit Begin requires current controller/Core producer; invalid state/handle/thread and wrong image refuse; failed provider admission retires before completed Core shutdown/release and module unload. No old GUI matrix, positive native policy, full game factory or playable MTA claim.'}elseif($BindingPersistenceOnly){'One focused runtime-persistence case using actual Core/CKeyBinds/XML and real MTA Settings on owned WARP. Hidden owner opt-in precedes every GUI view and local-input Configure; two views retain the selected path and Cancel state; final retirement followed by a fresh Core/runtime proves generated movement-file reload before input borrows the manager. Exercises invalid handles/versions/paths/thread/XML, actual nonruntime-owner refusal, armed-input/visible/stopped-view Busy, stopped/stale-owner refusal, all six movements, delayed file creation, locked-destination atomic-save failure preserving file and manager, unchanged baseconfig and unrelated bind counts. Does not run historical frontend/failure matrix or opt into any user profile. No native engine input, GTA, network, or playable multiplayer claim.'}else{'Completed real Core and actual Game DE lifecycle, borrowed actual MTA menu/credits/console/configured bindings and existing session-only settings on a private WARP target. All four historical cases remain; three additive Runtime64 cases prove one actual Core/backend and one XML/CVars/CKeyBinds owner across two freshly borrowed GUI views, Apply I then hide/release then identical real bind record and Cancel O, neutral hidden input, unchanged disk configuration, stopped-unreleased borrower exclusion and final manager/CVars/XML/backend retirement. XML/backend preparation failures retain inspectable owners until explicit cleanup. Fixture GUI observation forwards actual widgets/callbacks. Includes completed-owner Clock API1/Read96 admission and actual wrong-image refusal in historical routes, while Runtime refuses clock and all legacy mutating owner routes. Startup32 and Persistent288 are unchanged. No positive native clock or runtime-view workload is claimed. Disposable SanAndreas.exe is this hashed owned host, not GTA. No engine facade stubs, native engine binding, game/device attachment, native hooks, full multiplayer startup or visible GTA claim. One additive durable runtime case covers hidden-owner fixture-only persistence before GUI/input borrowing and a fresh Core reload.'})}
     $receipt | ConvertTo-Json -Depth 9 | Set-Content -LiteralPath (Join-Path $outputRoot 'test-result.json') -Encoding utf8
 }
 [ordered]@{success=$success;receipt=(Join-Path $outputRoot 'test-result.json');checks=$testCount;failure=$failure} | ConvertTo-Json -Compress

@@ -506,7 +506,10 @@ namespace mta::game_de
         runtime.devicePhase.store(captureDevice || captureDeviceWindow ? DeviceCapturePhase::Armed : DeviceCapturePhase::Off);
         runtime.deviceLease = {};
         runtime.deviceWindow = {};
-        ResetFrameBoundaryObservation();
+        // A retained policy owns hooks/cache across many diagnostic leases.
+        // Install resets only the fresh bounded diagnostic state in that case.
+        if (!Owner::SharedDiagnostic(generation))
+            ResetFrameBoundaryObservation();
         if (!Owner::Install(operation, generation))
         {
             ReadState(finalState);

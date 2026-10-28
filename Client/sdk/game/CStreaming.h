@@ -111,4 +111,15 @@ public:
             return std::nullopt;
         return info->flg;
     }
+
+    // State-only callers must not depend on a backend's writable physical
+    // row. Preserve classic absence and every raw enum byte separately;
+    // append the slot so existing SDK method indices do not move.
+    virtual std::optional<eModelLoadState> GetModelLoadState(std::uint32_t model)
+    {
+        const auto* info = GetStreamingInfo(model);
+        if (!info)
+            return std::nullopt;
+        return info->loadState;
+    }
 };

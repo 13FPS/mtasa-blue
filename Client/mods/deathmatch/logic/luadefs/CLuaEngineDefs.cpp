@@ -17,6 +17,7 @@
 #include <lua/CLuaFunctionParser.h>
 #include "CLuaEngineDefs.h"
 #include <enums/VehicleType.h>
+#include <stdexcept>
 
 //! Set the CModelCacheManager limits
 //! By passing `nil`/no value the original values are restored
@@ -2636,10 +2637,18 @@ bool CLuaEngineDefs::EngineStreamingReleaseModel(lua_State* const luaVM, std::ui
 eModelLoadState CLuaEngineDefs::EngineStreamingGetModelLoadState(std::uint16_t modelId)
 {
     const auto allCount = g_pGame->GetCountOfAllFileIDs();
-    if (modelId >= g_pGame->GetCountOfAllFileIDs())
+    if (modelId >= allCount)
         throw std::invalid_argument("Expected a valid model ID at argument 1");
 
-    return g_pGame->GetStreaming()->GetStreamingInfo(modelId)->loadState;
+    // A state-only query must not expose a classic writable row to
+    // every backend. Absence or a native refusal cannot mean unloaded.
+    auto* streaming = g_pGame->GetStreaming();
+    if (!streaming)
+        throw std::runtime_error("The game streaming service is unavailable");
+    const auto state = streaming->GetModelLoadState(modelId);
+    if (!state)
+        throw std::runtime_error("The model streaming state is unavailable");
+    return *state;
 }
 
 void CLuaEngineDefs::EnginePreloadWorldArea(CVector position, std::optional<PreloadAreaOption> option)

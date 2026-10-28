@@ -1,5 +1,17 @@
 # MTA on Definitive Edition: reuse boundary
 
+## Shared model streaming state query (2026-10-28)
+
+The actual Lua model-state query now asks MTA's shared streaming SDK for a
+value instead of dereferencing a classic writable streaming row. The shared
+default reads the existing SA row once and preserves absence and every state
+byte. DE uses one existing current-owner observation, preserving native
+refusals and the distinction between raw state and the upgrade-loaded predicate.
+
+The optional SDK virtual is appended; coordinated source rebuilds are required.
+An absent service or row remains an explicit error. No writable DE row, archive
+protocol, complete streaming receiver or overall startup readiness is claimed.
+
 ## Separate startup prerequisites from effects (2026-10-28)
 
 The retained owner now exposes fresh prerequisite checks for ped metadata

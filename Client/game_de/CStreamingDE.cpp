@@ -103,6 +103,16 @@ namespace mta::game_de
         return value.rawFlags;
     }
 
+    std::optional<eModelLoadState> CStreamingDE::GetModelLoadState(std::uint32_t model)
+    {
+        NativeModelLoadedReader::Value value;
+        // The current owner already observes this full resource row. A
+        // raw load state is independent of the compound upgrade-loaded
+        // predicate; preserve every byte and let native refusals unwind.
+        Require(access.ReadStreamingModelLoaded(model, value), "GetModelLoadState");
+        return static_cast<eModelLoadState>(value.rawLoadState);
+    }
+
     bool CStreamingDE::HasModelLoaded(DWORD model)
     {
         if (MtaGame::CModelRequestPolicy::IsUpgradeModel(model))

@@ -24,12 +24,16 @@ namespace mta::game_de
         // null; successful null values grant no target layout or lifetime.
         virtual ClockResult ReadModelInterface(std::uint32_t, std::uintptr_t&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult ReadModelRender(std::uint32_t, std::uintptr_t&) noexcept { return ClockResult::NotInitialized; }
-        // Current qualified slot78 reads QWORD6c0; the native request caller
-        // consumes only EAX. This observation never invokes an arbitrary slot.
+        // The qualified slot78 observes vehicle6c0 or genuine ped/clump68,
+        // bookending the fullQWORD before the native request caller's EAX
+        // conversion. Neither getter nor a sampled pointee is invoked.
         virtual ClockResult ReadModelAnimFileIndex(std::uint32_t, std::uint32_t&) noexcept { return ClockResult::NotInitialized; }
         // Read-only owners cannot substitute a special streaming request
         // for native creation and irreversible bank publication. The real
         // owner must journal every entered effect before returning status.
         virtual ClockResult CreateAndPublishPedModelMetadata(std::uint32_t) noexcept { return ClockResult::NotInitialized; }
+        // This is collision-pointer identity, not a ped category or geometry
+        // test. Older owners refuse without manufacturing a negative answer.
+        virtual ClockResult ReadModelPlayerPredicate(std::uint32_t, bool&) noexcept { return ClockResult::NotInitialized; }
     };
 }

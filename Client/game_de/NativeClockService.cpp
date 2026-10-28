@@ -287,6 +287,7 @@ namespace mta::game_de
             ClockResult ReadModelVehicleSubtype(std::uint32_t, std::uint32_t&) noexcept override;
             ClockResult ReadModelInterface(std::uint32_t, std::uintptr_t&) noexcept override;
             ClockResult ReadModelRender(std::uint32_t, std::uintptr_t&) noexcept override;
+            ClockResult ReadModelPlayerPredicate(std::uint32_t, bool&) noexcept override;
             ClockResult ReadModelAnimFileIndex(std::uint32_t, std::uint32_t&) noexcept override;
             ClockResult CreateAndPublishPedModelMetadata(std::uint32_t) noexcept override;
             ClockResult AdjustModelReference(std::uint32_t, int) noexcept override;
@@ -5118,6 +5119,18 @@ namespace mta::game_de
             // current bank word stays opaque, including null/poison values;
             // no type, loaded-state or provider query belongs in this read.
             const auto result = NativeModelObjectReader({runtime.image}, &CheckTimingOwner).ReadInterface(requestedModel, next);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
+        }
+        ClockResult NativeAccess::ReadModelPlayerPredicate(std::uint32_t model, bool& output) noexcept
+        {
+            const auto requestedModel = model;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            bool next = false;
+            result = NativeModelObjectReader({runtime.image}, &CheckTimingOwner).ReadPlayerModel(requestedModel, next);
             if (result == ClockResult::Ok)
                 output = next;
             return result;

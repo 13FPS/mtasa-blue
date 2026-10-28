@@ -1,6 +1,24 @@
 # MTA on Definitive Edition: reuse boundary
 
-## Current offline cohort: native special-ped creation (2026-10-28)
+## Current offline cohort: model identity and ped animation reads (2026-10-28)
+
+The actual model SDK now implements MTA's `IsPlayerModel` through its retained
+owner. It compares the current model's collision pointer with the canonical
+shared ped collision instance. A null bank entry returns false; native refusal
+remains explicit. Ped type, loaded state and collision geometry do not replace
+the source's identity test, and the sampled collision pointer is never followed.
+
+Animation-file reads now also accept the qualified ped/clump getter at field
+0x68 with a complete 152-byte receiver. Both reads bookend all 64 bits before
+applying the native request caller's low-32-bit conversion. The existing
+vehicle field0x6c0 getter and render/interface observations keep their separate
+authority; new ped/identity proof cannot invalidate those older paths.
+
+These are observations through the existing callback owner, with no virtual
+getter invocation or native mutation. Model and game factories remain
+incomplete, and the installed GTA candidate is unchanged.
+
+## Native special-ped creation (2026-10-28)
 
 MTA's existing `MakePedModel` now reaches the retained native owner before its
 special-model streaming request. Each call obtains its own 152-byte engine-heap

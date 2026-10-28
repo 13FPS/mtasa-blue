@@ -30,11 +30,11 @@ namespace mta::game_de
                 return ClockResult::BindingChanged;
             return state == 9 ? owner() : ClockResult::NotInitialized;
         }
-        bool Prefix(std::uintptr_t address) noexcept
+        bool Prefix(std::uintptr_t address, std::size_t bytes = P::ModelPrefixBytes) noexcept
         {
-            if (!address || address % alignof(std::uintptr_t) || P::ModelPrefixBytes > (std::numeric_limits<std::uintptr_t>::max)() - address)
+            if (!address || address % alignof(std::uintptr_t) || bytes > (std::numeric_limits<std::uintptr_t>::max)() - address)
                 return false;
-            const auto     end = address + P::ModelPrefixBytes;
+            const auto     end = address + bytes;
             std::uintptr_t allocation = 0;
             while (address < end)
             {
@@ -54,6 +54,17 @@ namespace mta::game_de
                 allocation = current;
                 address = (std::min)(end, base + page.RegionSize);
             }
+            return true;
+        }
+        bool CollisionIdentityField(std::uintptr_t receiver, std::uintptr_t& output) noexcept
+        {
+            SIZE_T         copied = 0;
+            std::uintptr_t next = 0;
+            if (!Prefix(receiver, P::CollisionPrefixBytes) ||
+                !ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(receiver + P::CollisionOffset), &next, sizeof(next), &copied) ||
+                copied != sizeof(next))
+                return false;
+            output = next;
             return true;
         }
         bool RenderField(std::uintptr_t receiver, std::uintptr_t& output) noexcept
@@ -89,6 +100,59 @@ namespace mta::game_de
                 return false;
         }
         return true;
+    }
+    bool NativeModelObjectReader::RevalidatePlayerIdentity(const Binding& binding) noexcept
+    {
+        if (!Revalidate(binding))
+            return false;
+        for (const auto& pin : NativeModelObjectProfile::CollisionIdentityCode)
+        {
+            std::array<unsigned char, NativeModelObjectProfile::MaximumCollisionPinBytes> bytes{};
+            if (!pin.size || pin.size > bytes.size() ||
+                !NativeImageAccess::ReadImage(binding.image, binding.image + pin.rva, bytes.data(), pin.size, false, true) ||
+                std::memcmp(bytes.data(), pin.bytes, pin.size))
+                return false;
+        }
+        return true;
+    }
+    ClockResult NativeModelObjectReader::ReadPlayerModel(std::uint32_t model, bool& output) const noexcept
+    {
+        namespace D = ModelObjectDetail;
+        NativeModelBankReader        bank(binding, owner);
+        NativeModelBankReader::Value word;
+        auto                         result = bank.Read(model, word);
+        if (result != ClockResult::Ok)
+            return result;
+        if (!word.nativeModelInfo)
+        {
+            if ((result = bank.Recheck(word)) != ClockResult::Ok)
+                return result;
+            output = false;
+            return ClockResult::Ok;
+        }
+        if (!RevalidatePlayerIdentity(binding))
+            return ClockResult::BindingChanged;
+        if ((result = D::Owner(binding, owner)) != ClockResult::Ok)
+            return result;
+        std::uintptr_t first = 0, second = 0;
+        if (!D::CollisionIdentityField(word.nativeModelInfo, first))
+            return ClockResult::ReadFailure;
+        if ((result = bank.Recheck(word)) != ClockResult::Ok || (result = D::Owner(binding, owner)) != ClockResult::Ok)
+            return result;
+        if (!D::CollisionIdentityField(word.nativeModelInfo, second))
+            return ClockResult::ReadFailure;
+        if (first != second)
+            return ClockResult::BindingChanged;
+        if ((result = bank.Recheck(word)) != ClockResult::Ok)
+            return result;
+        if (!RevalidatePlayerIdentity(binding))
+            return ClockResult::BindingChanged;
+        if ((result = D::Owner(binding, owner)) != ClockResult::Ok)
+            return result;
+        // IsPlayerModel is this identity test even on non-ped metadata. Null
+        // and poison collision tags remain raw values; no pointee is queried.
+        output = second != 0 && second == binding.image + NativeModelObjectProfile::CanonicalPedCollisionRva;
+        return ClockResult::Ok;
     }
     ClockResult NativeModelObjectReader::ReadInterface(std::uint32_t model, std::uintptr_t& output) const noexcept
     {

@@ -48,6 +48,17 @@ namespace mta::game_de
         // owns no classic interface layout or persistent cached pointer.
         return reinterpret_cast<CBaseModelInfoSAInterface*>(value);
     }
+    bool CModelInfoDE::IsPlayerModel()
+    {
+        const auto index = model;
+        bool       value = false;
+        const auto status = access.ReadModelPlayerPredicate(index, value);
+        if (status != ClockResult::Ok)
+            throw std::runtime_error("DE model owner refused IsPlayerModel: " + std::to_string(static_cast<unsigned>(status)));
+        // Keep the actual MTA predicate in its current qualified owner. An
+        // opaque interface cannot be cast to the classic collision layout.
+        return value;
+    }
     RwObject* CModelInfoDE::GetRwObject()
     {
         const auto     index = model;

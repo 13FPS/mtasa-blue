@@ -16,8 +16,9 @@ namespace mta::game_de
         static bool Qualify(Binding&) noexcept;
         static bool Revalidate(const Binding&) noexcept;
         ClockResult Read(std::uint32_t fullModelKey, std::uint32_t& animationFileIndex) const noexcept;
-        // The native leaf reads QWORD6c0. Bookend all64 bits, then preserve
-        // the EAX intent used by RequestModel; never follow the sampled tag.
+        // Qualify the current vehicle6c0 or genuine ped/clump68 path before
+        // reading its fullQWORD. Bookend all64 bits, then preserve RequestModel's
+        // EAX intent; never follow the sampled tag or invoke either getter.
     private:
         Binding    binding;
         CheckOwner owner = nullptr;

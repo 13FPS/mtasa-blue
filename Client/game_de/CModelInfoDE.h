@@ -22,6 +22,7 @@ namespace mta::game_de
         RwObject*                  GetRwObject() override;
         DWORD                      GetModel() override { return model; }
         eModelInfoType             GetModelType() override;
+        bool                       IsPlayerModel() override;
         bool                       IsVehicle() const override;
         BYTE                       GetVehicleType() const override;
         bool                       IsAllocatedInArchive() const override;

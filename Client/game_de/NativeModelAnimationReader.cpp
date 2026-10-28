@@ -77,6 +77,25 @@ namespace mta::game_de
             }
             return true;
         }
+        bool PedProfile(Reader::Binding binding) noexcept
+        {
+            // A shared small getter alone cannot admit arbitrary clump
+            // layouts. Bind both exact observed cells and their full paths.
+            for (const auto& pin : P::PedCode)
+            {
+                std::array<unsigned char, P::MaximumPinBytes> bytes{};
+                if (!pin.size || pin.size > bytes.size() || !Image::ReadImage(binding.image, binding.image + pin.rva, bytes.data(), pin.size, false, true) ||
+                    std::memcmp(bytes.data(), pin.bytes, pin.size))
+                    return false;
+            }
+            std::uintptr_t getter = 0, type = 0;
+            return ReadOnly(binding.image, binding.image + P::PedObservedVtableRva + P::GetterSlot, sizeof(getter)) &&
+                   Image::ReadImage(binding.image, binding.image + P::PedObservedVtableRva + P::GetterSlot, &getter, sizeof(getter)) &&
+                   getter == binding.image + P::PedGetterRva &&
+                   ReadOnly(binding.image, binding.image + P::PedObservedVtableRva + P::PedTypeSlot, sizeof(type)) &&
+                   Image::ReadImage(binding.image, binding.image + P::PedObservedVtableRva + P::PedTypeSlot, &type, sizeof(type)) &&
+                   type == binding.image + P::PedTypeGetterRva;
+        }
         struct Value
         {
             std::uintptr_t vtable = 0, method = 0;
@@ -86,18 +105,35 @@ namespace mta::game_de
         ClockResult Capture(Reader::Binding binding, std::uintptr_t model, Value& output) noexcept
         {
             Value next;
-            if (model % alignof(std::uintptr_t) || !Span(model, P::ReceiverBytes) || !Copy(model, &next.vtable, sizeof(next.vtable)))
+            if (model % alignof(std::uintptr_t) || !Copy(model, &next.vtable, sizeof(next.vtable)))
                 return ClockResult::ReadFailure;
             if (!next.vtable || next.vtable % alignof(std::uintptr_t) ||
                 P::GetterSlot + sizeof(std::uintptr_t) > (std::numeric_limits<std::uintptr_t>::max)() - next.vtable ||
                 !ReadOnly(binding.image, next.vtable + P::GetterSlot, sizeof(next.method)) ||
                 !Image::ReadImage(binding.image, next.vtable + P::GetterSlot, &next.method, sizeof(next.method)))
                 return ClockResult::BindingChanged;
-            // A different current native class may share this exact inherited
-            // leaf. Qualify the actual slot/body, never infer IsVehicle/type6.
-            if (next.method != binding.image + P::GetterRva)
+            std::size_t offset = 0;
+            if (next.method == binding.image + P::GetterRva)
+            {
+                // Preserve the existing inherited vehicle-layout authority:
+                // another table may share its leaf, with no type6 predicate.
+                if (!Span(model, P::ReceiverBytes))
+                    return ClockResult::ReadFailure;
+                offset = P::ValueOffset;
+            }
+            else if (next.method == binding.image + P::PedGetterRva)
+            {
+                if (next.vtable != binding.image + P::PedObservedVtableRva)
+                    return ClockResult::UnsupportedBuild;
+                if (!Span(model, P::PedReceiverBytes))
+                    return ClockResult::ReadFailure;
+                if (!PedProfile(binding))
+                    return ClockResult::BindingChanged;
+                offset = P::PedValueOffset;
+            }
+            else
                 return ClockResult::UnsupportedBuild;
-            if (!Copy(model + P::ValueOffset, &next.raw, sizeof(next.raw)))
+            if (!Copy(model + offset, &next.raw, sizeof(next.raw)))
                 return ClockResult::ReadFailure;
             output = next;
             return ClockResult::Ok;
@@ -151,7 +187,7 @@ namespace mta::game_de
             return ClockResult::BindingChanged;
         if ((result = bank.Recheck(word)) != ClockResult::Ok)
             return result;
-        if (!Revalidate(binding))
+        if (!Revalidate(binding) || (second.method == binding.image + NativeModelAnimationProfile::PedGetterRva && !D::PedProfile(binding)))
             return ClockResult::BindingChanged;
         if ((result = D::Owner(binding, owner)) != ClockResult::Ok)
             return result;

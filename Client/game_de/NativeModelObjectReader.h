@@ -18,8 +18,12 @@ namespace mta::game_de
         static bool Qualify(Binding&) noexcept;
         static bool Revalidate(const Binding&) noexcept;
         static bool RevalidateRender(const Binding&) noexcept;
+        static bool RevalidatePlayerIdentity(const Binding&) noexcept;
         ClockResult ReadInterface(std::uint32_t fullModelKey, std::uintptr_t&) const noexcept;
         ClockResult ReadRender(std::uint32_t fullModelKey, std::uintptr_t&) const noexcept;
+        // Preserve MTA's collision-pointer identity predicate. No type,
+        // loaded state or default-geometry validity substitutes for equality.
+        ClockResult ReadPlayerModel(std::uint32_t fullModelKey, bool&) const noexcept;
         // Returned tags, including null and poison values, grant no target
         // dereference, persistent lease, reference/free or factory authority.
     private:

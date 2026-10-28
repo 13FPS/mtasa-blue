@@ -1,19 +1,25 @@
 # Generate strict unsupported methods from the actual92-method SDK.
-# Ten production operations remain inherited; no model factory is simulated.
-function Write-ModelObjectFixture([string]$RepositoryRoot,[string]$OutputPath) {
+# The default partition stays unchanged for existing tests. The explicit
+# player switch inherits the new real override instead of masking it with
+# an aborting stub; neither mode simulates a native model factory.
+function Write-ModelObjectFixture([string]$RepositoryRoot,[string]$OutputPath,[switch]$IncludePlayerIdentity) {
     $source='Client/sdk/game/CModelInfo.h'
     $text=[IO.File]::ReadAllText((Join-Path $RepositoryRoot $source))
     $text=[regex]::Replace($text,'(?s)/\*.*?\*/|//[^\r\n]*','')
     $body=[regex]::Match($text,'(?s)\bclass\s+CModelInfo\s*\{(?<body>.*)\};')
     if(-not $body.Success){throw 'Actual CModelInfo declaration not found'}
+    $inherited=@('GetInterface','GetRwObject','GetModel','GetModelType','IsVehicle','IsAllocatedInArchive','IsBoat','IsCar','IsPlane','IsHeli')
+    if($IncludePlayerIdentity){$inherited+='IsPlayerModel'}
     $provided=@()
     $methods=@(foreach($match in [regex]::Matches($body.Groups['body'].Value,'virtual\s+(?<signature>[^;{}]+);')) {
         $signature=[regex]::Replace($match.Groups['signature'].Value,'\s*=\s*0\s*$','').Trim()
         $name=[regex]::Match($signature,'(?<name>\w+)\s*\(').Groups['name'].Value
-        if($name -in @('GetInterface','GetRwObject','GetModel','GetModelType','IsVehicle','IsAllocatedInArchive','IsBoat','IsCar','IsPlane','IsHeli')) {$provided+=$signature}
+        if($name -in $inherited) {$provided+=$signature}
         else {[regex]::Replace($signature,'\s+',' ')}
     })
-    if($provided.Count -ne 10 -or $methods.Count -ne 82){throw 'Actual model10/82 partition changed'}
+    $expectedProvided=if($IncludePlayerIdentity){11}else{10}
+    $expectedRejected=92-$expectedProvided
+    if($provided.Count -ne $expectedProvided -or $methods.Count -ne $expectedRejected){throw 'Actual model fixture partition changed'}
     $lines=@('#pragma once','#include <cstdlib>','#pragma warning(push)','#pragma warning(disable : 4100)',
         'class ModelObjectObserver final : public mta::game_de::CModelInfoDE { public:',
         'ModelObjectObserver(std::uint32_t model,mta::game_de::NativeModelClassificationAccess& owner) noexcept : CModelInfoDE(model,owner) {}')

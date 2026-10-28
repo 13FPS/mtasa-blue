@@ -17,8 +17,8 @@ foreach ($name in @('TEMP','TMP','VCToolsInstallDir','INCLUDE','LIB','LIBPATH','
 $record = [ordered]@{
     schema='mta_numeric_startup_garage_sdk_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
-    result=$null;failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;actualNumericStartupGarageSdkTested=$false;actualNumericStartupGaragePropertiesTested=$false;
-    scope='Actual fixed-storage sixteen-ID startup receiver, private numeric adapters and all eight inherited CGarage properties. Exact duplicate-name separation, current-owner dispatch, preserved SDK geometry words, fresh readiness forwarding, unavailable valid IDs, repeated MTA Initialize and accepted failure prefixes. No native memory, effect, full fifty-ID service or complete game factory execution.';
+    result=$null;failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;actualNumericStartupGarageSdkTested=$false;actualNumericStartupGaragePropertiesTested=$false;actualFullNumericGarageSdkPropertiesTested=$false;
+    scope='Actual fixed-storage fifty-ID numeric receiver, private numeric adapters and all eight inherited CGarage properties for every SDK ID. Exact duplicate-name separation, current-owner dispatch, preserved SDK geometry words, fresh readiness forwarding and out-of-range absence. Repeated MTA Initialize and accepted failure prefixes retain the original sixteen intents and preserve the other thirty-four types. No native memory or complete CGame/MTA execution.';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;
     completeGarageReady=$false;completeCGameReady=$false;fullMtaReady=$false;oldBinaryCompatibilityClaimed=$false
 }
@@ -76,7 +76,13 @@ try {
         'Client/game_de/NativeNamedGarageAccess.h','Client/game_de/NativePedPoolReader.h','Client/game_de/NativePedPoolProfile.h',
         'Client/sdk/game/CGarage.h','Client/sdk/game/CGarageDoorStatePolicy.h','Client/sdk/game/CGameClockService.h','Client/sdk/game/CGameAdapter.h',
         'Shared/sdk/SharedUtil.Defines.h','Shared/sdk/SharedUtil.IntTypes.h','Shared/sdk/CVector.h',
-        'Tests/definitive/NumericStartupGarageSDKTests.cpp','Tests/definitive/test_numeric_startup_garage_sdk.ps1')
+        'Tests/definitive/NumericStartupGarageSDKTests.cpp','Tests/definitive/test_numeric_startup_garage_sdk.ps1',
+        'Build/definitive-recovery/mta-full-numeric-garage-service-20261028/full-numeric-garage-service-source-ready.json',
+        'Build/definitive-recovery/mta-garage-full-normalization-20261028/qualified-numeric50-garage-reference-ready.json',
+        'Build/definitive-recovery/mta-garage-full-normalization-20261028/exact-full-comparison.json',
+        'Build/definitive-recovery/mta-garage-full-normalization-20261028/tuple-qualification.json',
+        'Build/definitive-recovery/mta-garage-full-normalization-20261028/normalized-full-reference.json',
+        'Build/definitive-recovery/mta-garage-full-normalization-20261028/normalization-contract.json')
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
@@ -120,8 +126,10 @@ try {
     }
     $record.actualNumericStartupGarageSdkTested = $text.Contains('Production actual numeric startup garage SDK fixture completed')
     $record.actualNumericStartupGaragePropertiesTested = $text.Contains('Production actual numeric startup garage SDK fixture completed')
+    $record.actualFullNumericGarageSdkPropertiesTested = $text.Contains('Production actual fifty-ID numeric garage SDK properties fixture completed')
     $record.success = $record.result.test.exitCode -eq 0 -and -not $record.result.test.timedOut -and
-        $record.result.checks -gt 0 -and $record.result.pointerBits -eq 64 -and $record.actualNumericStartupGarageSdkTested -and $record.actualNumericStartupGaragePropertiesTested
+        $record.result.checks -gt 0 -and $record.result.pointerBits -eq 64 -and $record.actualNumericStartupGarageSdkTested -and
+        $record.actualNumericStartupGaragePropertiesTested -and $record.actualFullNumericGarageSdkPropertiesTested
     if (-not $record.success) { throw 'Actual garage SDK checks or completion evidence failed.' }
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {
@@ -153,4 +161,4 @@ finally {
     $record | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $outputRoot 'test-result.json') -Encoding utf8NoBOM
 }
 [ordered]@{success=$record.success;receipt=(Join-Path $outputRoot 'test-result.json');failure=$record.failure} | ConvertTo-Json -Compress
-if (-not $record.success) { throw "Actual named garage SDK checks failed; see $outputRoot" }
+if (-not $record.success) { throw "Actual numeric garage SDK checks failed; see $outputRoot" }

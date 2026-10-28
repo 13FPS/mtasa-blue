@@ -139,10 +139,12 @@ namespace
 
     void Properties(Owner& owner, CGaragesStartupDE& garages)
     {
-        for (std::size_t index = 0; index != Expected.size(); ++index)
+        // Property availability spans the qualified SDK range. Keep this
+        // independent of the narrower inherited initialization itinerary.
+        static_assert(MAX_GARAGES == 50 && NativeNumericGarageProfile::Descriptors.size() == MAX_GARAGES);
+        for (std::uint32_t id = 0; id != MAX_GARAGES; ++id)
         {
-            const auto id = Expected[index];
-            auto*      sdk = garages.GetGarage(id);
+            auto* sdk = garages.GetGarage(id);
             Check(sdk && sdk == garages.GetGarage(id), "mapped SDK pointer is stable and owned by this concrete receiver");
             const auto expected = owner.geometry[id].words;
             const auto before = owner.calls[0];
@@ -168,8 +170,8 @@ namespace
             Check(sdk->GetType() == owner.type[id] && owner.selected == id && owner.calls[1] == typeReads + 1,
                   "type query reaches only its fixed numeric owner once");
             const auto typeWrites = owner.calls[2];
-            sdk->SetType(static_cast<BYTE>(index));
-            Check(owner.type[id] == static_cast<std::uint8_t>(index) && owner.selected == id && owner.calls[2] == typeWrites + 1,
+            sdk->SetType(static_cast<BYTE>(id));
+            Check(owner.type[id] == static_cast<std::uint8_t>(id) && owner.selected == id && owner.calls[2] == typeWrites + 1,
                   "type intent is dispatched once without named lookup");
             for (const bool opened : {true, false})
             {
@@ -233,6 +235,15 @@ namespace
             for (std::size_t index = 0; index != Expected.size(); ++index)
                 Check(owner.type[Expected[index]] == (index <= failing ? 1 : 200),
                       "accepted prefix including uncertain final intent survives, following IDs remain untouched");
+            // The complete service must not broaden MTA's original startup
+            // writes to the newly exposed property-only garage identities.
+            for (std::uint32_t id = 0; id != MAX_GARAGES; ++id)
+            {
+                bool entered = false;
+                for (std::size_t index = 0; index <= failing; ++index)
+                    entered = entered || id == Expected[index];
+                Check(owner.type[id] == (entered ? 1 : 200), "a failed Initialize leaves every garage outside the entered sixteen-ID prefix untouched");
+            }
         }
         owner.failType = MAX_GARAGES;
         owner.effects.clear();
@@ -243,6 +254,14 @@ namespace
         for (std::size_t index = 0; index != owner.effects.size(); ++index)
             Check(owner.effects[index].id == Expected[index % Expected.size()] && owner.effects[index].type == 1,
                   "each explicit initialization preserves the complete source schedule");
+        for (std::uint32_t id = 0; id != MAX_GARAGES; ++id)
+        {
+            bool selected = false;
+            for (const auto startupId : Expected)
+                selected = selected || id == startupId;
+            Check(owner.type[id] == (selected ? 1 : 200),
+                  "repeated Initialize changes only the original sixteen types and leaves the other thirty-four intact");
+        }
     }
 }
 int main()
@@ -265,12 +284,14 @@ int main()
         }
         Check(!garages.GetGarage(MAX_GARAGES) && !garages.GetGarage(0xffffffffu), "SDK out-of-range IDs retain ordinary null absence");
         const auto before = owner.calls;
-        Refuses([&] { garages.GetGarage(0); }, "not qualified");
-        Check(owner.calls == before, "unmapped valid IDs explicitly refuse without native alias or invented CPU garage");
+        for (std::uint32_t id = 0; id != MAX_GARAGES; ++id)
+            Check(garages.GetGarage(id) && garages.GetGarage(id) == garages.GetGarage(id), "every qualified SDK ID has one stable fixed-storage wrapper");
+        Check(owner.calls == before, "borrowing all fifty wrappers performs no native property observation or effect");
         Properties(owner, garages);
         AdapterGuards(owner);
         Initialize(owner, garages);
         Check(owner.namedCalls == 0, "no actual numeric SDK method dispatched through the native named API");
+        std::puts("Production actual fifty-ID numeric garage SDK properties fixture completed");
         std::puts("Production actual numeric startup garage SDK fixture completed");
         std::printf("Passed %u numeric startup garage SDK checks (%u-bit)\n", checks, static_cast<unsigned>(sizeof(void*) * 8));
         return EXIT_SUCCESS;

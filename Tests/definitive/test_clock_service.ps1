@@ -650,7 +650,13 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
     $sourceNames += @('Client/game_de/NativeNumericGarageAccess.h','Client/game_de/NativeNumericGarageProfile.h',
         'Client/game_de/NativeNumericGarageMemory.h','Client/game_de/NativeNumericGarageMemory.cpp','Client/game_de/NativeGarageMemoryShared.h',
         'Client/game_de/CGaragesStartupDE.h','Client/game_de/CGaragesStartupDE.cpp','Client/game_de/CGameNumericGaragesDE.h',
-        'Tests/definitive/NativeStartupNumericGaragesRuntimeOwnerTests.inl')
+        'Tests/definitive/NativeStartupNumericGaragesRuntimeOwnerTests.inl',
+        'Build/definitive-recovery/mta-full-numeric-garage-service-20261028/full-numeric-garage-service-source-ready.json',
+        'Build/definitive-recovery/mta-garage-full-normalization-20261028/qualified-numeric50-garage-reference-ready.json',
+        'Build/definitive-recovery/mta-garage-full-normalization-20261028/exact-full-comparison.json',
+        'Build/definitive-recovery/mta-garage-full-normalization-20261028/tuple-qualification.json',
+        'Build/definitive-recovery/mta-garage-full-normalization-20261028/normalized-full-reference.json',
+        'Build/definitive-recovery/mta-garage-full-normalization-20261028/normalization-contract.json')
     $sourceNames += @('Client/game_de/NativeStartupStreamingAccess.h','Client/game_de/CStreamingStartupDE.h',
         'Client/game_de/CStreamingStartupDE.cpp','Client/game_de/CGameStartupStreamingDE.h',
         'Tests/definitive/NativeStartupStreamingReceiverRuntimeOwnerTests.inl')

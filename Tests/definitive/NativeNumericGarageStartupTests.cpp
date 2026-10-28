@@ -73,7 +73,9 @@ namespace NumericGarageTests
     struct Fixture : LoadFixture
     {
         explicit Fixture(const std::filesystem::path& directory) : LoadFixture(directory) { Reset(); }
-        std::uint32_t  Index(std::size_t slot) const { return static_cast<std::uint32_t>(49 - slot * 2); }
+        // A reverse permutation covers all fifty rows exactly once. The old
+        // every-other-row layout would underflow once the complete bank is used.
+        std::uint32_t  Index(std::size_t slot) const { return static_cast<std::uint32_t>(49 - slot); }
         std::uintptr_t Row(std::uint32_t index) const { return transform.image.image + G::BankRva + index * G::RowBytes; }
         std::uintptr_t Rva(std::uint32_t index) const { return G::BankRva + index * G::RowBytes; }
         void           Name(std::uint32_t index, const NativeGarageName& name)
@@ -176,6 +178,7 @@ int main(int argc, char** argv)
     namespace P = T::P;
     namespace G = T::G;
     namespace H = T::H;
+    static_assert(P::Descriptors.size() == 50 && P::CertifiedPublishedCount == 50);
     Check(argc == 2 && std::filesystem::path(argv[1]).is_absolute(), "numeric fixture backing belongs to explicit task scratch");
     T::Fixture fixture(argv[1]);
     T::active = &fixture;
@@ -186,7 +189,7 @@ int main(int argc, char** argv)
     fixture.Reset();
     const auto initial = fixture.Bytes();
     Check(memory.CheckReady() == ClockResult::Ok && memory.CheckReady() == ClockResult::Ok,
-          "all sixteen exact descriptors qualify with physical order deliberately unrelated to SDK IDs");
+          "all fifty exact descriptors qualify with physical order deliberately unrelated to SDK IDs");
     const auto ownerChecks = PoolTestHost::ownerCalls / 2;
     const auto reads = PoolTestHost::reads / 2;
     Check(fixture.Bytes() == initial && !H::exchanges && !loadCalls && !loadEffects && !requestCalls,
@@ -206,6 +209,7 @@ int main(int argc, char** argv)
               "numeric open observation preserves MTA's original byte1-or3 predicate");
     }
     Check(!H::exchanges, "property reads never enter even a same-value byte exchange");
+    std::puts("Production native fifty-ID numeric garage descriptor reads fixture completed");
     // Existing named lookup intentionally selects the first physical same-name
     // row, while numeric8 selects its own geometry and numeric11 stays distinct.
     std::uint8_t value = 0;
@@ -243,17 +247,21 @@ int main(int argc, char** argv)
     }
     fixture.Reset();
     value = 0x55;
-    Check(memory.ReadType(0, value) == ClockResult::InvalidArgument && value == 0x55 && memory.SetType(50, 0, &receipt) == ClockResult::InvalidArgument &&
-              !receipt.entered && !H::exchanges,
-          "unqualified IDs remain unavailable instead of an ordinal/name fallback or false success");
+    Check(memory.ReadType(50, value) == ClockResult::InvalidArgument && memory.ReadType(0xffffffffu, value) == ClockResult::InvalidArgument && value == 0x55 &&
+              memory.SetType(50, 0, &receipt) == ClockResult::InvalidArgument && !receipt.entered &&
+              memory.SetType(0xffffffffu, 0, &receipt) == ClockResult::InvalidArgument && !receipt.entered && !H::exchanges,
+          "out-of-range IDs remain unavailable instead of an ordinal/name fallback or false success");
     Check(NativeStreamingCompletionContext::TryEnter(), "fixture owns a genuinely competing loading scope");
     Check(memory.CheckReady() == ClockResult::Busy && memory.SetType(8, 0, &receipt) == ClockResult::Busy && !receipt.entered && !H::exchanges,
           "numeric readiness and writes never borrow another operation's completion scope");
     NativeStreamingCompletionContext::Leave();
     T::Released();
     fixture.Reset();
-    fixture.Name(0, P::Find(8)->name);
-    fixture.Geometry(0, P::Find(8)->geometry);
+    // Every physical row is now qualified. Replace a different descriptor
+    // deliberately; the numeric8 write must still reject its duplicate match.
+    const auto duplicateIndex = fixture.Index(P::Descriptors.size() - 1);
+    fixture.Name(duplicateIndex, P::Find(8)->name);
+    fixture.Geometry(duplicateIndex, P::Find(8)->geometry);
     Check(
         memory.CheckReady() == ClockResult::OwnerConflict && memory.SetType(8, 0, &receipt) == ClockResult::OwnerConflict && !receipt.entered && !H::exchanges,
         "a duplicate full descriptor refuses instead of choosing its first current ordinal");

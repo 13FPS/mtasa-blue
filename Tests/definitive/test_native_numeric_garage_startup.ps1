@@ -1,5 +1,5 @@
 #requires -Version 7.0
-# Run only actual model-independent creation readiness over owned fixture resources.
+# Exercise the complete qualified numeric garage bank over owned fixture resources.
 [CmdletBinding()]
 param()
 $ErrorActionPreference='Stop'
@@ -15,10 +15,10 @@ function Sha([string]$p){(Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.T
 $previous=@{}
 foreach($name in @('TEMP','TMP','PATH','INCLUDE','LIB','LIBPATH','VCToolsInstallDir')){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
 $record=[ordered]@{schema='mta_native_numeric_garage_startup_tests_v1';success=$false;failure=$null;directory=$output;sources=@();results=@();architecture='x64';
-    nativeNumericGarageStartupTested=$false;nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;
+    nativeNumericGarageStartupTested=$false;nativeFullNumericGarageDescriptorReadsTested=$false;nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;
     completeGameReady=$false;completePedReady=$false;remoteDataOwnerReady=$false;sourcesUnchanged=$true;scratch=$scratch;scratchRemoved=$false;
-    initializedPedModelReady=$false;modelBankPublicationReady=$false;
-    scope='Only actual numeric garage readiness/properties: exact16 descriptors among50 permuted native records, typed world/member/count/geometry/owner bookends, shared named/numeric writer and completion gates, one-byte CAS receipts and retained outcomes. Old named first-match semantics remain covered by one shared-boundary case. Historical fixture definitions compile but their mains never run; no native engine instructions or complete factory readiness claimed.'}
+    initializedPedModelReady=$false;modelBankPublicationReady=$false;completeCGameReady=$false;fullMtaReady=$false;
+    scope='Only actual numeric garage readiness/properties: all50 descriptors in a bijection over50 permuted native records, all50 geometry/type/open reads, typed world/member/count/geometry/owner bookends, shared named/numeric writer and completion gates, one-byte CAS receipts and retained outcomes. Old named first-match semantics remain covered by one shared-boundary case. Historical fixture definitions compile but their mains never run; no native engine instructions or complete CGame/MTA readiness claimed.'}
 function RunOwned([string]$exe,[string[]]$arguments,[string]$directory,[string]$label,[int]$timeout){
     $info=[Diagnostics.ProcessStartInfo]::new($exe)
     $info.WorkingDirectory=$directory;$info.UseShellExecute=$false;$info.CreateNoWindow=$true;$info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
@@ -54,9 +54,12 @@ try{
         }
     }
     $names=@($seen)+@(
-        'Build/definitive-recovery/mta-numeric-garage-startup-20261028/numeric-garage-startup-source-ready.json',
-        'Build/definitive-recovery/mta-garage-legacy-normalization-20261028/qualified-numeric16-garage-reference-ready.json',
-        'Build/definitive-recovery/mta-garage-legacy-normalization-20261028/garage-comparison-legacy-normalized-20261028.json')
+        'Build/definitive-recovery/mta-full-numeric-garage-service-20261028/full-numeric-garage-service-source-ready.json',
+        'Build/definitive-recovery/mta-garage-full-normalization-20261028/qualified-numeric50-garage-reference-ready.json',
+        'Build/definitive-recovery/mta-garage-full-normalization-20261028/exact-full-comparison.json',
+        'Build/definitive-recovery/mta-garage-full-normalization-20261028/tuple-qualification.json',
+        'Build/definitive-recovery/mta-garage-full-normalization-20261028/normalized-full-reference.json',
+        'Build/definitive-recovery/mta-garage-full-normalization-20261028/normalization-contract.json')
     $record.sources=@($names|Sort-Object -Unique|ForEach-Object{[ordered]@{path=$_;sha256=(Sha (Join-Path $root $_))}})
     $env:TEMP=$scratch;$env:TMP=$scratch
     $vswhere=Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
@@ -83,7 +86,9 @@ try{
     $record.results+=@{compile=$compile;test=$test;checks=$count;architecture='x64';executable=@{path=$exe;sha256=(Sha $exe)}}
     $record.nativeNumericGarageStartupTested=$test.exitCode -eq 0 -and -not $test.timedOut -and $count -gt 0 -and
         [IO.File]::ReadAllText($test.stdout).Contains('Production native numeric garage startup fixture completed')
-    $record.success=$record.nativeNumericGarageStartupTested
+    $record.nativeFullNumericGarageDescriptorReadsTested=$record.nativeNumericGarageStartupTested -and
+        [IO.File]::ReadAllText($test.stdout).Contains('Production native fifty-ID numeric garage descriptor reads fixture completed')
+    $record.success=$record.nativeNumericGarageStartupTested -and $record.nativeFullNumericGarageDescriptorReadsTested
     if(-not $record.success){throw 'Actual numeric garage startup fixture checks failed'}
 }catch{$record.failure=$_.Exception.ToString();$record.success=$false}
 finally{

@@ -8,12 +8,14 @@ namespace StartupNumericGaragesRuntimeFixture
     namespace G = NativeNamedGarageProfile;
     namespace N = NativeNumericGarageProfile;
     using Writes = WorldGroundOwnerFixture::Writes;
+    constexpr std::array<std::uint32_t, 16> StartupIds{7, 8, 10, 11, 12, 15, 18, 19, 24, 27, 32, 33, 36, 40, 41, 47};
+    static_assert(N::Descriptors.size() == 50 && N::CertifiedPublishedCount == 50);
 
     std::uint32_t PhysicalIndex(std::size_t descriptor) noexcept
     {
-        // Deliberately disagree with SDK/captured native indices. Selection
-        // must use descriptor identity, including the two sprLAe geometries.
-        return 49u - static_cast<std::uint32_t>(descriptor) * 2u;
+        // Reverse the complete bank without a collision or unsigned underflow.
+        // Selection still needs identity, including both sprLAe geometries.
+        return 49u - static_cast<std::uint32_t>(descriptor);
     }
     std::uintptr_t RowRva(std::size_t descriptor) noexcept
     {
@@ -170,12 +172,15 @@ namespace StartupNumericGaragesRuntimeFixture
             if (!phase)
             {
                 Check(access.RequireStartupNumericGaragesReady() == ClockResult::Ok && !ClockNamedGarageOwnerTest::stores && !runtime.stopping.load(),
-                      "all16 current numeric descriptors qualify without a garage write or Stop");
+                      "all50 current numeric descriptors qualify without a garage write or Stop");
+                heartbeat("after complete descriptor readiness");
                 Check(access.GetStartupNumericGarages(published) == ClockResult::Ok && published == &runtime.startupGarages,
                       "actual NativeAccess publishes the real fixed runtime-owned numeric SDK service");
+                heartbeat("after first complete service publication");
                 CGarages* again = nullptr;
                 Check(access.GetStartupNumericGarages(again) == ClockResult::Ok && again == published && !ClockNamedGarageOwnerTest::stores,
                       "repeated current publication borrows one stable service without reallocating wrappers");
+                heartbeat("after repeated complete service publication");
                 const auto originalAdmission = runtime.admissionGeneration.load();
                 runtime.admissionGeneration.store(originalAdmission + 1);
                 CGarages* refused = sentinel;
@@ -196,7 +201,15 @@ namespace StartupNumericGaragesRuntimeFixture
                 heartbeat("after uninterrupted Initialize");
                 Check(ClockNamedGarageOwnerTest::stores == 16, "the actual MTA Initialize schedule performs exactly16 selected byte intents");
                 for (std::size_t slot = 0; slot != N::Descriptors.size(); ++slot)
-                    Check(fixture.Get<std::uint8_t>(RowRva(slot) + G::TypeOffset) == 1, "each initialized SDK ID reaches its permuted physical descriptor row");
+                {
+                    // Full property coverage must leave the inherited MTA
+                    // itinerary narrow: the other thirty-four types persist.
+                    const auto id = N::Descriptors[slot].sdkId;
+                    const bool selected = std::find(StartupIds.begin(), StartupIds.end(), id) != StartupIds.end();
+                    const auto expected = selected ? std::uint8_t{1} : static_cast<std::uint8_t>(0x80u + slot);
+                    Check(fixture.Get<std::uint8_t>(RowRva(slot) + G::TypeOffset) == expected,
+                          "Initialize changes exactly the original sixteen SDK types and preserves every other qualified row");
+                }
                 garage8 = published->GetGarage(8);
                 garage11 = published->GetGarage(11);
                 Check(garage8 && garage11 && garage8 != garage11 && published->GetGarage(8) == garage8,
@@ -238,17 +251,11 @@ namespace StartupNumericGaragesRuntimeFixture
                           ClockNamedGarageOwnerTest::stores == stores && !runtime.stopping.load(),
                       "geometry revocation before publication leaves outputs intact and creates no Stop or write");
                 fixture.Put(RowRva(1) + 7 * sizeof(std::uint32_t), N::Descriptors[1].geometry.words[7]);
-                bool unmapped = false;
-                try
-                {
-                    published->GetGarage(0);
-                }
-                catch (const std::runtime_error&)
-                {
-                    unmapped = true;
-                }
-                Check(unmapped && !published->GetGarage(MAX_GARAGES) && ClockNamedGarageOwnerTest::stores == stores,
-                      "unmapped valid IDs refuse explicitly while out-of-range SDK IDs remain absent");
+                const auto zeroSlot = static_cast<std::size_t>(N::Find(0) - N::Descriptors.data());
+                auto*      zero = published->GetGarage(0);
+                Check(zero && zero == published->GetGarage(0) && zero->GetType() == static_cast<std::uint8_t>(0x80u + zeroSlot) &&
+                          !published->GetGarage(MAX_GARAGES) && !published->GetGarage(0xffffffffu) && ClockNamedGarageOwnerTest::stores == stores,
+                      "newly qualified SDK0 keeps its untouched type and stable wrapper while out-of-range SDK IDs remain absent");
                 Check(!runtime.stopping.load() && runtime.active.load(), "ordinary numeric observations and refusals keep this actual owner active");
                 std::puts("Production startup numeric garages actual owner and SDK fixture completed");
             }

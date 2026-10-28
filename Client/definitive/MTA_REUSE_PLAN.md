@@ -1,3 +1,11 @@
+## Full classic garage identity range (2026-10-28)
+
+The actual classic MTA getter reference now covers SDK IDs 0 through 49 in two stable snapshots. Each available position independently matches one classic authored garage, and the source-defined legacy size tuple is qualified against its authored upper Z before any DE comparison. All fifty identities then match exactly against the complete passive DE bank: ten API float32 words plus directly exposed upper Z, with one distinct match per ID. Names and native row order do not choose the mapping.
+
+The numeric profile retains each matched raw Name8 and all fourteen DE geometry words. The existing native owner still reacquires current world, count, identity and geometry for each property or byte intent; a saved reference grants no native lease. Fixed SDK wrappers cover the full fifty-ID range while the shared MTA initialization policy retains its original sixteen ordered type intents. No extra initialization writes, first-name fallback or ordinal dispatch are added.
+
+Full-bank reference comparison: ca73b534e3b2d410fdeb06884fe27dcfc33e8ceae2d774390f12d9ddf631c39c. Production and focused SDK/native/runtime validation are part of the current offline startup batch. The full CGame factory and playable multiplayer remain incomplete.
+
 # MTA on Definitive Edition: reuse boundary
 
 ## Shared native present ownership (2026-10-28)

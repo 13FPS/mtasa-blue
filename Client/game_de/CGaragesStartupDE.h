@@ -1,7 +1,7 @@
 /****************************************************************************
  * PROJECT: Multi Theft Auto
  * LICENSE: See LICENSE in the repository root
- * PURPOSE: Stable SDK wrappers for the qualified sixteen startup garage IDs
+ * PURPOSE: Stable SDK wrappers for all independently qualified classic garage IDs
  ****************************************************************************/
 #pragma once
 #include "CGaragesDE.h"
@@ -56,7 +56,7 @@ namespace mta::game_de
         };
     }
 
-    // This is the genuine startup subset, not a complete fifty-ID factory.
+    // The complete SDK garage range shares the existing current native owner.
     // Own concrete derived objects because the legacy SDK bases have no
     // virtual destructor. All returned SDK pointers are borrowed and stable.
     class CGaragesStartupDE final : public CGaragesDE
@@ -71,8 +71,8 @@ namespace mta::game_de
         CGaragesStartupDE& operator=(CGaragesStartupDE&&) = delete;
 
     private:
-        NativeNumericGarageAccess&                     native;
-        std::array<NumericGarageSdkDetail::Garage, 16> garages;
+        NativeNumericGarageAccess&                                                                 native;
+        std::array<NumericGarageSdkDetail::Garage, NativeNumericGarageProfile::Descriptors.size()> garages;
     };
     static_assert(!std::is_abstract_v<CGaragesStartupDE> && std::is_base_of_v<CGarages, CGaragesStartupDE>);
 }

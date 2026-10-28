@@ -15,7 +15,8 @@ namespace
         auto& context = *static_cast<StreamingRequestOwnerContext*>(opaque);
         context.result = access.RequestStreamingModel(context.index, context.flags);
     }
-    void NativeStreamingRequestOwnedSdk(ClockImageFixture& fixture, bool specialOnly = false)
+    void NativeStreamingRequestOwnedSdk(ClockImageFixture& fixture, bool specialOnly = false, bool startupStreamingReceiverOnly = false,
+                                        bool startupInitializationReadinessOnly = false)
     {
         namespace P = NativeStreamingRequestProfile;
         namespace L = NativeModelLoadedProfile;
@@ -56,7 +57,8 @@ namespace
         for (const auto& pin : NativeStartGameProfile::Code)
             if (pin.rva == 0xab879c || pin.rva == 0xab92f0 || pin.rva == 0x1af4ef0)
                 admit(pin.rva, pin.bytes.data(), pin.size, PAGE_EXECUTE_READ);
-        alignas(std::uintptr_t) std::array<unsigned char, P::ProviderOffset + sizeof(std::uintptr_t)>    owner{};
+        // Joint readiness samples the real menu fields through +0x353 as well as the provider at +0x170.
+        alignas(std::uintptr_t) std::array<unsigned char, NativeStartupMenuProfile::OwnerBytes>          owner{};
         alignas(std::uintptr_t) std::array<unsigned char, P::ProviderCountOffset + sizeof(std::int32_t)> provider{};
         alignas(std::uintptr_t) std::array<unsigned char, P::ModelPrefixBytes>                           model{};
         alignas(std::uintptr_t) std::array<unsigned char, 0x40>                                          meta{};
@@ -117,7 +119,7 @@ namespace
         ClockStreamingRequestOwnerTest::calls = 0;
         ClockStreamingRequestOwnerTest::result = ClockResult::Ok;
         ClockStreamingRequestOwnerTest::changeRoot = false;
-        if (specialOnly)
+        if (specialOnly || startupStreamingReceiverOnly || startupInitializationReadinessOnly)
         {
             // Reuse only genuine request admission, not historical assertions.
 #include "NativeStreamingSpecialModelOwnerTests.inl"

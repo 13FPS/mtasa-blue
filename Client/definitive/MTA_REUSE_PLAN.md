@@ -1,5 +1,36 @@
 # MTA on Definitive Edition: reuse boundary
 
+## Loaded-world initialization admission (2026-10-28)
+
+The startup CGame layer now supplies the real mandatory preflight for MTA's
+existing Initialize itinerary. On one current owner generation it qualifies
+the sixteen numeric garages, ped metadata creation, retained streaming
+receiver, collision-copy service and native menu. The first refusal propagates
+before any initialization effect. No getter, allocation, model request,
+collision copy or menu write is used as a readiness probe.
+
+The renderer stage remains the owned CPU texture registry initialization in
+its original place after model preparation. Qualification grants no lease:
+each later effect checks its current owner and can refuse while preserving
+the accepted prefix. The producer's existing 500 ms freshness policy is
+unchanged. This completes that preflight hook; a complete CGame factory and
+full native initialization execution still require further work.
+
+## Retained startup streaming receiver (2026-10-28)
+
+The existing callback runtime now owns a concrete startup streaming receiver.
+It inherits the thirteen qualified CStreamingDE operations unchanged, so native
+requests and observations retain their existing current-owner checks. Ten
+unqualified archive, raw-row, buffer, memory and reset operations explicitly
+refuse instead of returning fabricated SDK values.
+
+MTA's special-character startup schedule still creates and publishes each ped
+model before resolving GetStreaming and issuing its real RequestSpecialModel.
+The new CGame layer borrows that retained receiver only after fresh owner,
+generation and special-request prerequisite checks. Construction performs no
+native work; publication grants no lease for a later effect. Full streaming
+and complete game factories remain pending.
+
 ## Qualified startup garage identities (2026-10-28)
 
 Classic MTA's actual garage getters and a bounded DE observation qualify all
@@ -22,8 +53,8 @@ The runtime owns stable concrete wrappers for these sixteen IDs, constructed
 without native calls. Fixed numeric access adapters reuse CGarageNamedDE's
 eight existing SDK properties, while CGaragesDE retains MTA's ordered Initialize
 policy. The wrappers and owning service cannot be copied or moved. Other valid
-garage IDs remain explicitly unavailable; complete fifty-ID coverage, overall
-initialization readiness and the full game/streaming factories remain pending.
+garage IDs remain explicitly unavailable; complete fifty-ID coverage and the
+full game/streaming factories remain pending.
 
 ## Shared model streaming state query (2026-10-28)
 

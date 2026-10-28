@@ -16,6 +16,10 @@ namespace mta::game_de
         // metadata, request, retained journal or lease; every effect still
         // performs its own original current-owner validation. Older owners
         // must refuse instead of claiming these genuine native capabilities.
+        // Qualify the complete later Initialize itinerary on one current
+        // owner generation, without running any effect or granting a lease
+        // for its duration. Later operations still qualify themselves.
+        virtual ClockResult RequireStartupInitializationReady() noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult RequireStartupPedModelCreationReady() noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult RequireStartupSpecialModelRequestReady() noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult RequireStartupCollisionCopyReady() noexcept { return ClockResult::NotInitialized; }

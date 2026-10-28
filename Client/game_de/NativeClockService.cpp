@@ -91,6 +91,7 @@
 #include "NativeNamedGarageMemory.h"
 #include "NativeNumericGarageMemory.h"
 #include "CGaragesStartupDE.h"
+#include "CStreamingStartupDE.h"
 #include "NativePedMetadataMemory.h"
 #include "NativePedRenderMemory.h"
 #include "NativeTaskRemovalCalls.h"
@@ -295,8 +296,11 @@ namespace mta::game_de
             ClockResult ReadModelAnimFileIndex(std::uint32_t, std::uint32_t&) noexcept override;
             ClockResult CreateAndPublishPedModelMetadata(std::uint32_t) noexcept override;
             ClockResult CopyStartupModelCollision(std::uint32_t, std::uint32_t) noexcept override;
+            ClockResult RequireStartupInitializationReady() noexcept override;
             ClockResult RequireStartupPedModelCreationReady() noexcept override;
             ClockResult RequireStartupSpecialModelRequestReady() noexcept override;
+            ClockResult RequireStartupStreamingReceiverReady() noexcept override;
+            ClockResult GetStartupStreaming(CStreaming*&) noexcept override;
             ClockResult RequireStartupCollisionCopyReady() noexcept override;
             ClockResult RequireStartupNativeMenuReady() noexcept override;
             ClockResult HideStartupNativeMenu() noexcept override;
@@ -708,8 +712,9 @@ namespace mta::game_de
             CWeatherOverridesDE  weatherSdk{access, access, access};
             // Fixed concrete wrappers own no native row, allocation or lease.
             // The access owner is constructed first and outlives every borrow.
-            CGaragesStartupDE startupGarages{access};
-            Counters          counters;
+            CGaragesStartupDE   startupGarages{access};
+            CStreamingStartupDE startupStreaming{access};
+            Counters            counters;
             // Destroy the hold before the shared peer recovery vector/gates.
             // Its normal lifetime is explicitly retired by Reset/End.
             PeerHold weatherOverridePeers;
@@ -5189,6 +5194,41 @@ namespace mta::game_de
                 output = next;
             return result;
         }
+        ClockResult NativeAccess::RequireStartupInitializationReady() noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            if (!generation)
+                return ClockResult::OwnerConflict;
+            // Match the genuine later Initialize dependencies without invoking
+            // getters early, creating model metadata, requesting a model, or
+            // writing a garage/menu byte as a readiness probe. Streaming's
+            // owned receiver check includes the existing special-request gate.
+            result = RequireStartupNumericGaragesReady();
+            if (result != ClockResult::Ok)
+                return result;
+            result = RequireStartupPedModelCreationReady();
+            if (result != ClockResult::Ok)
+                return result;
+            result = RequireStartupStreamingReceiverReady();
+            if (result != ClockResult::Ok)
+                return result;
+            result = RequireStartupCollisionCopyReady();
+            if (result != ClockResult::Ok)
+                return result;
+            result = RequireStartupNativeMenuReady();
+            if (result != ClockResult::Ok)
+                return result;
+            // Renderer initialization owns a CPU registry in this CGame; its
+            // construction is not native/GPU readiness and must not be run as
+            // a probe. No success here reserves the producer's existing lease:
+            // each later effect can refuse and retain its accepted prefix.
+            result = CheckTimingOwner();
+            return result == ClockResult::Ok && runtime.generation.load() != generation ? ClockResult::BindingChanged : result;
+        }
+
         ClockResult NativeAccess::RequireStartupPedModelCreationReady() noexcept
         {
             auto result = CheckTimingOwner();
@@ -5235,6 +5275,39 @@ namespace mta::game_de
                 return result;
             result = CheckTimingOwner();
             return result == ClockResult::Ok && runtime.generation.load() != generation ? ClockResult::BindingChanged : result;
+        }
+
+        ClockResult NativeAccess::RequireStartupStreamingReceiverReady() noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            if (!generation || !runtime.startupStreaming.IsOwnedBy(runtime.access))
+                return ClockResult::OwnerConflict;
+            // Qualify the actual retained receiver's one startup intent without
+            // resolving the SDK getter early or issuing a speculative request.
+            // Its inherited dispatch still checks the native owner per effect.
+            result = RequireStartupSpecialModelRequestReady();
+            if (result != ClockResult::Ok)
+                return result;
+            result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (runtime.generation.load() != generation)
+                return ClockResult::BindingChanged;
+            return runtime.startupStreaming.IsOwnedBy(runtime.access) ? ClockResult::Ok : ClockResult::OwnerConflict;
+        }
+
+        ClockResult NativeAccess::GetStartupStreaming(CStreaming*& output) noexcept
+        {
+            const auto result = RequireStartupStreamingReceiverReady();
+            if (result != ClockResult::Ok)
+                return result;
+            // Borrow the owned object only after fresh qualification. Refusals
+            // leave the caller's output untouched and create no native effects.
+            output = &runtime.startupStreaming;
+            return ClockResult::Ok;
         }
 
         ClockResult NativeAccess::RequireStartupCollisionCopyReady() noexcept

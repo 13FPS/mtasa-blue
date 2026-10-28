@@ -77,6 +77,7 @@
 #include "NativeStartupMenuAccess.h"
 #include "NativeStartupPreparationAccess.h"
 #include "NativeNumericGarageAccess.h"
+#include "NativeStartupStreamingAccess.h"
 #include <cstdint>
 
 class CStats;
@@ -148,7 +149,8 @@ namespace mta::game_de
                                    public NativeAnimationManagerAccess,
                                    public NativeStartupMenuAccess,
                                    public NativeStartupPreparationAccess,
-                                   public NativeNumericGarageAccess
+                                   public NativeNumericGarageAccess,
+                                   public NativeStartupStreamingAccess
     {
     public:
         virtual ClockResult SetTimeScale(float value) noexcept = 0;

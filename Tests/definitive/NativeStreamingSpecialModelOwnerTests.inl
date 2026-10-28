@@ -155,91 +155,108 @@
                   ClockSpecialModelOwnerTest::calls == calls,
               "retirement never repeats special-model entry or rolls back persistent name/request effects");
     };
-    ClockResult specialResult = ClockResult::NotInitialized;
-    // Exercise mutable caller intent and an actual SDK string literal from
-    // the caller module; neither grants authority over native image data.
-    char mixedName[] = "Mixed_2", persistentName[] = "persist";
-    resetSpecial();
+    if (startupInitializationReadinessOnly)
     {
-        NativeClockService service;
-        specialCall.action = [&](NativeGameTimingAccess& access) { specialResult = access.RequestStreamingSpecialModel(3, mixedName, 0x80000116u); };
-        BeginOwned(service, fixture, false, true, true, &SpecialCallback::Invoke, &specialCall);
-        Check(runtime.access.RequestStreamingSpecialModel(3, "special", 6) != ClockResult::Ok && !ClockSpecialModelOwnerTest::calls,
-              "retained model context does not grant between-callback special entry");
-        std::thread foreign([&] { specialResult = runtime.access.RequestStreamingSpecialModel(3, "special", 6); });
-        foreign.join();
-        Check(specialResult != ClockResult::Ok && !ClockSpecialModelOwnerTest::calls && !runtime.stopping.load(),
-              "foreign special request never enters or Stops another owner");
-        const auto invokeSpecial = [&]
-        {
-            Check(service.Renew(runtime.generation.load()), "renew qualified special-model callback");
-            fixture.invokeTimer();
-        };
-        store(model.data(), 0x22, std::int16_t{1});
-        invokeSpecial();
-        Check(specialResult == ClockResult::UnsupportedBuild && !ClockSpecialModelOwnerTest::calls && !runtime.stopping.load(),
-              "positive native model refs refuse unqualified ped/object retirement before entry");
-        store(model.data(), 0x22, std::int16_t{0});
-        fixture.Put(X::NameInitializedRva, std::uint8_t{0});
-        invokeSpecial();
-        Check(specialResult != ClockResult::Ok && !ClockSpecialModelOwnerTest::calls && !runtime.stopping.load(),
-              "uninitialized real FName pool is not bypassed by owner wiring");
-        fixture.Put(X::NameInitializedRva, initializedNames);
-        ClockSpecialModelOwnerTest::during = +[]()
-        {
-            const CVector position(0, 0, 0);
-            char          nestedName[] = "again";
-            Check(runtime.access.RequestStreamingSpecialModel(3, nestedName, 6) == ClockResult::Busy &&
-                      runtime.access.RequestStreamingModel(3, 6) == ClockResult::Busy && runtime.access.RequestStreamingUpgrade(1000, 6) == ClockResult::Busy &&
-                      runtime.access.LoadStreamingModels(false) == ClockResult::Busy && runtime.access.LoadStreamingModels(true) == ClockResult::Busy &&
-                      runtime.access.LoadStreamingScene(&position) == ClockResult::Busy,
-                  "genuine special entry retains the existing shared loading gate against every adapter loading intent");
-        };
-        invokeSpecial();
-        Check(specialResult == ClockResult::Ok && ClockSpecialModelOwnerTest::calls == 1 &&
-                  ClockSpecialModelOwnerTest::entry == reinterpret_cast<NativeStreamingSpecialModelCalls::NativeFunction>(fixture.image + X::EntryRva) &&
-                  ClockSpecialModelOwnerTest::model == 3 && ClockSpecialModelOwnerTest::channel == 0x80000116u &&
-                  std::strcmp(ClockSpecialModelOwnerTest::copied.data(), "Mixed_2") == 0,
-              "actual callback admits one genuine entry with copied original name and every DWORD channel bit");
-        resetSpecial();
-        specialCall.action = [&](NativeGameTimingAccess&)
-        {
-            try
-            {
-                CStreaming& sdk = specialSdk;
-                sdk.RequestSpecialModel(3, "eight888", 0xffffffffu);
-                specialResult = ClockResult::Ok;
-            }
-            catch (const std::exception& error)
-            {
-                Check(false, error.what());
-            }
-        };
-        invokeSpecial();
-        Check(specialResult == ClockResult::Ok && ClockSpecialModelOwnerTest::calls == 2 && ClockSpecialModelOwnerTest::channel == 0xffffffffu &&
-                  std::strcmp(reinterpret_cast<const char*>(model.data() + 0xc), "eight888") == 0,
-              "actual SDK RequestSpecialModel reaches the same retained native owner after the previous gate was released");
-        retireSpecial(service);
+        // Reuse actual provider/name/world admission without replaying either historical matrix.
+#include "NativeStartupInitializationReadinessRuntimeOwnerTests.inl"
     }
-    for (const unsigned failure : {1u, 2u})
+    else if (startupStreamingReceiverOnly)
     {
+        // Reuse native admission without replaying the historical operation matrix.
+#include "NativeStartupStreamingReceiverRuntimeOwnerTests.inl"
+    }
+    else
+    {
+        ClockResult specialResult = ClockResult::NotInitialized;
+        // Exercise mutable caller intent and an actual SDK string literal from
+        // the caller module; neither grants authority over native image data.
+        char mixedName[] = "Mixed_2", persistentName[] = "persist";
         resetSpecial();
-        ClockSpecialModelOwnerTest::mode = failure;
-        NativeClockService service;
-        specialCall.action = [&](NativeGameTimingAccess& access) { specialResult = access.RequestStreamingSpecialModel(3, persistentName, 6); };
-        BeginOwned(service, fixture, false, true, true, &SpecialCallback::Invoke, &specialCall);
-        const auto before = ClockSpecialModelOwnerTest::calls;
-        fixture.invokeTimer();
-        Check(specialResult != ClockResult::Ok && runtime.stopping.load() && ClockSpecialModelOwnerTest::calls == before + 1 &&
-                  std::strcmp(reinterpret_cast<const char*>(model.data() + 0xc), "persist") == 0 && fixture.Get<unsigned char>(row + L::StateOffset) == 2,
-              "entered exception or post-root loss Stops the admitted owner and preserves native name/request prefix");
-        retireSpecial(service);
-        Check(ClockSpecialModelOwnerTest::calls == before + 1 && std::strcmp(reinterpret_cast<const char*>(model.data() + 0xc), "persist") == 0,
-              "cleanup never repeats native special entry or restores its accepted name");
+        {
+            NativeClockService service;
+            specialCall.action = [&](NativeGameTimingAccess& access) { specialResult = access.RequestStreamingSpecialModel(3, mixedName, 0x80000116u); };
+            BeginOwned(service, fixture, false, true, true, &SpecialCallback::Invoke, &specialCall);
+            Check(runtime.access.RequestStreamingSpecialModel(3, "special", 6) != ClockResult::Ok && !ClockSpecialModelOwnerTest::calls,
+                  "retained model context does not grant between-callback special entry");
+            std::thread foreign([&] { specialResult = runtime.access.RequestStreamingSpecialModel(3, "special", 6); });
+            foreign.join();
+            Check(specialResult != ClockResult::Ok && !ClockSpecialModelOwnerTest::calls && !runtime.stopping.load(),
+                  "foreign special request never enters or Stops another owner");
+            const auto invokeSpecial = [&]
+            {
+                Check(service.Renew(runtime.generation.load()), "renew qualified special-model callback");
+                fixture.invokeTimer();
+            };
+            store(model.data(), 0x22, std::int16_t{1});
+            invokeSpecial();
+            Check(specialResult == ClockResult::UnsupportedBuild && !ClockSpecialModelOwnerTest::calls && !runtime.stopping.load(),
+                  "positive native model refs refuse unqualified ped/object retirement before entry");
+            store(model.data(), 0x22, std::int16_t{0});
+            fixture.Put(X::NameInitializedRva, std::uint8_t{0});
+            invokeSpecial();
+            Check(specialResult != ClockResult::Ok && !ClockSpecialModelOwnerTest::calls && !runtime.stopping.load(),
+                  "uninitialized real FName pool is not bypassed by owner wiring");
+            fixture.Put(X::NameInitializedRva, initializedNames);
+            ClockSpecialModelOwnerTest::during = +[]()
+            {
+                const CVector position(0, 0, 0);
+                char          nestedName[] = "again";
+                Check(runtime.access.RequestStreamingSpecialModel(3, nestedName, 6) == ClockResult::Busy &&
+                          runtime.access.RequestStreamingModel(3, 6) == ClockResult::Busy &&
+                          runtime.access.RequestStreamingUpgrade(1000, 6) == ClockResult::Busy &&
+                          runtime.access.LoadStreamingModels(false) == ClockResult::Busy && runtime.access.LoadStreamingModels(true) == ClockResult::Busy &&
+                          runtime.access.LoadStreamingScene(&position) == ClockResult::Busy,
+                      "genuine special entry retains the existing shared loading gate against every adapter loading intent");
+            };
+            invokeSpecial();
+            Check(specialResult == ClockResult::Ok && ClockSpecialModelOwnerTest::calls == 1 &&
+                      ClockSpecialModelOwnerTest::entry == reinterpret_cast<NativeStreamingSpecialModelCalls::NativeFunction>(fixture.image + X::EntryRva) &&
+                      ClockSpecialModelOwnerTest::model == 3 && ClockSpecialModelOwnerTest::channel == 0x80000116u &&
+                      std::strcmp(ClockSpecialModelOwnerTest::copied.data(), "Mixed_2") == 0,
+                  "actual callback admits one genuine entry with copied original name and every DWORD channel bit");
+            resetSpecial();
+            specialCall.action = [&](NativeGameTimingAccess&)
+            {
+                try
+                {
+                    CStreaming& sdk = specialSdk;
+                    sdk.RequestSpecialModel(3, "eight888", 0xffffffffu);
+                    specialResult = ClockResult::Ok;
+                }
+                catch (const std::exception& error)
+                {
+                    Check(false, error.what());
+                }
+            };
+            invokeSpecial();
+            Check(specialResult == ClockResult::Ok && ClockSpecialModelOwnerTest::calls == 2 && ClockSpecialModelOwnerTest::channel == 0xffffffffu &&
+                      std::strcmp(reinterpret_cast<const char*>(model.data() + 0xc), "eight888") == 0,
+                  "actual SDK RequestSpecialModel reaches the same retained native owner after the previous gate was released");
+            retireSpecial(service);
+        }
+        for (const unsigned failure : {1u, 2u})
+        {
+            resetSpecial();
+            ClockSpecialModelOwnerTest::mode = failure;
+            NativeClockService service;
+            specialCall.action = [&](NativeGameTimingAccess& access) { specialResult = access.RequestStreamingSpecialModel(3, persistentName, 6); };
+            BeginOwned(service, fixture, false, true, true, &SpecialCallback::Invoke, &specialCall);
+            const auto before = ClockSpecialModelOwnerTest::calls;
+            fixture.invokeTimer();
+            Check(specialResult != ClockResult::Ok && runtime.stopping.load() && ClockSpecialModelOwnerTest::calls == before + 1 &&
+                      std::strcmp(reinterpret_cast<const char*>(model.data() + 0xc), "persist") == 0 && fixture.Get<unsigned char>(row + L::StateOffset) == 2,
+                  "entered exception or post-root loss Stops the admitted owner and preserves native name/request prefix");
+            retireSpecial(service);
+            Check(ClockSpecialModelOwnerTest::calls == before + 1 && std::strcmp(reinterpret_cast<const char*>(model.data() + 0xc), "persist") == 0,
+                  "cleanup never repeats native special entry or restores its accepted name");
+        }
     }
     ClockSpecialModelOwnerTest::image = ClockSpecialModelOwnerTest::metadata = 0;
     ClockSpecialModelOwnerTest::during = nullptr;
     ClockSpecialModelOwnerTest::mode = 0;
-    std::puts("Production native special model callback owner fixture completed");
-    std::puts("Production actual special model SDK callback fixture completed");
+    if (!startupStreamingReceiverOnly && !startupInitializationReadinessOnly)
+    {
+        std::puts("Production native special model callback owner fixture completed");
+        std::puts("Production actual special model SDK callback fixture completed");
+    }
 }

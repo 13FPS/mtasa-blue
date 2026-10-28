@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
+    [ValidateSet('StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -23,6 +23,14 @@ $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;a
 # Historical markers start false and are set only by the branch that actually
 # executed. Focus mode must never inherit the cumulative suite's claims.
 $record['runScope'] = $Scope
+$record['nativeStartupInitializationReadinessRuntimeTested']=$false
+$record['nativeStartupInitializationJointReadinessTested']=$false
+$record['nativeStartupInitializationFreshRefusalsTested']=$false
+$record['nativeStartupInitializationBookendRefusalTested']=$false
+$record['nativeStartupInitializationNoEffectsTested']=$false
+$record['nativeStartupStreamingReceiverRuntimeTested']=$false
+$record['nativeStartupStreamingReceiverFreshPublicationTested']=$false
+$record['nativeStartupStreamingReceiverNativeDispatchTested']=$false
 $record['nativeStartupNumericGaragesRuntimeTested']=$false
 $record['nativeStartupNumericGaragesRuntimeStopTested']=$false
 $record['nativeStartupPreparationReadinessRuntimeTested']=$false
@@ -637,6 +645,11 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         'Client/game_de/NativeNumericGarageMemory.h','Client/game_de/NativeNumericGarageMemory.cpp','Client/game_de/NativeGarageMemoryShared.h',
         'Client/game_de/CGaragesStartupDE.h','Client/game_de/CGaragesStartupDE.cpp','Client/game_de/CGameNumericGaragesDE.h',
         'Tests/definitive/NativeStartupNumericGaragesRuntimeOwnerTests.inl')
+    $sourceNames += @('Client/game_de/NativeStartupStreamingAccess.h','Client/game_de/CStreamingStartupDE.h',
+        'Client/game_de/CStreamingStartupDE.cpp','Client/game_de/CGameStartupStreamingDE.h',
+        'Tests/definitive/NativeStartupStreamingReceiverRuntimeOwnerTests.inl')
+    $sourceNames += @('Client/game_de/CGameStartupInitializationDE.h',
+        'Tests/definitive/NativeStartupInitializationReadinessRuntimeOwnerTests.inl')
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
@@ -940,6 +953,7 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         # The new owner scope instantiates the actual SDK streaming receiver;
         # link its production implementation rather than a fixture substitute.
         (Join-Path $taskRoot 'Client/game_de/CStreamingDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CStreamingStartupDE.cpp'),
         # Runtime also references collision-only loading. Link its separate
         # production TU once; the full-scene fixture keeps its aggregate seam.
         (Join-Path $taskRoot 'Client/game_de/NativeStreamingCollisionSceneCalls.cpp'),
@@ -1065,7 +1079,9 @@ namespace ClockPrivateHierarchyParentWriteFixture {
     # process retirement; keep its large synthetic PE in owned disposable scratch.
     # Preserve the argument vector: an if result with one item becomes a
     # scalar string, so later += would append the switch to the path.
-    $fixtureArguments = @(if ($Scope -in @('StartupPreparationReadiness','StartupNumericGarages')) { $scratchRoot } else { $outputRoot })
+    $fixtureArguments = @(if ($Scope -in @('StartupPreparationReadiness','StartupNumericGarages','StartupStreamingReceiver','StartupInitializationReadiness')) { $scratchRoot } else { $outputRoot })
+    if ($Scope -eq 'StartupInitializationReadiness') { $fixtureArguments += '--startup-initialization-readiness' }
+    if ($Scope -eq 'StartupStreamingReceiver') { $fixtureArguments += '--startup-streaming-receiver' }
     if ($Scope -eq 'StartupNumericGarages') { $fixtureArguments += '--startup-numeric-garages' }
     if ($Scope -eq 'StartupPreparationReadiness') { $fixtureArguments += '--startup-preparation-readiness' }
     if ($Scope -eq 'AnimationAssociationFloat') { $fixtureArguments += '--animation-association-float' }
@@ -1661,7 +1677,7 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         $text = $texts -join [Environment]::NewLine
     } else {
         $testExecutable = $executable
-    if ($Scope -in @('StartupPreparationReadiness','StartupNumericGarages')) {
+    if ($Scope -in @('StartupPreparationReadiness','StartupNumericGarages','StartupStreamingReceiver','StartupInitializationReadiness')) {
         # The fixture's existing path guard requires its backing-image directory
         # to equal its executable directory. Run an exact owned scratch copy so
         # that guard stays intact and neither retained synthetic PE survives.
@@ -1676,7 +1692,23 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if($Scope -eq 'StartupNumericGarages'){
+    if($Scope -eq 'StartupInitializationReadiness'){
+        $record.nativeStartupInitializationJointReadinessTested=$text.Contains('Production startup initialization joint readiness actual owner completed')
+        $record.nativeStartupInitializationFreshRefusalsTested=$text.Contains('Production startup initialization current refusals and owner bookends completed')
+        $record.nativeStartupInitializationBookendRefusalTested=$text.Contains('Production startup initialization current refusals and owner bookends completed')
+        $record.nativeStartupInitializationNoEffectsTested=$text.Contains('Production startup initialization readiness no-effects and clean retirement completed')
+        $record.nativeStartupInitializationReadinessRuntimeTested=$record.nativeStartupInitializationJointReadinessTested -and $record.nativeStartupInitializationFreshRefusalsTested -and
+            $record.nativeStartupInitializationBookendRefusalTested -and $record.nativeStartupInitializationNoEffectsTested -and $text.Contains('Production startup initialization readiness runtime fixture completed')
+        if(-not $record.nativeStartupInitializationReadinessRuntimeTested){throw 'Actual joint startup initialization readiness runtime scope incomplete'}
+        $record.productionNativeCallbackTested=$true
+    } elseif($Scope -eq 'StartupStreamingReceiver'){
+        $record.nativeStartupStreamingReceiverFreshPublicationTested=$text.Contains('Production startup streaming receiver guards and fresh borrowed publication completed')
+        $record.nativeStartupStreamingReceiverNativeDispatchTested=$text.Contains('Production startup streaming receiver actual inherited request and clean retirement completed')
+        $record.nativeStartupStreamingReceiverRuntimeTested=$record.nativeStartupStreamingReceiverFreshPublicationTested -and
+            $record.nativeStartupStreamingReceiverNativeDispatchTested -and $text.Contains('Production startup streaming receiver runtime fixture completed')
+        if(-not $record.nativeStartupStreamingReceiverRuntimeTested){throw 'Actual startup streaming receiver runtime scope incomplete'}
+        $record.productionNativeCallbackTested=$true
+    } elseif($Scope -eq 'StartupNumericGarages'){
         $record.nativeStartupNumericGaragesRuntimeStopTested=$text.Contains('Production startup numeric garages entered failure stopped without replay and independent timing restored')
         $record.nativeStartupNumericGaragesRuntimeTested=$record.nativeStartupNumericGaragesRuntimeStopTested -and
             $text.Contains('Production startup numeric garages actual owner and SDK fixture completed') -and

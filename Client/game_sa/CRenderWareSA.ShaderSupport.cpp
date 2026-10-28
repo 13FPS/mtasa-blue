@@ -15,6 +15,7 @@
 #include "CGameSA.h"
 #include "CRenderWareSA.ShaderMatching.h"
 #include "CRenderWareSA.ShaderSupport.h"
+#include <game/CTextureWatchInitializationPolicy.h>
 
 extern CCoreInterface* g_pCore;
 extern CGameSA*        pGame;
@@ -710,12 +711,10 @@ void CRenderWareSA::GetShaderReplacementStats(SShaderReplacementStats& outStats)
 ////////////////////////////////////////////////////////////////
 void CRenderWareSA::Initialize()
 {
-    if (!MapContains(m_D3DDataTexInfoMap, FAKE_D3DTEXTURE_NO_TEXTURE))
-    {
-        // Make a fake texinfo to handle all non-textures
-        STexInfo* pTexInfo = CreateTexInfo(FAKE_RWTEXTURE_NO_TEXTURE, FAKE_NAME_NO_TEXTURE, FAKE_D3DTEXTURE_NO_TEXTURE);
-        OnTextureStreamIn(pTexInfo);
-    }
+    MtaGame::CTextureWatchInitializationPolicy::Initialize(
+        [this] { return MapContains(m_D3DDataTexInfoMap, FAKE_D3DTEXTURE_NO_TEXTURE); },
+        [this] { return CreateTexInfo(FAKE_RWTEXTURE_NO_TEXTURE, FAKE_NAME_NO_TEXTURE, FAKE_D3DTEXTURE_NO_TEXTURE); },
+        [this](STexInfo* texture) { OnTextureStreamIn(texture); });
 }
 
 ////////////////////////////////////////////////////////////////

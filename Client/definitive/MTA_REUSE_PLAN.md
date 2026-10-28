@@ -1,5 +1,19 @@
 # MTA on Definitive Edition: reuse boundary
 
+## Shared renderer preparation (2026-10-28)
+
+SA and DE now consume the same CPU texture-watch metadata and MTA's existing
+shader-matching algorithm. The original wildcard, subtraction, entity, priority,
+layer, cache and removal behavior is shared. SA retains its original maps,
+constructor, native hooks and GPU traversal.
+
+The DE preparation owner registers the original no-texture key -9, texture tag
+-10 and name unnamed, with membership-based idempotency and creation before
+matching insertion. The new abstract CGameRenderPreparationDE owns that real
+registry and supplies the inherited later Initialize renderer stage. Accepted
+publication survives a later refusal. Native rendering, native menu handling,
+other required services and the complete game factory remain separate gates.
+
 ## Native startup collision repair (2026-10-28)
 
 The broken-model stage now uses MTA's original conditional collision-pointer

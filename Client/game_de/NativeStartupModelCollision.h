@@ -58,6 +58,9 @@ namespace mta::game_de::NativeStartupModelCollision
         std::atomic<Stage> stage{Stage::Empty};
         Receipt            journal{};
     };
+    // Current capability prerequisites only: no record, selected model field,
+    // pointer CAS or persistent lifetime is produced by this observation.
+    ClockResult CheckReady(std::uintptr_t image, CheckOwner) noexcept;
     // One attempt per record, including skips and rejected CAS. A later
     // explicit Initialize call may create new records; failure never retries.
     ClockResult Copy(std::uintptr_t image, Record&, std::uint64_t generation, std::uint32_t targetModel, std::uint32_t sourceModel, CheckOwner,

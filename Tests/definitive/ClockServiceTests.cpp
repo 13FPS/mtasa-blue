@@ -262,6 +262,7 @@
 #include <tlhelp32.h>
 #include <type_traits>
 #include <vector>
+#include <tuple>
 #include <functional>
 #include "../../Client/game_de/CAnimManagerDE.h"
 #include "../../Client/game_de/CAnimBlendAssocGroupDE.h"
@@ -8468,6 +8469,7 @@ namespace
 #include "NativePedModelCreationRuntimeOwnerTests.inl"
 #include "NativeStartupModelCollisionRuntimeOwnerTests.inl"
 #include "NativeStartupMenuRuntimeOwnerTests.inl"
+#include "NativeStartupPreparationReadinessRuntimeOwnerTests.inl"
 #include "AnimationSequenceStorageManager.generated.h"
 #include "NativeCustomAnimationResourcesOwnerTests.inl"
 #include "AnimationManagerRefs.generated.h"
@@ -8531,6 +8533,7 @@ static_assert(std::is_same_v<decltype(&PrivateAnimationFactoryManagerReceiver::G
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool startupPreparationReadinessOnly = argc == 3 && std::strcmp(argv[2], "--startup-preparation-readiness") == 0;
     const bool startupMenuSuccess = argc == 3 && std::strcmp(argv[2], "--startup-menu-runtime-success") == 0;
     const bool startupMenuAbsent = argc == 3 && std::strcmp(argv[2], "--startup-menu-runtime-no-widget") == 0;
     const bool startupMenuBefore = argc == 3 && std::strcmp(argv[2], "--startup-menu-runtime-unknown-before") == 0;
@@ -8693,22 +8696,29 @@ int main(int argc, char** argv)
     const bool waterOnly = orientationWithWater || (argc == 3 && std::strcmp(argv[2], "--ped-water") == 0);
     const bool poseOnly = argc == 3 && std::strcmp(argv[2], "--ped-pose") == 0;
     const bool poolRegistryOnly = argc == 3 && std::strcmp(argv[2], "--ped-pool-registry") == 0;
-    Check((argc == 2 || startupMenuOnly || startupCollisionOnly || pedCreationLifecycleOnly || constructorOnly || pedOwnerOnly || currentWeaponOnly ||
-           garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly || waterOnly || animationOnly || animationNameOnly || animationManagerOnly ||
-           animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly || fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly ||
-           gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly || worldLineOnly || worldAreaOnly || worldQueriesOnly ||
-           worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly || cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly ||
-           pedRebuildOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly || animationBlockRefsOnly || animationBlockFactoryOnly ||
-           customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly || animationGatewayOnly || customAnimationSequenceOnly ||
-           customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly || customAnimationSequenceNameOnly || freshCompressedSequenceOnly ||
-           privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly || privateHierarchyParentOnly || privateHierarchyEmptyOnly ||
-           freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly || customAnimationCleanupOnly ||
-           standaloneSequenceOperationsOnly || animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly ||
+    Check((argc == 2 || startupPreparationReadinessOnly || startupMenuOnly || startupCollisionOnly || pedCreationLifecycleOnly || constructorOnly ||
+           pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly || waterOnly || animationOnly ||
+           animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly || fireCollisionOnly || fireOnly ||
+           collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly || worldLineOnly ||
+           worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly || cameraSphereOnly ||
+           pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly || animationBlockRefsOnly ||
+           animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly || animationGatewayOnly ||
+           customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly || customAnimationSequenceNameOnly ||
+           freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly || privateHierarchyParentOnly ||
+           privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly ||
+           customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly ||
            animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly || animationGroupValidityOnly ||
            animationIdValidityOnly || animationAssociationGroupReadsOnly || animationStaticAssociationReadsOnly || staticAssociationWritesOnly ||
            pedRenderOnly || privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (startupPreparationReadinessOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        StartupPreparationReadinessRuntimeFixture::Run(fixture);
+        return 0;
+    }
     if (startupMenuOnly)
     {
         ClockImageFixture fixture;

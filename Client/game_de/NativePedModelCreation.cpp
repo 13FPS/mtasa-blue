@@ -13,6 +13,7 @@
 #include <array>
 #include <cstring>
 #include <intrin.h>
+#include <limits>
 
 namespace mta::game_de::NativePedModelCreation
 {
@@ -54,6 +55,23 @@ namespace mta::game_de::NativePedModelCreation
             };
             return check(heap.authorityVtable, AllocLayout::AuthorityMallocRva, AllocLayout::AuthorityFreeRva) &&
                    (heap.current == heap.authority || check(heap.currentVtable, AllocLayout::ProxyMallocRva, AllocLayout::ProxyFreeRva));
+        }
+        bool AllocationProfile(std::uintptr_t image) noexcept
+        {
+            // Allocate's existing storage controller qualifies these exact
+            // malloc/free bodies in addition to the heap transaction profile.
+            // Readiness must prove the same routes without entering either.
+            if (!Heap::QualifyProfile(image))
+                return false;
+            for (const auto& pin : AllocLayout::Code)
+            {
+                std::array<unsigned char, AllocLayout::MaximumPinBytes> bytes{};
+                if (!pin.size || pin.size > bytes.size() || pin.rva > Layout::ImageSize || pin.size > Layout::ImageSize - pin.rva ||
+                    !NativeImageAccess::ReadImage(image, image + pin.rva, bytes.data(), pin.size, false, true) ||
+                    std::memcmp(bytes.data(), pin.bytes, pin.size))
+                    return false;
+            }
+            return true;
         }
         ClockResult CaptureHeap(std::uintptr_t image, CheckOwner owner, std::uintptr_t authority, Heap::Value& output) noexcept
         {
@@ -140,6 +158,45 @@ namespace mta::game_de::NativePedModelCreation
             explicit RetirementScope(RetirementGuard& guard) noexcept : previous(retirement) { retirement = &guard; }
             ~RetirementScope() { retirement = previous; }
         };
+    }
+
+    ClockResult CheckReady(std::uintptr_t image, CheckOwner owner) noexcept
+    {
+        namespace D = PedCreationDetail;
+        if (!image || !owner)
+            return ClockResult::NotInitialized;
+        if (image > (std::numeric_limits<std::uintptr_t>::max)() - D::Layout::ImageSize)
+            return ClockResult::BindingChanged;
+        auto result = owner();
+        if (result != ClockResult::Ok)
+            return result;
+        if (!D::Context::TryEnter())
+            return ClockResult::Busy;
+        D::Context::Scope scope;
+        D::Context::Value world, nextWorld;
+        D::Heap::Value    heap;
+        D::Default::Value canonical;
+        if ((result = D::World(image, owner, nullptr, world)) != ClockResult::Ok)
+            return result;
+        // Structural bank qualification permits empty slots. Selecting or
+        // borrowing any of the future44 model rows here would make native
+        // creation depend on the very metadata that it must first publish.
+        if (!NativeModelBankReader::Revalidate({image}) || !D::AllocationProfile(image) || !D::Vtable(image))
+            return ClockResult::BindingChanged;
+        if ((result = D::Heap::Capture(image, heap)) != ClockResult::Ok)
+            return result;
+        if (!D::Slots(image, heap))
+            return ClockResult::BindingChanged;
+        if ((result = D::Default::Read(image, owner, canonical)) != ClockResult::Ok)
+            return result;
+        // These bounded stack snapshots qualify the completed shared default,
+        // allocator and current world. They own no model and create no debt.
+        if ((result = D::World(image, owner, &world, nextWorld)) != ClockResult::Ok ||
+            (result = D::Default::Recheck(image, owner, canonical)) != ClockResult::Ok || (result = D::Heap::Recheck(image, heap)) != ClockResult::Ok)
+            return result;
+        if (!NativeModelBankReader::Revalidate({image}) || !D::AllocationProfile(image) || !D::Vtable(image) || !D::Slots(image, heap))
+            return ClockResult::BindingChanged;
+        return D::Context::Owner(image, owner);
     }
 
     bool Record::CanDiscard() const noexcept

@@ -91,6 +91,30 @@ namespace mta::game_de::NativeStartupModelCollision
             return C::Owner(image, owner);
         }
     }
+    ClockResult CheckReady(std::uintptr_t image, CheckOwner owner) noexcept
+    {
+        if (!owner)
+            return ClockResult::NotInitialized;
+        auto result = Detail::C::Owner(image, owner);
+        if (result != ClockResult::Ok)
+            return result;
+        // This is the established temporary completion exclusion and GC-zero
+        // protocol, not a model-field CAS, entered receipt or reserved lease.
+        if (!Detail::C::TryEnter())
+            return ClockResult::Busy;
+        Detail::C::Scope scope;
+        Detail::C::Value first, next;
+        result = Detail::World(image, owner, nullptr, first);
+        if (result != ClockResult::Ok)
+            return result;
+        result = Detail::World(image, owner, &first, next);
+        if (result != ClockResult::Ok)
+            return result;
+        if (!Detail::C::Fence(image, next) || !Detail::Profile(image))
+            return ClockResult::BindingChanged;
+        return Detail::C::Owner(image, owner);
+    }
+
     void Record::MarkUnacknowledged() noexcept
     {
         if (journal.entered)

@@ -19,6 +19,11 @@ namespace mta::game_de::NativeStreamingSpecialModelCalls
         unsigned char       rawFlagsBefore = 0, rawStateBefore = 0, rawFlagsAfter = 0, rawStateAfter = 0;
         bool                entered = false, returned = false;
     };
+    // Read only the current capability prerequisites under the same loading
+    // exclusion as Request. This selects no model/name, invokes no engine
+    // allocator/removal/request, and publishes no persistent readiness lease.
+    // Request still freshly qualifies its complete selected-row prerequisites.
+    ClockResult CheckReady(std::uintptr_t image, CheckOwner) noexcept;
     // Owns the shared loading scope itself. Runtime must Stop after an entered
     // failure and must never restore names, cache entries, flags or removed data.
     ClockResult Request(std::uintptr_t image, std::uint32_t model, const char* name, std::uint32_t channel, CheckOwner, Receipt* = nullptr,

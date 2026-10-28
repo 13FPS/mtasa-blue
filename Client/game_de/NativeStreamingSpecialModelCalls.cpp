@@ -17,6 +17,7 @@
 #include <windows.h>
 #include <algorithm>
 #include <cstring>
+#include <new>
 #include <vector>
 
 namespace mta::game_de::NativeStreamingSpecialModelCalls
@@ -59,6 +60,54 @@ namespace mta::game_de::NativeStreamingSpecialModelCalls
             }
         }
 #endif
+    }
+    ClockResult CheckReady(std::uintptr_t image, CheckOwner owner) noexcept
+    {
+        namespace S = SpecialModelDetail;
+        namespace D = NativeStreamingCompletionContext;
+        namespace C = NativeStreamingModelContext;
+        namespace R = NativeStreamingRemoveMemory;
+        if (!owner)
+            return ClockResult::NotInitialized;
+        if (!D::TryEnter())
+            return ClockResult::Busy;
+        D::Scope scope;
+        try
+        {
+            auto result = D::Owner(image, owner);
+            if (result != ClockResult::Ok)
+                return result;
+            // Reuse the real name/heap/world profiles and independent removal
+            // and bank qualification. No selected row may be required before
+            // the startup itinerary has created its replacement ped metadata.
+            if (!S::Profile(image) || !R::QualifyProfile(image))
+                return ClockResult::UnsupportedBuild;
+            if (!NativeModelBankReader::Revalidate({image}))
+                return ClockResult::BindingChanged;
+            C::Value provider, confirmedProvider;
+            D::Value world, confirmedWorld;
+            S::Names names, confirmedNames;
+            if ((result = C::CaptureProvider(image, provider)) != ClockResult::Ok || (result = D::Capture(image, world)) != ClockResult::Ok ||
+                (result = S::ReadNames(image, names)) != ClockResult::Ok || (result = D::Owner(image, owner)) != ClockResult::Ok ||
+                (result = C::CaptureProvider(image, confirmedProvider)) != ClockResult::Ok || (result = D::Capture(image, confirmedWorld)) != ClockResult::Ok ||
+                (result = S::ReadNames(image, confirmedNames)) != ClockResult::Ok)
+                return result;
+            if (!C::Same(provider, confirmedProvider) || !C::MembershipUnchanged(image, provider) || !C::MembershipUnchanged(image, confirmedProvider) ||
+                !D::Same(world, confirmedWorld, true) || !D::Fence(image, world) || !D::Fence(image, confirmedWorld) || !S::Same(names, confirmedNames) ||
+                !S::Profile(image) || !R::QualifyProfile(image) || !NativeModelBankReader::Revalidate({image}))
+                return ClockResult::BindingChanged;
+            return D::Owner(image, owner);
+        }
+        catch (const std::bad_alloc&)
+        {
+            // Existing name-cache readers use temporary CPU copy buffers;
+            // their failure is no native allocator entry or engine effect.
+            return ClockResult::WriteFailure;
+        }
+        catch (...)
+        {
+            return ClockResult::ReadFailure;
+        }
     }
     ClockResult Request(std::uintptr_t image, std::uint32_t modelIndex, const char* name, std::uint32_t channel, CheckOwner owner, Receipt* output,
                         Invoke invoke) noexcept

@@ -78,6 +78,13 @@ namespace mta::game_de::NativePedModelCreation
         std::uint32_t                   modelIndex = 0;
         Receipt                         journal{};
     };
+    // Model-independent pre-entry qualification only. The existing CPU gate
+    // and native thread/GC protocol are transient; no native allocator, default
+    // writer or bank CAS runs, and no creation record is reserved or appended.
+    // Existing target rows may be absent. Success is an immediate observation,
+    // not a lease or allocation guarantee; every effect still revalidates.
+    ClockResult CheckReady(std::uintptr_t image, CheckOwner) noexcept;
+
     // One-shot creation. Accepted/unknown publication is retained, never
     // replayed or undone. The prior bank pointer is only a borrowed CAS value.
     ClockResult CreateAndPublish(std::uintptr_t image, Record&, std::uint64_t generation, std::uint32_t modelIndex, CheckOwner, Receipt* = nullptr,

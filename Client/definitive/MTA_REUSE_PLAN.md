@@ -1,5 +1,20 @@
 # MTA on Definitive Edition: reuse boundary
 
+## Separate startup prerequisites from effects (2026-10-28)
+
+The retained owner now exposes fresh prerequisite checks for ped metadata
+creation, special-model requests and the conditional collision copy. They
+observe the current provider, name/cache, world, allocator and shared collision
+state without creating metadata, publishing model fields, requesting/renaming
+models or entering the menu. They select no future model row and return no
+persistent lease; every effect keeps its original fresh checks.
+
+The existing GC zero/zero probe and temporary CPU exclusion/snapshot protocol
+remain explicit. Temporary CPU allocation failure is a refusal. Healthy
+same-generation published models remain valid for repeated source calls, while
+uncertain work stays closed. Numeric garage identity, concrete streaming/garage
+receivers and overall initialization readiness remain separate requirements.
+
 ## Actual native menu closing (2026-10-28)
 
 The later Initialize menu stage now reaches the real DE close method through

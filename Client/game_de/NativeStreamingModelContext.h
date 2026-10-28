@@ -18,7 +18,11 @@ namespace mta::game_de::NativeStreamingModelContext
     // Internal stack observations under an already admitted current native
     // callback. Capture/recheck never creates an owner, SDK service, weak
     // token, loaded state or persistent root/provider/model lifetime lease.
-    bool        QualifyProfile(std::uintptr_t image) noexcept;
+    bool QualifyProfile(std::uintptr_t image) noexcept;
+    // This model-independent observation qualifies only the current provider
+    // header/membership and row range. Metadata/vtable fields remain zero;
+    // no selected model or future ped row is created, read or admitted here.
+    ClockResult CaptureProvider(std::uintptr_t image, Value&) noexcept;
     ClockResult Capture(std::uintptr_t image, const NativeModelBankReader::Value&, Value&) noexcept;
     bool        Same(const Value&, const Value&) noexcept;
     ClockResult Recheck(std::uintptr_t image, const NativeModelBankReader::Value&, const Value&) noexcept;

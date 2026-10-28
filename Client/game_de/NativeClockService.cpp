@@ -293,6 +293,9 @@ namespace mta::game_de
             ClockResult ReadModelAnimFileIndex(std::uint32_t, std::uint32_t&) noexcept override;
             ClockResult CreateAndPublishPedModelMetadata(std::uint32_t) noexcept override;
             ClockResult CopyStartupModelCollision(std::uint32_t, std::uint32_t) noexcept override;
+            ClockResult RequireStartupPedModelCreationReady() noexcept override;
+            ClockResult RequireStartupSpecialModelRequestReady() noexcept override;
+            ClockResult RequireStartupCollisionCopyReady() noexcept override;
             ClockResult RequireStartupNativeMenuReady() noexcept override;
             ClockResult HideStartupNativeMenu() noexcept override;
             ClockResult AdjustModelReference(std::uint32_t, int) noexcept override;
@@ -5132,6 +5135,75 @@ namespace mta::game_de
                 output = next;
             return result;
         }
+        ClockResult NativeAccess::RequireStartupPedModelCreationReady() noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            // Reuse only the transient CPU exclusion. No record/list entry,
+            // native allocation, publication or debt summary is changed.
+            PedModelCreationScope scope;
+            if (!scope.held)
+                return ClockResult::Busy;
+            const auto generation = runtime.generation.load();
+            const auto retainedGeneration = runtime.pedModelCreationGeneration.load();
+            if (!generation || (retainedGeneration && retainedGeneration != generation))
+                return ClockResult::OwnerConflict;
+            for (const auto& record : runtime.pedModelCreations)
+            {
+                if (!record)
+                    return ClockResult::OwnerConflict;
+                // A healthy acknowledged publication is an ordinary source
+                // prefix of a previous explicit call, not uncertain debt.
+                if (!record->CanDiscard() && (record->OwnerGeneration() != generation || record->GetStage() != NativePedModelCreation::Stage::Published))
+                    return ClockResult::OwnerConflict;
+            }
+            result = NativePedModelCreation::CheckReady(runtime.image, &CheckTimingOwner);
+            if (result != ClockResult::Ok)
+                return result;
+            result = CheckTimingOwner();
+            return result == ClockResult::Ok && runtime.generation.load() != generation ? ClockResult::BindingChanged : result;
+        }
+
+        ClockResult NativeAccess::RequireStartupSpecialModelRequestReady() noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            if (!generation)
+                return ClockResult::OwnerConflict;
+            // The controller borrows the existing completion scope and uses
+            // current model-independent provider/name/heap observations. No
+            // selected future metadata, rename or request is a readiness probe.
+            result = NativeStreamingSpecialModelCalls::CheckReady(runtime.image, &CheckTimingOwner);
+            if (result != ClockResult::Ok)
+                return result;
+            result = CheckTimingOwner();
+            return result == ClockResult::Ok && runtime.generation.load() != generation ? ClockResult::BindingChanged : result;
+        }
+
+        ClockResult NativeAccess::RequireStartupCollisionCopyReady() noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            StartupCollisionScope scope;
+            if (!scope.held)
+                return ClockResult::Busy;
+            const auto generation = runtime.generation.load();
+            const auto retainedGeneration = runtime.startupCollisionGeneration.load();
+            if (!generation || (retainedGeneration && retainedGeneration != generation) || runtime.startupCollisionRetained.load())
+                return ClockResult::OwnerConflict;
+            // Qualify the possible copy path without inspecting target/source
+            // rows, creating a journal or issuing the conditional field CAS.
+            result = NativeStartupModelCollision::CheckReady(runtime.image, &CheckTimingOwner);
+            if (result != ClockResult::Ok)
+                return result;
+            result = CheckTimingOwner();
+            return result == ClockResult::Ok && runtime.generation.load() != generation ? ClockResult::BindingChanged : result;
+        }
+
         ClockResult NativeAccess::CreateAndPublishPedModelMetadata(std::uint32_t model) noexcept
         {
             const auto modelIndex = model;

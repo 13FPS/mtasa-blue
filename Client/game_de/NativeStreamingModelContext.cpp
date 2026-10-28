@@ -98,24 +98,50 @@ namespace mta::game_de::NativeStreamingModelContext
         return std::tie(a.root, a.provider, a.rows, a.count, a.modelVtable, a.typeMethod, a.animationMethod) ==
                std::tie(b.root, b.provider, b.rows, b.count, b.modelVtable, b.typeMethod, b.animationMethod);
     }
+    namespace
+    {
+        // Share only the original header reads. The selected-key refusal and
+        // metadata checks below keep their original order and read boundary.
+        ClockResult ReadProviderHeader(std::uintptr_t image, Value& next) noexcept
+        {
+            if (!Image::ReadImage(image, image + P::RootRva, &next.root, sizeof(next.root), true))
+                return ClockResult::ReadFailure;
+            if (!next.root)
+                return ClockResult::NotInitialized;
+            NativeUObjectMembershipAccess membership(image, &Copy);
+            if (next.root % alignof(std::uintptr_t) || !Readable(next.root, P::ProviderOffset + sizeof(std::uintptr_t), true) ||
+                !membership.Capture(next.root, next.rootMembership) || next.rootMembership.vtableAddress != image + P::RootVtableRva ||
+                !At(next.root, P::ProviderOffset, next.provider))
+                return ClockResult::BindingChanged;
+            if (!next.provider)
+                return ClockResult::NotInitialized;
+            if (next.provider == next.root || next.provider % alignof(std::uintptr_t) ||
+                !Readable(next.provider, P::ProviderCountOffset + sizeof(std::int32_t), true) || !membership.Capture(next.provider, next.providerMembership) ||
+                !At(next.provider, P::ProviderRowsOffset, next.rows) || !At(next.provider, P::ProviderCountOffset, next.count))
+                return ClockResult::BindingChanged;
+            return ClockResult::Ok;
+        }
+    }
+    ClockResult CaptureProvider(std::uintptr_t image, Value& output) noexcept
+    {
+        Value      next;
+        const auto result = ReadProviderHeader(image, next);
+        if (result != ClockResult::Ok)
+            return result;
+        if (next.count <= 0 || next.count > static_cast<std::int32_t>(NativeModelBankProfile::ModelCount) || !next.rows ||
+            next.rows % alignof(std::uintptr_t) || !Readable(next.rows, static_cast<std::size_t>(next.count) * P::ProviderRowStride, true))
+            return ClockResult::BindingChanged;
+        if (!MembershipUnchanged(image, next))
+            return ClockResult::BindingChanged;
+        output = next;
+        return ClockResult::Ok;
+    }
     ClockResult Capture(std::uintptr_t image, const NativeModelBankReader::Value& model, Value& output) noexcept
     {
-        Value next;
-        if (!Image::ReadImage(image, image + P::RootRva, &next.root, sizeof(next.root), true))
-            return ClockResult::ReadFailure;
-        if (!next.root)
-            return ClockResult::NotInitialized;
-        NativeUObjectMembershipAccess membership(image, &Copy);
-        if (next.root % alignof(std::uintptr_t) || !Readable(next.root, P::ProviderOffset + sizeof(std::uintptr_t), true) ||
-            !membership.Capture(next.root, next.rootMembership) || next.rootMembership.vtableAddress != image + P::RootVtableRva ||
-            !At(next.root, P::ProviderOffset, next.provider))
-            return ClockResult::BindingChanged;
-        if (!next.provider)
-            return ClockResult::NotInitialized;
-        if (next.provider == next.root || next.provider % alignof(std::uintptr_t) ||
-            !Readable(next.provider, P::ProviderCountOffset + sizeof(std::int32_t), true) || !membership.Capture(next.provider, next.providerMembership) ||
-            !At(next.provider, P::ProviderRowsOffset, next.rows) || !At(next.provider, P::ProviderCountOffset, next.count))
-            return ClockResult::BindingChanged;
+        Value      next;
+        const auto result = ReadProviderHeader(image, next);
+        if (result != ClockResult::Ok)
+            return result;
         // The native consumer bounds its selected model against count,
         // then scales by160 bytes. No inferred surrounding array fields
         // or unused capacity are treated as native allocation authority.
@@ -133,6 +159,7 @@ namespace mta::game_de::NativeStreamingModelContext
             !Image::ReadImage(image, next.modelVtable + P::AnimationMethodSlot, &next.animationMethod, sizeof(next.animationMethod)) ||
             !Image::ImagePages(image, next.typeMethod, 1, false, true) || !Image::ImagePages(image, next.animationMethod, 1, false, true))
             return ClockResult::BindingChanged;
+        NativeUObjectMembershipAccess membership(image, &Copy);
         if (!membership.Recheck(next.rootMembership) || !membership.Recheck(next.providerMembership))
             return ClockResult::BindingChanged;
         output = next;

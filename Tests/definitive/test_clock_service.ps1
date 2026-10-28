@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
+    [ValidateSet('PresentTransitionClock','StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -23,6 +23,12 @@ $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;a
 # Historical markers start false and are set only by the branch that actually
 # executed. Focus mode must never inherit the cumulative suite's claims.
 $record['runScope'] = $Scope
+$record['nativePresentTransitionClockRuntimeTested']=$false
+$record['nativePresentTransitionPeerHoldReaderExclusionTested']=$false
+$record['nativePresentTransitionPeerFailureRecoveryTested']=$false
+$record['nativePresentTransitionPatchRecoveryTested']=$false
+$record['nativePresentTransitionWeatherRecoveryTested']=$false
+$record['nativePresentTransitionWeatherHoldTested']=$false
 $record['nativeStartupInitializationReadinessRuntimeTested']=$false
 $record['nativeStartupInitializationJointReadinessTested']=$false
 $record['nativeStartupInitializationFreshRefusalsTested']=$false
@@ -650,6 +656,8 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         'Tests/definitive/NativeStartupStreamingReceiverRuntimeOwnerTests.inl')
     $sourceNames += @('Client/game_de/CGameStartupInitializationDE.h',
         'Tests/definitive/NativeStartupInitializationReadinessRuntimeOwnerTests.inl')
+    $sourceNames += @('Client/game_de/NativePresentTransitionGate.h','Client/game_de/NativePresentTransitionGate.cpp',
+        'Tests/definitive/NativePresentTransitionClockOwnerTests.inl')
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
@@ -1008,6 +1016,7 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         (Join-Path $taskRoot 'Client/game_de/NativeWeatherOverrideWin32.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeWeatherOverridePlacement.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeWeatherOverrideSlot.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeWeatherRainBridge.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeWeatherRainBorrowGuard.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeWeatherRainLeaf.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePedReferenceController.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativePresentTransitionGate.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeImageAccess.cpp')) +
         $runtimeDependencies + @(('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'fixture.pdb')),('/Fe'+$executable),'/link','bcrypt.lib','user32.lib') + $objects
     if($Scope -in @('PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess')){
@@ -1065,6 +1074,13 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         $arguments=@('/DMTA_DE_PRIVATE_ANIMATION_HIERARCHY_SEQUENCES_WRITE=::ClockPrivateHierarchyParentWriteFixture::Write',('/FI'+$parentHook))+$arguments
     }
     if ($Scope -in @('CustomAnimationCleanup','StandaloneSequenceOperations')) { $arguments=@('/DMTA_TEST_CUSTOM_ANIMATION_CLEANUP')+$arguments }
+    if($Scope -eq 'PresentTransitionClock'){
+        # Compile the unmodified production weather platform once inside
+        # the ordinary runtime fixture under its narrow OS flush seam.
+        $arguments=@('/DMTA_TEST_PRESENT_TRANSITION_CLOCK')+@($arguments | Where-Object { $_ -cne (Join-Path $taskRoot 'Client/game_de/NativeWeatherOverrideWin32.cpp') -and $_ -cne (Join-Path $taskRoot 'Client/game_de/NativePresentTransitionGate.cpp') })
+        $record['presentTransitionWeatherPlatformOnceWithOsFlushSeam']=$true
+        $record['presentTransitionGateOnceWithOwnedModuleSeam']=$true
+    }
     [ordered]@{compiler=$record.compiler;detoursArguments=$detoursArguments;arguments=$arguments} | ConvertTo-Json -Depth 5 |
         Set-Content -LiteralPath (Join-Path $outputRoot 'compile-command.json') -Encoding utf8NoBOM
     # Every selected scope compiles the cumulative fixture/native source graph.
@@ -1079,7 +1095,8 @@ namespace ClockPrivateHierarchyParentWriteFixture {
     # process retirement; keep its large synthetic PE in owned disposable scratch.
     # Preserve the argument vector: an if result with one item becomes a
     # scalar string, so later += would append the switch to the path.
-    $fixtureArguments = @(if ($Scope -in @('StartupPreparationReadiness','StartupNumericGarages','StartupStreamingReceiver','StartupInitializationReadiness')) { $scratchRoot } else { $outputRoot })
+    $fixtureArguments = @(if ($Scope -in @('StartupPreparationReadiness','StartupNumericGarages','StartupStreamingReceiver','StartupInitializationReadiness','PresentTransitionClock')) { $scratchRoot } else { $outputRoot })
+    if ($Scope -eq 'PresentTransitionClock') { $fixtureArguments += '--present-transition-clock' }
     if ($Scope -eq 'StartupInitializationReadiness') { $fixtureArguments += '--startup-initialization-readiness' }
     if ($Scope -eq 'StartupStreamingReceiver') { $fixtureArguments += '--startup-streaming-receiver' }
     if ($Scope -eq 'StartupNumericGarages') { $fixtureArguments += '--startup-numeric-garages' }
@@ -1677,7 +1694,7 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         $text = $texts -join [Environment]::NewLine
     } else {
         $testExecutable = $executable
-    if ($Scope -in @('StartupPreparationReadiness','StartupNumericGarages','StartupStreamingReceiver','StartupInitializationReadiness')) {
+    if ($Scope -in @('StartupPreparationReadiness','StartupNumericGarages','StartupStreamingReceiver','StartupInitializationReadiness','PresentTransitionClock')) {
         # The fixture's existing path guard requires its backing-image directory
         # to equal its executable directory. Run an exact owned scratch copy so
         # that guard stays intact and neither retained synthetic PE survives.
@@ -1692,7 +1709,16 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if($Scope -eq 'StartupInitializationReadiness'){
+    if($Scope -eq 'PresentTransitionClock'){
+        $record.nativePresentTransitionPeerHoldReaderExclusionTested=$text.Contains('Production present transition actual peer hold and reader exclusion completed')
+        $record.nativePresentTransitionPeerFailureRecoveryTested=$text.Contains('Production present transition actual peer suspension recovery completed')
+        $record.nativePresentTransitionPatchRecoveryTested=$text.Contains('Production present transition actual patch protection recovery completed')
+        $record.nativePresentTransitionWeatherRecoveryTested=$text.Contains('Production present transition actual weather cache recovery completed') -and $text.Contains('Production present transition actual weather cleanup Busy deferred completed')
+        $record.nativePresentTransitionWeatherHoldTested=$text.Contains('Production present transition persistent weather and rain entry exclusion completed')
+        $record.nativePresentTransitionClockRuntimeTested=$record.nativePresentTransitionPeerHoldReaderExclusionTested -and $record.nativePresentTransitionPeerFailureRecoveryTested -and $record.nativePresentTransitionPatchRecoveryTested -and $record.nativePresentTransitionWeatherRecoveryTested -and $record.nativePresentTransitionWeatherHoldTested -and $text.Contains('Production present transition exact module reference retirement completed') -and $text.Contains('Production present transition clock runtime fixture completed')
+        if(-not $record.nativePresentTransitionClockRuntimeTested){throw 'Actual present transition clock owner fixture incomplete'}
+        $record.productionNativeCallbackTested=$true
+    } elseif($Scope -eq 'StartupInitializationReadiness'){
         $record.nativeStartupInitializationJointReadinessTested=$text.Contains('Production startup initialization joint readiness actual owner completed')
         $record.nativeStartupInitializationFreshRefusalsTested=$text.Contains('Production startup initialization current refusals and owner bookends completed')
         $record.nativeStartupInitializationBookendRefusalTested=$text.Contains('Production startup initialization current refusals and owner bookends completed')

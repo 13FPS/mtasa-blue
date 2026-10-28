@@ -466,9 +466,11 @@ namespace mta::game_de
     }
     ClockResult NativeWeatherOverrideOwner::Finish(ClockResult result) noexcept
     {
-        // The platform has no partial code-write operation, so it never needs
-        // an unsafe return gate. Failed OS resumes remain the existing host's
-        // peer-handle debt; this owner retains all its own unresolved resources.
+        // Atomic windows permit native peers to resume, but protection/cache
+        // recovery can still retain this operation's resources. Publish that
+        // actual debt before the host decides whether policy readers may run.
+        // The second publication still includes any failed OS resume outcome.
+        Publish(result != ClockResult::Ok);
         if (!host.FinishPeers(true))
             result = ClockResult::RestoreFailure;
         Publish(result != ClockResult::Ok);

@@ -8,6 +8,7 @@
 #include "CClockDE.h"
 #include "NativeClockProfile.h"
 #include "NativeClockMemory.h"
+#include "NativePresentTransitionGate.h"
 #include "NativeGameTimingAccess.h"
 #include "NativeGameStateMemory.h"
 #include "NativeCheatFlagAccess.h"
@@ -513,6 +514,9 @@ namespace mta::game_de
         public:
             ~PeerHold();
             bool        Prepare() noexcept;
+            ClockResult ReservePresentation() noexcept;
+            ClockResult PresentationRefusal() const noexcept { return presentationRefusal; }
+            bool        PresentationHeld() const noexcept { return presentationTransition.Held(); }
             bool        PrepareRain(const NativeWeatherRainBorrow::Exclusions&) noexcept;
             ClockResult CheckRain() noexcept;
             bool        MatchesRain(const NativeWeatherRainLeaf::State&) const noexcept;
@@ -524,17 +528,20 @@ namespace mta::game_de
         private:
             using NextThread = LONG(NTAPI*)(HANDLE, HANDLE, ACCESS_MASK, ULONG, ULONG, PHANDLE);
             using CloseThread = LONG(NTAPI*)(HANDLE);
-            bool                                PrepareRainEnumeration() noexcept;
-            bool                                RainSetComplete(bool calibrating) noexcept;
-            bool                                CloseRainHandle(HANDLE) noexcept;
-            std::vector<PeerThread>             threads;
-            std::atomic<bool>                   ownsGate{false};
-            NativeWeatherRainBorrow::Guard      rainGuard;
-            NativeWeatherRainBorrow::Exclusions rainExclusions;
-            bool                                rainPrepared = false;
-            NextThread                          rainNextThread = nullptr;
-            CloseThread                         rainCloseThread = nullptr;
-            std::array<HANDLE, 2>               rainHandleDebt{};
+            bool                                    PrepareRainEnumeration() noexcept;
+            bool                                    ReleasePresentation(bool clean) noexcept;
+            bool                                    RainSetComplete(bool calibrating) noexcept;
+            bool                                    CloseRainHandle(HANDLE) noexcept;
+            std::vector<PeerThread>                 threads;
+            std::atomic<bool>                       ownsGate{false};
+            NativePresentTransitionGate::Transition presentationTransition;
+            ClockResult                             presentationRefusal = ClockResult::Ok;
+            NativeWeatherRainBorrow::Guard          rainGuard;
+            NativeWeatherRainBorrow::Exclusions     rainExclusions;
+            bool                                    rainPrepared = false;
+            NextThread                              rainNextThread = nullptr;
+            CloseThread                             rainCloseThread = nullptr;
+            std::array<HANDLE, 2>                   rainHandleDebt{};
         };
 
         class WeatherOverrideHost final : public NativeWeatherOverrideHost
@@ -673,34 +680,35 @@ namespace mta::game_de
             std::atomic<std::uint64_t> startupRequestGeneration{0};
             // Opaque equality only: a new application at the same global root
             // cannot inherit this request. Never dereference a stored receiver.
-            std::atomic<std::uintptr_t>   startupRequestReceiver{0};
-            NativeStartGameCalls::Receipt startupReceipt;
-            void*                         frameContext = nullptr;
-            ApplicationFrameFunction      originalFrame = nullptr;
-            std::atomic<unsigned>         inFlight{0};
-            std::atomic<std::uint32_t>    retainedPeerThreads{0};
-            std::atomic<DWORD>            engineThread{0};
-            std::atomic<std::uint64_t>    generation{0}, refreshed{0}, lastSubmitted{0}, pendingSequence{0};
-            std::atomic<std::uint64_t>    admissionGeneration{0}, admissionSerial{0};
-            std::atomic<std::uint64_t>    lastCompletedSequence{0};
-            std::atomic<ClockResult>      failure{ClockResult::Ok};
-            std::atomic<ClockResult>      lastCommandResult{ClockResult::NotInitialized};
-            DWORD                         producerThread = 0;
-            std::uintptr_t                image = 0;
-            ULONGLONG                     started = 0;
-            std::uint32_t                 maximumDuration = 0;
-            ClockCommandV1                pending;
-            bool                          hasPending = false;
-            ClockValues                   original, observed;
-            ClockPublication              publishedClock;
-            ContinuationFunction          originalContinuation = nullptr;
-            ContinuationFunction          originalTimer = nullptr;
-            DWORD                         patchProtection = 0;
-            std::atomic<bool>             protectionPending{false};
-            std::vector<PeerThread>       recoveryPeers;
-            NativeAccess                  access;
-            CClockDE                      clock{access};
-            CWeaponInfoBankDE             weaponBank{weaponWriterReader, access, access};
+            std::atomic<std::uintptr_t>             startupRequestReceiver{0};
+            NativeStartGameCalls::Receipt           startupReceipt;
+            void*                                   frameContext = nullptr;
+            ApplicationFrameFunction                originalFrame = nullptr;
+            std::atomic<unsigned>                   inFlight{0};
+            std::atomic<std::uint32_t>              retainedPeerThreads{0};
+            std::atomic<DWORD>                      engineThread{0};
+            std::atomic<std::uint64_t>              generation{0}, refreshed{0}, lastSubmitted{0}, pendingSequence{0};
+            std::atomic<std::uint64_t>              admissionGeneration{0}, admissionSerial{0};
+            std::atomic<std::uint64_t>              lastCompletedSequence{0};
+            std::atomic<ClockResult>                failure{ClockResult::Ok};
+            std::atomic<ClockResult>                lastCommandResult{ClockResult::NotInitialized};
+            DWORD                                   producerThread = 0;
+            std::uintptr_t                          image = 0;
+            ULONGLONG                               started = 0;
+            std::uint32_t                           maximumDuration = 0;
+            ClockCommandV1                          pending;
+            bool                                    hasPending = false;
+            ClockValues                             original, observed;
+            ClockPublication                        publishedClock;
+            ContinuationFunction                    originalContinuation = nullptr;
+            ContinuationFunction                    originalTimer = nullptr;
+            DWORD                                   patchProtection = 0;
+            std::atomic<bool>                       protectionPending{false};
+            std::vector<PeerThread>                 recoveryPeers;
+            NativePresentTransitionGate::Transition presentationRecovery;
+            NativeAccess                            access;
+            CClockDE                                clock{access};
+            CWeaponInfoBankDE                       weaponBank{weaponWriterReader, access, access};
             // Construct CPU originals and an empty live registry only. Actual
             // CGame initialization/population remains a separate native intent.
             CWeaponStatManagerDE weaponStatManager{weaponBank, access};
@@ -735,8 +743,64 @@ namespace mta::game_de
         // General timing/service APIs never consult this private sub-scope.
         thread_local bool constructorWeaponScope = false;
         thread_local bool constructorWeaponReadScope = false;
-        ClockResult       CheckStartGameOwner(void* receiver) noexcept;
-        bool              FrameReceiver(void* receiver) noexcept;
+
+        struct CommandPresentationScope;
+        thread_local CommandPresentationScope* presentationCommand = nullptr;
+        thread_local unsigned                  clockMutationDepth = 0;
+
+        // Only the current command may consume its direct SDK call's explicit
+        // presentation refusal. A different Busy, earlier command, direct SDK
+        // call, or nested mutation must not suppress the original Stop policy.
+        struct CommandPresentationScope
+        {
+            const ClockCommandV1&     command;
+            CommandPresentationScope* previous;
+            unsigned                  expectedDepth;
+            bool                      presentationBusy = false;
+
+            explicit CommandPresentationScope(const ClockCommandV1& request) noexcept
+                : command(request), previous(presentationCommand), expectedDepth(clockMutationDepth + 1)
+            {
+                presentationCommand = this;
+            }
+            ~CommandPresentationScope() { presentationCommand = previous; }
+            bool Matches(ClockOperation operation, bool frozen) const noexcept
+            {
+                if (command.generation != runtime.generation.load() || command.sequence <= runtime.lastCompletedSequence.load())
+                    return false;
+                if (operation == ClockOperation::Set)
+                    return command.operation == ClockOperation::Set;
+                return operation == ClockOperation::Freeze &&
+                       (frozen ? command.operation == ClockOperation::Freeze
+                               : command.operation == ClockOperation::Unfreeze || command.operation == ClockOperation::ResetTimeFrozen);
+            }
+            bool ConsumeBusy() noexcept
+            {
+                const bool busy = presentationBusy;
+                presentationBusy = false;
+                return busy;
+            }
+        };
+        struct ClockMutationScope
+        {
+            CommandPresentationScope* command;
+            bool                      eligible;
+            explicit ClockMutationScope(ClockOperation operation, bool frozen = false) noexcept : command(presentationCommand), eligible(false)
+            {
+                ++clockMutationDepth;
+                eligible = command && command->expectedDepth == clockMutationDepth && command->Matches(operation, frozen);
+                if (eligible)
+                    command->presentationBusy = false;
+            }
+            ~ClockMutationScope() { --clockMutationDepth; }
+            void Refused(ClockResult presentationRefusal) const noexcept
+            {
+                if (eligible && presentationCommand == command && presentationRefusal == ClockResult::Busy)
+                    command->presentationBusy = true;
+            }
+        };
+        ClockResult CheckStartGameOwner(void* receiver) noexcept;
+        bool        FrameReceiver(void* receiver) noexcept;
 
         constexpr unsigned timingScaleBit = 1, timingMinuteBit = 2, timingPauseBit = 4;
 
@@ -747,21 +811,22 @@ namespace mta::game_de
 
         bool NativeLifetimeRetained() noexcept
         {
-            return runtime.startupMenuBusy.load() || runtime.startupMenuRetained.load() || runtime.startupCollisionBusy.load() ||
-                   runtime.startupCollisionRetained.load() || runtime.pedModelCreationBusy.load() || runtime.pedModelCreationRetained.load() ||
-                   runtime.modelBackingReferences.IsRetained() || runtime.pedReferences.IsRetained() || WorldIgnoreRetained() ||
-                   runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained() ||
-                   runtime.customSequences.HasPendingCleanup();
+            return runtime.presentationRecovery.Held() || runtime.weatherOverridePeers.PresentationHeld() || runtime.startupMenuBusy.load() ||
+                   runtime.startupMenuRetained.load() || runtime.startupCollisionBusy.load() || runtime.startupCollisionRetained.load() ||
+                   runtime.pedModelCreationBusy.load() || runtime.pedModelCreationRetained.load() || runtime.modelBackingReferences.IsRetained() ||
+                   runtime.pedReferences.IsRetained() || WorldIgnoreRetained() || runtime.customSequences.IsRetained() ||
+                   runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained() || runtime.customSequences.HasPendingCleanup();
         }
 
         bool WeatherOverrideRetained() noexcept
         {
-            return runtime.weatherOverrides.HasReferences() || runtime.weatherOverrides.NeedsRecovery() || runtime.weatherOverridePeers.Held();
+            return runtime.weatherOverrides.HasReferences() || runtime.weatherOverrides.NeedsRecovery() || runtime.weatherOverridePeers.Held() ||
+                   runtime.weatherOverridePeers.PresentationHeld();
         }
 
         bool WeatherOverridePending() noexcept
         {
-            return runtime.weatherOverrides.NeedsRecovery() || runtime.weatherOverridePeers.Held();
+            return runtime.weatherOverrides.NeedsRecovery() || runtime.weatherOverridePeers.Held() || runtime.weatherOverridePeers.PresentationHeld();
         }
 
         bool ReleaseAdmission(std::uint64_t generation) noexcept
@@ -1080,6 +1145,14 @@ namespace mta::game_de
             return true;
         }
 
+        bool PresentationTransitionUnsafe() noexcept
+        {
+            // A successful resume does not settle an uncertain instruction
+            // write, protection restore, or weather/rain code reference.
+            return runtime.patchRecovery.load() || runtime.protectionPending.load() || runtime.weatherOverrides.NeedsRecovery() ||
+                   runtime.weatherOverrides.UnsafeCode();
+        }
+
         bool RetryPeerHolds() noexcept
         {
             if (runtime.weatherOverrides.UnsafeCode())
@@ -1095,7 +1168,16 @@ namespace mta::game_de
                     ++retained;
                 }
             if (clean)
+            {
                 runtime.recoveryPeers.clear();
+                // Keep the same exclusion across suspension recovery and any
+                // still-uncertain patch. A later recovery hold adopts it.
+                if (!PresentationTransitionUnsafe() && runtime.presentationRecovery.Release() != ClockResult::Ok)
+                {
+                    clean = false;
+                    Stop(ClockResult::RestoreFailure);
+                }
+            }
             runtime.peersRetained.store(!clean);
             runtime.retainedPeerThreads.store(retained);
             runtime.peerBusy.store(false);
@@ -1117,9 +1199,24 @@ namespace mta::game_de
             Release();
         }
 
+        ClockResult PeerHold::ReservePresentation() noexcept
+        {
+            if (presentationTransition.Held())
+                return ClockResult::Ok;
+            if (runtime.peerBusy.exchange(true))
+                return ClockResult::Busy;
+            const auto result = runtime.peersRetained.load() || !runtime.recoveryPeers.empty() ? ClockResult::Busy
+                                : runtime.presentationRecovery.Held()
+                                    ? runtime.presentationRecovery.TransferTo(presentationTransition)
+                                    : NativePresentTransitionGate::TryAcquireTransition(runtime.generation.load(), presentationTransition);
+            runtime.peerBusy.store(false);
+            return result;
+        }
+
         bool PeerHold::Prepare() noexcept
         {
             rainPrepared = false;
+            presentationRefusal = ClockResult::Ok;
             if (runtime.peerBusy.exchange(true))
                 return false;
             ownsGate = true;
@@ -1133,6 +1230,22 @@ namespace mta::game_de
                 if (thread.handle || thread.suspended)
                     return false;
             threads.clear();
+            // A weather/rain operation can reserve this fence before preparing
+            // its native scratch, without parking peers around allocation.
+            // Every other path closes it before enumeration/suspension. Even
+            // absence is fenced so registration cannot appear behind a hold.
+            if (!presentationTransition.Held())
+            {
+                presentationRefusal = runtime.presentationRecovery.Held()
+                                          ? runtime.presentationRecovery.TransferTo(presentationTransition)
+                                          : NativePresentTransitionGate::TryAcquireTransition(runtime.generation.load(), presentationTransition);
+                if (presentationRefusal != ClockResult::Ok)
+                {
+                    ownsGate = false;
+                    runtime.peerBusy.store(false);
+                    return false;
+                }
+            }
             // Any old empty capacity is retired before parking peers. A
             // failed resume can then transfer handles with a no-allocation
             // swap, even when the suspended producer cannot run cleanup.
@@ -1323,7 +1436,7 @@ namespace mta::game_de
 
         bool PeerHold::Suspend(const PeerPatchRange* ranges, std::size_t count) noexcept
         {
-            if (count && !ranges)
+            if (!ownsGate || !presentationTransition.Held() || (count && !ranges))
                 return false;
             // Allocate/open every record first. Once peers are parked this
             // path takes no heap or mailbox lock which a parked peer owns.
@@ -1368,6 +1481,37 @@ namespace mta::game_de
             return true;
         }
 
+        bool PeerHold::ReleasePresentation(bool clean) noexcept
+        {
+            if (!presentationTransition.Held())
+                return clean;
+            // Unparked weather preparation still transfers into the same
+            // retained runtime slot. Serialize that handoff with retry/holds.
+            const bool borrowedPeerGate = !ownsGate.load();
+            if (borrowedPeerGate && runtime.peerBusy.exchange(true))
+                return false;
+            if (presentationTransition.Held())
+            {
+                // A local destructor cannot reopen policy reads while its
+                // suspended peer or unsafe patch still belongs to recovery.
+                const auto presentation = !clean || PresentationTransitionUnsafe() ? presentationTransition.TransferTo(runtime.presentationRecovery)
+                                                                                   : presentationTransition.Release();
+                if (presentation != ClockResult::Ok)
+                {
+                    // Preserve even a refused release record before the local
+                    // holder disappears. No new authority is created by moving
+                    // its unchanged identity into process-lifetime recovery.
+                    if (presentationTransition.Held() && !runtime.presentationRecovery.Held())
+                        presentationTransition.TransferTo(runtime.presentationRecovery);
+                    clean = false;
+                    Stop(ClockResult::RestoreFailure);
+                }
+            }
+            if (borrowedPeerGate)
+                runtime.peerBusy.store(false);
+            return clean;
+        }
+
         bool PeerHold::Release() noexcept
         {
             // Enumeration handles are explicit ownership too. Refusing a
@@ -1381,7 +1525,7 @@ namespace mta::game_de
                     debt = nullptr;
                 }
             if (!ownsGate)
-                return true;
+                return ReleasePresentation(true);
             bool          clean = true;
             std::uint32_t retained = 0;
             for (auto& thread : threads)
@@ -1397,6 +1541,7 @@ namespace mta::game_de
                 runtime.retainedPeerThreads.store(retained);
                 Stop(ClockResult::RestoreFailure);
             }
+            clean = ReleasePresentation(clean);
             runtime.peerBusy.store(false);
             ownsGate = false;
             rainPrepared = false;
@@ -1594,8 +1739,10 @@ namespace mta::game_de
             return changed && known && protectedAgain && cacheConfirmed ? ClockResult::Ok : ClockResult::PatchFailure;
         }
 
-        ClockResult ChangeFreezePatch(bool frozen) noexcept
+        ClockResult ChangeFreezePatch(bool frozen, ClockResult* presentationRefusal = nullptr) noexcept
         {
+            if (presentationRefusal)
+                *presentationRefusal = ClockResult::Ok;
             if (!callbackDepth || GetCurrentThreadId() != runtime.engineThread.load())
                 return ClockResult::WrongThread;
             if (!CheckBinding(false, true))
@@ -1608,7 +1755,11 @@ namespace mta::game_de
                 return ClockResult::UnsupportedBuild;
             PeerHold peers;
             if (!peers.Prepare() || !peers.Suspend())
+            {
+                if (presentationRefusal)
+                    *presentationRefusal = peers.PresentationRefusal();
                 return ClockResult::Busy;
+            }
             const auto owner = CheckOwner();
             const auto result = owner == ClockResult::Ok ? PatchWhileHeld(frozen) : owner;
             const auto completed = peers.Release() ? result : ClockResult::RestoreFailure;
@@ -1638,10 +1789,14 @@ namespace mta::game_de
                 return status;
             if (hour > 23 || minute > 60)
                 return ClockResult::InvalidArgument;
-            std::uint32_t timer = 0;
-            PeerHold      peers;
+            ClockMutationScope presentationMutation(ClockOperation::Set);
+            std::uint32_t      timer = 0;
+            PeerHold           peers;
             if (!peers.Prepare() || !peers.Suspend())
+            {
+                presentationMutation.Refused(peers.PresentationRefusal());
                 return ClockResult::Busy;
+            }
             const auto owner = CheckOwner();
             if (owner != ClockResult::Ok)
                 return owner;
@@ -1668,8 +1823,12 @@ namespace mta::game_de
             const auto status = CheckOwner();
             if (status != ClockResult::Ok)
                 return status;
-            runtime.nativeTouched.store(true);
-            const auto changed = ChangeFreezePatch(frozen);
+            ClockMutationScope presentationMutation(ClockOperation::Freeze, frozen);
+            ClockResult        presentationRefusal = ClockResult::Ok;
+            const auto         changed = ChangeFreezePatch(frozen, &presentationRefusal);
+            presentationMutation.Refused(presentationRefusal);
+            if (presentationRefusal == ClockResult::Ok)
+                runtime.nativeTouched.store(true);
             if (changed == ClockResult::Ok)
             {
                 if (frozen)
@@ -7303,8 +7462,12 @@ namespace mta::game_de
             return CheckTimingOwner();
         }
 
-        ClockResult FinishWeatherOverride(ClockResult result) noexcept
+        ClockResult FinishWeatherOverride(ClockResult result, bool finishPresentation = false) noexcept
         {
+            // An early no-park refusal still owns its CPU-only reservation.
+            // Actual held peer recovery is never resumed or retried here.
+            if (finishPresentation && !runtime.weatherOverridePeers.Held() && !runtime.weatherOverridePeers.Release())
+                result = ClockResult::RestoreFailure;
             if (runtime.weatherOverrides.SupersededCount())
                 runtime.weatherOverrideSuperseded.store(true);
             if (runtime.weatherOverrides.NeedsRecovery() || runtime.weatherOverridePeers.Held() || runtime.peersRetained.load())
@@ -7345,7 +7508,10 @@ namespace mta::game_de
             const auto owner = RequireWeatherOverrideOwner();
             if (owner != ClockResult::Ok)
                 return owner;
-            return FinishWeatherOverride(runtime.weatherOverrides.Set(field, value));
+            const auto presentation = runtime.weatherOverridePeers.ReservePresentation();
+            if (presentation != ClockResult::Ok)
+                return presentation;
+            return FinishWeatherOverride(runtime.weatherOverrides.Set(field, value), true);
         }
 
         ClockResult NativeAccess::ResetWeatherScalarOverride(NativeWeatherScalarProfile::Field field) noexcept
@@ -7353,17 +7519,31 @@ namespace mta::game_de
             const auto owner = RequireWeatherOverrideOwner();
             if (owner != ClockResult::Ok)
                 return owner;
-            return FinishWeatherOverride(runtime.weatherOverrides.Reset(field));
+            const auto presentation = runtime.weatherOverridePeers.ReservePresentation();
+            if (presentation != ClockResult::Ok)
+                return presentation;
+            return FinishWeatherOverride(runtime.weatherOverrides.Reset(field), true);
         }
 
-        bool RestoreWeatherOverrides() noexcept
+        bool RestoreWeatherOverrides(ClockResult* presentationRefusal = nullptr) noexcept
         {
+            if (presentationRefusal)
+                *presentationRefusal = ClockResult::Ok;
             if (!WeatherOverrideRetained())
                 return true;
             const auto generation = runtime.weatherOverrideGeneration.load();
             if (!generation || runtime.weatherOverrideHost.Check(generation, true) != ClockResult::Ok)
                 return false;
+            const auto presentation = runtime.weatherOverridePeers.ReservePresentation();
+            if (presentation != ClockResult::Ok)
+            {
+                if (presentationRefusal)
+                    *presentationRefusal = presentation;
+                return false;
+            }
             const auto result = runtime.weatherOverrides.RestoreAll();
+            if (!runtime.weatherOverridePeers.Held() && !runtime.weatherOverridePeers.Release())
+                return false;
             if (runtime.weatherOverrides.SupersededCount())
                 runtime.weatherOverrideSuperseded.store(true);
             if (WeatherOverrideRetained() || (result != ClockResult::Ok && result != ClockResult::OwnerConflict))
@@ -7412,7 +7592,15 @@ namespace mta::game_de
             // before parking peers for any clock code/timing restoration. Its
             // failed journal keeps this same callback/context alive for retry.
             if (clean && WeatherOverrideRetained())
-                clean = RestoreWeatherOverrides();
+            {
+                ClockResult presentationRefusal = ClockResult::Ok;
+                clean = RestoreWeatherOverrides(&presentationRefusal);
+                // Recovery can also meet an ordinary short policy read before
+                // preparing native weather cleanup. Defer it without turning
+                // that CPU refusal into a native restoration failure.
+                if (!clean && presentationRefusal == ClockResult::Busy)
+                    return false;
+            }
             if (clean && (runtime.weatherRecovery.load() || runtime.weatherGeneration.load()))
                 clean = RecoverWeather();
             if (clean && (runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load()))
@@ -7471,7 +7659,14 @@ namespace mta::game_de
             }
             PeerHold peers;
             if (clean)
-                clean = peers.Prepare() && peers.Suspend() && CheckBinding(false, true) && (!timingChanged || CheckTimingBinding());
+            {
+                const bool prepared = peers.Prepare();
+                // A live short policy read is an ordinary deferred retry, not
+                // a native restoration failure or a new recovery obligation.
+                if (!prepared && peers.PresentationRefusal() == ClockResult::Busy)
+                    return false;
+                clean = prepared && peers.Suspend() && CheckBinding(false, true) && (!timingChanged || CheckTimingBinding());
+            }
             std::uint32_t timer = 0;
             if (clean && clockChanged)
                 clean = ReadValue(nativeTimerRva, timer);
@@ -7564,8 +7759,9 @@ namespace mta::game_de
                 Stop(ClockResult::OwnerConflict);
                 return;
             }
-            CClock& clock = runtime.clock;
-            BYTE    hour = 0, minute = 0;
+            CommandPresentationScope presentationScope(command);
+            CClock&                  clock = runtime.clock;
+            BYTE                     hour = 0, minute = 0;
             switch (command.operation)
             {
                 case ClockOperation::Read:
@@ -7585,6 +7781,9 @@ namespace mta::game_de
                     break;
             }
             const auto result = runtime.clock.LastResult();
+            // Consume the exact direct-call provenance before publishing this
+            // command. Never infer harmlessness from Busy or untouched data.
+            const bool presentationBusy = presentationScope.ConsumeBusy() && result == ClockResult::Busy;
             if (command.operation == ClockOperation::ResetTimeFrozen && result == ClockResult::Ok)
                 runtime.counters.resets.fetch_add(1);
             // The mailbox is already released before SDK/native operations.
@@ -7592,7 +7791,7 @@ namespace mta::game_de
             // callback's native readback, including recovery-only callbacks.
             runtime.lastCommandResult.store(result);
             runtime.lastCompletedSequence.store(command.sequence);
-            if (result != ClockResult::Ok)
+            if (result != ClockResult::Ok && !presentationBusy)
                 Stop(result);
         }
 
@@ -8346,13 +8545,19 @@ namespace mta::game_de
             }
         }
 
-        bool ChangeHooks(bool install) noexcept
+        bool ChangeHooks(bool install, ClockResult* presentationRefusal = nullptr) noexcept
         {
             // Detours owns relocation only for its function-entry edit. Raw
             // clock-branch changes use their own context-checked peer hold.
+            if (presentationRefusal)
+                *presentationRefusal = ClockResult::Ok;
             PeerHold peers;
             if (!peers.Prepare() || !peers.Suspend())
+            {
+                if (presentationRefusal)
+                    *presentationRefusal = peers.PresentationRefusal();
                 return false;
+            }
             bool ready = false;
             bool transaction = false;
             if (DetourTransactionBegin() == NO_ERROR)
@@ -8697,7 +8902,8 @@ namespace mta::game_de
             runtime.originalContinuation = frameMode ? nullptr : reinterpret_cast<ContinuationFunction>(runtime.image + Profile::hookEntryRva);
             runtime.originalTimer = timingMode ? reinterpret_cast<ContinuationFunction>(runtime.image + PauseProfile::entryRva) : nullptr;
             runtime.originalFrame = frameMode ? reinterpret_cast<ApplicationFrameFunction>(runtime.image + FrameProfile::entryRva) : nullptr;
-            valid = ChangeHooks(true);
+            ClockResult presentationRefusal = ClockResult::Ok;
+            valid = ChangeHooks(true, &presentationRefusal);
             if (valid)
             {
                 runtime.started = GetTickCount64();
@@ -8710,8 +8916,10 @@ namespace mta::game_de
                     valid = false;
                 }
             }
+            else if (presentationRefusal == ClockResult::Busy)
+                runtime.failure.store(ClockResult::Busy);
             else
-                Stop(ClockResult::PatchFailure);
+                Stop(presentationRefusal == ClockResult::Ok ? ClockResult::PatchFailure : presentationRefusal);
         }
         ReadState(finalState);
         hasFinalState = true;

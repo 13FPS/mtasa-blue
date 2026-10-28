@@ -1,5 +1,23 @@
 # MTA on Definitive Edition: reuse boundary
 
+## Presentation and Clock transition coordination (2026-10-28)
+
+Clock peer holds now close a shared CPU transition gate before enumerating or
+parking threads. A short presentation-policy reader can refuse that transition
+with Busy before native work; even genuine owner absence is fenced against a
+late registration. Reads end before original Present, COM or arbitrary calls.
+
+Failed resumes and unresolved instruction, protection or weather/rain recovery
+retain the same exclusion until actual cleanup. Weather publishes its current
+debt before releasing peers, then publishes the final resume outcome. Active
+registration holds an additional module reference; healthy unregister releases
+that reference under exclusion, while the caller keeps its actual hook or
+loader reference alive through return.
+
+This supplies internal coordination for a future persistent present owner.
+It publishes no native presentation provider or DisableVSync implementation.
+The existing diagnostic deadline and global Render/Clock exclusion remain.
+
 ## Loaded-world initialization admission (2026-10-28)
 
 The startup CGame layer now supplies the real mandatory preflight for MTA's

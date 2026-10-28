@@ -4,6 +4,7 @@
  * PURPOSE: Exercise the actual MTA clock interface and checked service boundary
  *****************************************************************************/
 #include "../../Client/game_de/CClockDE.h"
+#include "../../Client/game_de/NativePresentTransitionGate.h"
 #include "../../Client/game_de/CGameTimingDE.h"
 #include "../../Client/game_de/NativeGameTimingProfile.h"
 #include "../../Client/game_de/NativeGamePauseProfile.h"
@@ -2411,6 +2412,8 @@ namespace ClockTestFaults
     std::atomic<unsigned> partialDataWrites{0}, failFlushes{0}, protectionCountdown{0};
     std::atomic<bool>     failEnumeration{false}, failProtectionRestores{false};
     std::atomic<unsigned> failResumes{0};
+    std::atomic<unsigned> failSuspends{0}, suspendCalls{0};
+    std::atomic<DWORD>    suspendTarget{0};
     std::atomic<unsigned> clockDataWrites{0}, clockCodeExchanges{0};
     std::atomic<unsigned> partialTimingWrites{0}, failTimingWrites{0}, timingDataWrites{0};
     std::uintptr_t        timingWriteAddress = 0;
@@ -2645,6 +2648,19 @@ namespace ClockTestFaults
         }
         return ::Thread32Next(snapshot, entry);
     }
+    DWORD WINAPI Suspend(HANDLE thread)
+    {
+        suspendCalls.fetch_add(1);
+        // Fail only the selected disposable peer before its real suspend.
+        // All successful calls and the existing recovery path stay native.
+        if (GetThreadId(thread) == suspendTarget.load() && failSuspends.load())
+        {
+            failSuspends.fetch_sub(1);
+            SetLastError(ERROR_ACCESS_DENIED);
+            return static_cast<DWORD>(-1);
+        }
+        return ::SuspendThread(thread);
+    }
     DWORD WINAPI Resume(HANDLE thread)
     {
         if (GetThreadId(thread) == resumeTarget.load() && failResumes.load())
@@ -2657,6 +2673,19 @@ namespace ClockTestFaults
     }
 }
 
+#if defined(MTA_TEST_PRESENT_TRANSITION_CLOCK)
+namespace PresentTransitionWeatherFault
+{
+    BOOL WINAPI Flush(HANDLE, LPCVOID, SIZE_T);
+}
+    // Compile the unchanged platform before the clock's global runtime
+    // declaration, so its existing local names remain warning-clean.
+    // Only the same final OS cache-flush hook is active for this source.
+    #define FlushInstructionCache PresentTransitionWeatherFault::Flush
+    #include "../../Client/game_de/NativeWeatherOverrideWin32.cpp"
+    #undef FlushInstructionCache
+#endif
+
 // Fault injection exists only in this ordinary test translation unit. The
 // shipping executable gate, actual native access and clock implementation are
 // unchanged; each wrapper otherwise calls the real Win32 operation.
@@ -2666,6 +2695,7 @@ namespace ClockTestFaults
 #define FlushInstructionCache ClockTestFaults::Flush
 #define Thread32Next          ClockTestFaults::Next
 #define ResumeThread          ClockTestFaults::Resume
+#define SuspendThread         ClockTestFaults::Suspend
 // Restore the Windows alias after the clock-code fault seam. Other real
 // native memory helpers in this same translation unit still need that API.
 #pragma push_macro("InterlockedCompareExchange64")
@@ -2684,6 +2714,7 @@ namespace ClockTestFaults
 #pragma pop_macro("_InterlockedCompareExchange16")
 #pragma pop_macro("_InterlockedCompareExchange8")
 #pragma pop_macro("InterlockedCompareExchange64")
+#undef SuspendThread
 #undef ResumeThread
 #undef Thread32Next
 #undef FlushInstructionCache
@@ -8559,9 +8590,79 @@ static_assert(std::is_same_v<decltype(&PrivateAnimationFactoryManagerReceiver::D
 // the strict receiver must not replace its raw locator route with an abortor.
 static_assert(std::is_same_v<decltype(&PrivateAnimationFactoryManagerReceiver::GetAnimBlendHierarchy), decltype(&CAnimManagerDE::GetAnimBlendHierarchy)>);
 
+namespace PresentTransitionWeatherFault
+{
+    std::atomic<std::uintptr_t> address{0};
+    std::atomic<bool>           fail{false};
+    std::atomic<unsigned>       failures{0};
+    std::atomic<unsigned>       calls{0};
+    BOOL WINAPI                 Flush(HANDLE process, LPCVOID where, SIZE_T bytes)
+    {
+        if (reinterpret_cast<std::uintptr_t>(where) == address.load() && bytes == 8)
+            calls.fetch_add(1);
+        if (fail.load() && reinterpret_cast<std::uintptr_t>(where) == address.load() && bytes == 8)
+        {
+            failures.fetch_add(1);
+            SetLastError(ERROR_GEN_FAILURE);
+            return FALSE;
+        }
+        return ::FlushInstructionCache(process, where, bytes);
+    }
+}
+namespace PresentTransitionModuleFault
+{
+    std::atomic<HMODULE>  acquired{nullptr}, released{nullptr};
+    std::atomic<unsigned> acquisitions{0}, releaseAttempts{0}, releases{0};
+    std::atomic<bool>     pinRequested{false}, failRelease{false}, releaseGateClosed{true};
+    BOOL WINAPI           Acquire(DWORD flags, LPCWSTR address, HMODULE* output)
+    {
+        pinRequested.store((flags & GET_MODULE_HANDLE_EX_FLAG_PIN) != 0);
+        const auto result = ::GetModuleHandleExW(flags, address, output);
+        if (result && output && *output)
+        {
+            acquired.store(*output);
+            acquisitions.fetch_add(1);
+        }
+        return result;
+    }
+    BOOL WINAPI Release(HMODULE module)
+    {
+        releaseAttempts.fetch_add(1);
+        // These call the actual control API during the exact loader release
+        // boundary; a registration change must still exclude Clock/startup.
+        mta::game_de::NativePresentTransitionGate::Transition   clock;
+        mta::game_de::NativePresentTransitionGate::Registration contender;
+        const auto                                              transition = mta::game_de::NativePresentTransitionGate::TryAcquireTransition(99, clock);
+        const auto                                              registration = mta::game_de::NativePresentTransitionGate::RegisterOwner(99, contender);
+        if (transition != mta::game_de::ClockResult::Busy || registration != mta::game_de::ClockResult::Busy || clock.Held() || contender.IsSet())
+            releaseGateClosed.store(false);
+        if (failRelease.exchange(false))
+        {
+            SetLastError(ERROR_BUSY);
+            return FALSE;
+        }
+        released.store(module);
+        const auto result = ::FreeLibrary(module);
+        if (result)
+            releases.fetch_add(1);
+        return result;
+    }
+}
+#if defined(MTA_TEST_PRESENT_TRANSITION_CLOCK)
+    // Gate owns an ordinary module reference. Observe its real returned handle,
+    // then fault only one release acknowledgement before the actual retry.
+    #define GetModuleHandleExW PresentTransitionModuleFault::Acquire
+    #define FreeLibrary        PresentTransitionModuleFault::Release
+    #include "../../Client/game_de/NativePresentTransitionGate.cpp"
+    #undef FreeLibrary
+    #undef GetModuleHandleExW
+#endif
+#include "NativePresentTransitionClockOwnerTests.inl"
+
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
+    const bool presentTransitionClockOnly = argc == 3 && std::strcmp(argv[2], "--present-transition-clock") == 0;
     const bool startupInitializationReadinessOnly = argc == 3 && std::strcmp(argv[2], "--startup-initialization-readiness") == 0;
     const bool startupStreamingReceiverOnly = argc == 3 && std::strcmp(argv[2], "--startup-streaming-receiver") == 0;
     const bool startupNumericGaragesOnly = argc == 3 && std::strcmp(argv[2], "--startup-numeric-garages") == 0;
@@ -8728,13 +8829,13 @@ int main(int argc, char** argv)
     const bool waterOnly = orientationWithWater || (argc == 3 && std::strcmp(argv[2], "--ped-water") == 0);
     const bool poseOnly = argc == 3 && std::strcmp(argv[2], "--ped-pose") == 0;
     const bool poolRegistryOnly = argc == 3 && std::strcmp(argv[2], "--ped-pool-registry") == 0;
-    Check((argc == 2 || startupInitializationReadinessOnly || startupStreamingReceiverOnly || startupNumericGaragesOnly || startupPreparationReadinessOnly ||
-           startupMenuOnly || startupCollisionOnly || pedCreationLifecycleOnly || constructorOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly ||
-           garagePoolsOnly || poolRegistryOnly || poseOnly || waterOnly || animationOnly || animationNameOnly || animationManagerOnly ||
-           animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly || fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly ||
-           gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly || worldLineOnly || worldAreaOnly || worldQueriesOnly ||
-           worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly || cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly ||
-           pedRebuildOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly || animationBlockRefsOnly || animationBlockFactoryOnly ||
+    Check((argc == 2 || presentTransitionClockOnly || startupInitializationReadinessOnly || startupStreamingReceiverOnly || startupNumericGaragesOnly ||
+           startupPreparationReadinessOnly || startupMenuOnly || startupCollisionOnly || pedCreationLifecycleOnly || constructorOnly || pedOwnerOnly ||
+           currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly || waterOnly || animationOnly || animationNameOnly ||
+           animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly || fireCollisionOnly || fireOnly || collisionOnly ||
+           duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly || worldLineOnly || worldAreaOnly ||
+           worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly || cameraSphereOnly || pedWeaponClearOnly ||
+           pedClothesOnly || pedRebuildOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly || animationBlockRefsOnly || animationBlockFactoryOnly ||
            customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly || animationGatewayOnly || customAnimationSequenceOnly ||
            customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly || customAnimationSequenceNameOnly || freshCompressedSequenceOnly ||
            privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly || privateHierarchyParentOnly || privateHierarchyEmptyOnly ||
@@ -8745,6 +8846,14 @@ int main(int argc, char** argv)
            pedRenderOnly || privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
+    if (presentTransitionClockOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        PresentTransitionClockFixture::Run(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
     if (startupInitializationReadinessOnly)
     {
         ClockImageFixture fixture;

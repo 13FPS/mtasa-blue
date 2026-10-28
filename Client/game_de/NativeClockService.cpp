@@ -89,6 +89,8 @@
 #include "NativePedWeaponAmmoMemory.h"
 #include "NativePedCurrentWeaponSlotMemory.h"
 #include "NativeNamedGarageMemory.h"
+#include "NativeNumericGarageMemory.h"
+#include "CGaragesStartupDE.h"
 #include "NativePedMetadataMemory.h"
 #include "NativePedRenderMemory.h"
 #include "NativeTaskRemovalCalls.h"
@@ -429,6 +431,13 @@ namespace mta::game_de
             ClockResult GetWeaponInfoSlot(std::size_t slot, CWeaponInfo*& output) noexcept override;
             ClockResult ReadPedWeaponInfo(const NativePedReferenceToken&, std::uint32_t, eWeaponSkill, CWeaponInfo*&) noexcept override;
             ClockResult ReadPedCurrentWeaponSlot(const NativePedReferenceToken&, std::uint32_t&) noexcept override;
+            ClockResult RequireStartupNumericGaragesReady() noexcept override;
+            ClockResult GetStartupNumericGarages(CGarages*&) noexcept override;
+            ClockResult ReadNumericGarageGeometry(std::uint32_t, NativeGarageGeometry&) noexcept override;
+            ClockResult ReadNumericGarageType(std::uint32_t, std::uint8_t&) noexcept override;
+            ClockResult SetNumericGarageType(std::uint32_t, std::uint8_t) noexcept override;
+            ClockResult ReadNumericGarageOpen(std::uint32_t, bool&) noexcept override;
+            ClockResult SetNumericGarageOpen(std::uint32_t, bool) noexcept override;
             ClockResult ReadNamedGarageGeometry(const NativeGarageName&, NativeGarageGeometry&) noexcept override;
             ClockResult CheckPedPoolAccess() noexcept override;
             ClockResult ProbePedPoolHandle(std::uint32_t, bool&, NativePedPoolReader::Value&) noexcept override;
@@ -697,7 +706,10 @@ namespace mta::game_de
             CPlayerInfoDE        playerInfoSdk{access};
             CRopesDE             ropesSdk{access};
             CWeatherOverridesDE  weatherSdk{access, access, access};
-            Counters             counters;
+            // Fixed concrete wrappers own no native row, allocation or lease.
+            // The access owner is constructed first and outlives every borrow.
+            CGaragesStartupDE startupGarages{access};
+            Counters          counters;
             // Destroy the hold before the shared peer recovery vector/gates.
             // Its normal lifetime is explicitly retired by Reset/End.
             PeerHold weatherOverridePeers;
@@ -4835,6 +4847,48 @@ namespace mta::game_de
             // grants the unqualified model/actor slot-change lifecycle.
             output = next;
             return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::RequireStartupNumericGaragesReady() noexcept
+        {
+            return NativeNumericGarageMemory({runtime.image}, &CheckTimingOwner).CheckReady();
+        }
+        ClockResult NativeAccess::GetStartupNumericGarages(CGarages*& output) noexcept
+        {
+            const auto result = RequireStartupNumericGaragesReady();
+            if (result != ClockResult::Ok)
+                return result;
+            // Publication borrows this actual runtime's fixed SDK service;
+            // each later property still requires its own current callback.
+            output = &runtime.startupGarages;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::ReadNumericGarageGeometry(std::uint32_t id, NativeGarageGeometry& output) noexcept
+        {
+            return NativeNumericGarageMemory({runtime.image}, &CheckTimingOwner).ReadGeometry(id, output);
+        }
+        ClockResult NativeAccess::ReadNumericGarageType(std::uint32_t id, std::uint8_t& output) noexcept
+        {
+            return NativeNumericGarageMemory({runtime.image}, &CheckTimingOwner).ReadType(id, output);
+        }
+        ClockResult NativeAccess::ReadNumericGarageOpen(std::uint32_t id, bool& output) noexcept
+        {
+            return NativeNumericGarageMemory({runtime.image}, &CheckTimingOwner).ReadOpen(id, output);
+        }
+        ClockResult NativeAccess::SetNumericGarageType(std::uint32_t id, std::uint8_t target) noexcept
+        {
+            NativeNumericGarageMemory::Receipt receipt;
+            const auto                         result = NativeNumericGarageMemory({runtime.image}, &CheckTimingOwner).SetType(id, target, &receipt);
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::SetNumericGarageOpen(std::uint32_t id, bool open) noexcept
+        {
+            NativeNumericGarageMemory::Receipt receipt;
+            const auto                         result = NativeNumericGarageMemory({runtime.image}, &CheckTimingOwner).SetOpen(id, open, &receipt);
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
         }
         ClockResult NativeAccess::ReadNamedGarageGeometry(const NativeGarageName& name, NativeGarageGeometry& output) noexcept
         {

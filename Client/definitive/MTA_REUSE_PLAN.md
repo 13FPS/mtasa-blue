@@ -1,5 +1,30 @@
 # MTA on Definitive Edition: reuse boundary
 
+## Qualified startup garage identities (2026-10-28)
+
+Classic MTA's actual garage getters and a bounded DE observation qualify all
+sixteen SDK IDs in the existing startup schedule, including ID 32. The size
+export used the legacy raw-height/width/depth order; a separate normalizer
+applies the independently documented upstream API correction. All ten scalar
+fields then match exactly against all fifty published DE rows. The original
+capture and failed comparison remain preserved. The two sprLAe garages have
+distinct full geometry and retain separate SDK identities.
+
+The startup service selects each current row by its exact name and all fourteen
+DE geometry words. Fifty is the qualified published-set fence, not an inferred
+bank capacity. Fresh retained-owner, thread, world, GC and profile checks remain
+mandatory; the passive reference grants no later native authority or lease.
+Numeric and named writes share the existing exclusion guard and one-byte
+compare/exchange behavior. Entered failures stop the runtime without replaying
+or rewinding the accepted or uncertain field outcome.
+
+The runtime owns stable concrete wrappers for these sixteen IDs, constructed
+without native calls. Fixed numeric access adapters reuse CGarageNamedDE's
+eight existing SDK properties, while CGaragesDE retains MTA's ordered Initialize
+policy. The wrappers and owning service cannot be copied or moved. Other valid
+garage IDs remain explicitly unavailable; complete fifty-ID coverage, overall
+initialization readiness and the full game/streaming factories remain pending.
+
 ## Shared model streaming state query (2026-10-28)
 
 The actual Lua model-state query now asks MTA's shared streaming SDK for a

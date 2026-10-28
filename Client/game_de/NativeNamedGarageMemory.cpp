@@ -4,6 +4,7 @@
  * PURPOSE: Preserve selected named garage bytes without inventing native capacity or SDK ID mapping
  ****************************************************************************/
 #include "NativeNamedGarageMemory.h"
+#include "NativeGarageMemoryShared.h"
 #include "NativeNamedGarageProfile.h"
 #include "NativeNamedGarageGeometryProfile.h"
 #include "NativeImageAccess.h"
@@ -18,23 +19,8 @@ namespace mta::game_de
 {
     namespace NamedGarageDetail
     {
-        namespace P = NativeNamedGarageProfile;
-        namespace I = NativeImageAccess;
-        using Memory = NativeNamedGarageMemory;
-        struct Value
-        {
-            std::uint32_t    count = 0, index = 0;
-            std::uintptr_t   row = 0;
-            NativeGarageName name{};
-            std::uint8_t     type = 0, state = 0;
-        };
         thread_local bool writing = false;
-        struct Scope
-        {
-            Scope() noexcept { writing = true; }
-            ~Scope() { writing = false; }
-        };
-        bool ValidName(const NativeGarageName& name) noexcept
+        bool              ValidName(const NativeGarageName& name) noexcept
         {
             for (const auto byte : name)
                 if (!byte)

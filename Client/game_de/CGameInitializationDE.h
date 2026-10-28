@@ -31,11 +31,9 @@ namespace mta::game_de
         void         SetupSpecialCharacters();
         void         SetupBrokenModels();
 
-        // The qualified backend resolves the selected SDK facade even when
-        // its native slot must be created/replaced by MakePedModel. Ordinary
-        // loaded/valid-model lookup cannot substitute for this operation.
-        // Reference lifetime and current owner remain backend obligations.
-        virtual CModelInfo& ResolveStartupPedModel(std::uint32_t model) = 0;
+        // Special models are assembled from the retained native creation
+        // capability and late GetStreaming(), without requiring a complete
+        // CModelInfo facade for an as-yet nonexistent native slot.
 
         // Preserve FixModelCol's exact conditional borrowed-pointer copy,
         // including a null source collision. Native collision identity and

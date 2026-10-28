@@ -35,6 +35,8 @@ $record['actualModelValiditySdkTested']=$false
 $record['actualModelDependencySdkTested']=$false
 $record['actualModelMakePedSdkTested']=$false
 $record['actualModelPedCreationOwnerDispatchSdkTested']=$false
+$record['actualConcreteStartupModelPreparationTested']=$false
+$record['actualSharedPedCreationBoundariesTested']=$false
 if ($Scope -eq 'Dependencies') {
     $record.scope='Actual Request dependency order and protected RequestModelDependencies/GetAnimFileIndex through current classification and required game/model/streaming interfaces. Focused vehicle animation wrap/sentinel/base queries, skin7 source lookups, diagnostic defaults/refusals and actual nested asynchronous requests; no request retry/reference or historical matrix replay.'
 }
@@ -43,7 +45,7 @@ if ($Scope -eq 'Validity') {
 }
 
 if ($Scope -eq 'MakePedModel') {
-    $record.scope='Actual MakePedModel creation/publication boundary followed by the existing real streaming special request, source pointer/full model key/channel zero and irreversible accepted prefix on failure. x86/x64 only this new focused SDK fixture; no old request/validity/dependency matrix, native creation implementation or complete model factory claim.'
+    $record.scope='Actual MakePedModel creation/publication boundary followed by the existing real streaming special request, source pointer/full model key/channel zero and irreversible accepted prefix on failure. Concrete actual shared44 startup assembly, late service/full key boundaries and x86/x64 only this focused SDK fixture; no old request/validity/dependency matrix, native creation implementation or complete model factory claim.'
     $record['results']=@()
 }
 
@@ -105,6 +107,7 @@ try {
     $productionSources = @('Client/game_de/CModelInfoRequestDE.cpp','Client/game_de/CModelInfoDE.cpp')
     if ($Scope -ne 'Validity') { $productionSources += 'Client/game_de/CStreamingDE.cpp' }
     $sourceNames = $productionSources + @(
+        'Client/sdk/game/CModelPedCreationPolicy.h','Client/sdk/game/CGameModelPreparationPolicy.h','Client/game_de/CGameModelPreparationDE.h',
         'Client/game_de/CModelInfoRequestDE.h','Client/game_de/CModelInfoDE.h','Client/game_de/CStreamingDE.h',
         'Client/sdk/game/CModelInfo.h','Client/sdk/game/CGame.h','Client/sdk/game/CStreaming.h','Client/sdk/game/CModelRequestPolicy.h',
         'Client/sdk/game/CAnimBlock.h','Client/sdk/game/Common.h','Client/sdk/game/CWeaponInfo.h',
@@ -272,7 +275,7 @@ try {
                 (Join-Path $PSScriptRoot $fixtureSource))+@($productionSources|ForEach-Object{Join-Path $taskRoot $_})+
                 @(('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'fixture.pdb')),('/Fe'+$executable),'/link','bcrypt.lib')
             $result=[ordered]@{architecture=$architecture;environment=$environmentResult;compile=$null;test=$null;checks=0;
-                pointerBits=$null;executable=$executable;executableSha256=$null;actualModelMakePedSdkTested=$false;actualModelPedCreationOwnerDispatchSdkTested=$false}
+                pointerBits=$null;executable=$executable;executableSha256=$null;actualModelMakePedSdkTested=$false;actualModelPedCreationOwnerDispatchSdkTested=$false;actualConcreteStartupModelPreparationTested=$false;actualSharedPedCreationBoundariesTested=$false}
             $record.results+=$result
             $result.compile=RunOwned $compiler $arguments $directory 'compile' 60000
             if($result.compile.exitCode -ne 0 -or $result.compile.timedOut){throw "$architecture actual MakePedModel SDK compilation failed."}
@@ -283,14 +286,18 @@ try {
             if($summary.Success){$result.checks=[int]$summary.Groups[1].Value;$result.pointerBits=[int]$summary.Groups[2].Value}
             $result.actualModelMakePedSdkTested=$stdout.Contains('Production actual model MakePedModel SDK fixture completed')
             $result.actualModelPedCreationOwnerDispatchSdkTested=$stdout.Contains('Production actual model ped creation owner dispatch SDK fixture completed')
+            $result.actualConcreteStartupModelPreparationTested=$stdout.Contains('Production concrete startup model preparation fixture completed')
+            $result.actualSharedPedCreationBoundariesTested=$stdout.Contains('Production shared ped creation original boundaries fixture completed')
             $expectedBits=if($architecture -eq 'x86'){32}else{64}
             if($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -le 0 -or $result.pointerBits -ne $expectedBits -or
-                -not $result.actualModelMakePedSdkTested -or -not $result.actualModelPedCreationOwnerDispatchSdkTested){throw "$architecture actual MakePedModel SDK execution evidence missing or failed."}
+                -not $result.actualModelMakePedSdkTested -or -not $result.actualModelPedCreationOwnerDispatchSdkTested -or -not $result.actualConcreteStartupModelPreparationTested -or -not $result.actualSharedPedCreationBoundariesTested){throw "$architecture actual MakePedModel SDK execution evidence missing or failed."}
         }
         $record.actualModelMakePedSdkTested=@($record.results|Where-Object{-not $_.actualModelMakePedSdkTested}).Count -eq 0
         $record.actualModelPedCreationOwnerDispatchSdkTested=@($record.results|Where-Object{-not $_.actualModelPedCreationOwnerDispatchSdkTested}).Count -eq 0
+        $record.actualConcreteStartupModelPreparationTested=@($record.results|Where-Object{-not $_.actualConcreteStartupModelPreparationTested}).Count -eq 0
+        $record.actualSharedPedCreationBoundariesTested=@($record.results|Where-Object{-not $_.actualSharedPedCreationBoundariesTested}).Count -eq 0
         $record.generatedFixture.defaultCreatorRefusalCovered=$record.actualModelMakePedSdkTested
-        $record.success=$record.results.Count -eq 2 -and $record.actualModelMakePedSdkTested -and $record.actualModelPedCreationOwnerDispatchSdkTested
+        $record.success=$record.results.Count -eq 2 -and $record.actualModelMakePedSdkTested -and $record.actualModelPedCreationOwnerDispatchSdkTested -and $record.actualConcreteStartupModelPreparationTested -and $record.actualSharedPedCreationBoundariesTested
     } else {
     $environmentScript = Join-Path $outputRoot 'capture-msvc.cmd'
     @('@echo off',('call "{0}" -no_logo -arch=x64 -host_arch=x64 >nul' -f $developerCommand),

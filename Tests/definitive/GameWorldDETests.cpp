@@ -384,19 +384,14 @@ namespace
             Check(lastFilterAccepted, "actual backend hook receives exact barrier predicate");
             trace.Call(EnableIpl);
         }
-        void        RequireResetReady() override { world_fixture::Unqualified("Reset readiness"); }
-        void        ResetVehicleModelDummies() override { world_fixture::Unqualified("model dummies"); }
-        void        RestoreObjectModelGroups() override { world_fixture::Unqualified("model groups"); }
-        void        RestoreDefaultObjectGroupProperties() override { world_fixture::Unqualified("object properties"); }
-        void        ResetVehicleModelWheelSizes() override { world_fixture::Unqualified("wheel sizes"); }
-        void        ResetModelTextureDictionaries() override { world_fixture::Unqualified("texture dictionaries"); }
-        int         GetResetBuildingPoolCapacity() const override { world_fixture::Unqualified("default capacity"); }
-        void        RequireInitializationReady() override { world_fixture::Unqualified("Initialize readiness"); }
-        CModelInfo& ResolveStartupPedModel(std::uint32_t model) override
-        {
-            (void)model;
-            world_fixture::Unqualified("startup ped model");
-        }
+        void RequireResetReady() override { world_fixture::Unqualified("Reset readiness"); }
+        void ResetVehicleModelDummies() override { world_fixture::Unqualified("model dummies"); }
+        void RestoreObjectModelGroups() override { world_fixture::Unqualified("model groups"); }
+        void RestoreDefaultObjectGroupProperties() override { world_fixture::Unqualified("object properties"); }
+        void ResetVehicleModelWheelSizes() override { world_fixture::Unqualified("wheel sizes"); }
+        void ResetModelTextureDictionaries() override { world_fixture::Unqualified("texture dictionaries"); }
+        int  GetResetBuildingPoolCapacity() const override { world_fixture::Unqualified("default capacity"); }
+        void RequireInitializationReady() override { world_fixture::Unqualified("Initialize readiness"); }
         void FixStartupModelCollision(std::uint32_t target, std::uint32_t source) override
         {
             (void)target;

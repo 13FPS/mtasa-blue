@@ -4,10 +4,10 @@
  * PURPOSE: Dispatch MTA's real later initialization itinerary once per call
  *****************************************************************************/
 #include "CGameInitializationDE.h"
+#include "CGameModelPreparationDE.h"
 #include <game/CGarages.h>
 #include <game/CGameInitializationPolicy.h>
 #include <game/CGameModelPreparationPolicy.h>
-#include <game/CModelInfo.h>
 #include <stdexcept>
 
 namespace mta::game_de
@@ -30,8 +30,9 @@ namespace mta::game_de
 
     void CGameInitializationDE::SetupSpecialCharacters()
     {
-        MtaGame::CGameModelPreparationPolicy::SetupSpecialCharacters([this](std::uint32_t model, const char* name)
-                                                                     { ResolveStartupPedModel(model).MakePedModel(name); });
+        // Reuse the retained native creation capability and resolve the real
+        // SDK streaming receiver separately after each accepted publication.
+        CGameModelPreparationDE(NativeWrites()).SetupSpecialCharacters([this] { return GetStreaming(); });
     }
 
     void CGameInitializationDE::SetupBrokenModels()

@@ -1,5 +1,19 @@
 # MTA on Definitive Edition: reuse boundary
 
+## Concrete startup model assembly (2026-10-28)
+
+The real SA and DE MakePedModel implementations now share the same ordered
+creation/request policy. SA keeps its local ped wrapper alive through the
+streaming request, while DE resolves each model key and streaming receiver at
+the original effect boundary. Failures preserve the accepted prefix.
+
+CGameInitializationDE now executes MTA's existing 44-entry special-character
+schedule through a concrete preparation service backed by the retained native
+creator and the actual streaming SDK. The SA schedule addresses its preallocated
+model array, so this operation no longer waits on an unrelated complete model
+facade. Later initialization admission, garages, collision fixes, rendering and
+native menu readiness remain mandatory; the general game factory stays abstract.
+
 ## Current offline cohort: model identity and ped animation reads (2026-10-28)
 
 The actual model SDK now implements MTA's `IsPlayerModel` through its retained

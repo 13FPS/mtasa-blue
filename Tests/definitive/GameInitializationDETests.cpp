@@ -10,7 +10,7 @@
 #include <game/CGameInitializationPolicy.h>
 #include <game/CGarageInitializationPolicy.h>
 #include <game/CGameModelPreparationPolicy.h>
-#include <game/CModelInfo.h>
+#include <game/CStreaming.h>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -121,6 +121,7 @@ namespace
         ClockResult Freeze(bool) noexcept override { fixture::Unqualified(); }
         ClockResult Frozen(bool&) const noexcept override { fixture::Unqualified(); }
     };
+    struct ExistingOwner;
     class ConstructorOwner final : public NativeGameTimingAccess
     {
     public:
@@ -140,6 +141,8 @@ namespace
             ++preparations;
             return ClockResult::NotInitialized;
         }
+        ClockResult         CreateAndPublishPedModelMetadata(std::uint32_t model) noexcept override;
+        ExistingOwner*      modelOwner = nullptr;
         unsigned            constructorRequires = 0, preparations = 0;
         const CClock*       requestedClock = nullptr;
         CWeaponStatManager* manager = nullptr;
@@ -191,6 +194,21 @@ namespace
             Current();
         }
     };
+    ClockResult ConstructorOwner::CreateAndPublishPedModelMetadata(std::uint32_t model) noexcept
+    {
+        if (!modelOwner)
+            return ClockResult::NotInitialized;
+        try
+        {
+            modelOwner->Current();
+            modelOwner->modelResolutions.push_back(model);
+            return ClockResult::Ok;
+        }
+        catch (...)
+        {
+            return ClockResult::OriginalException;
+        }
+    }
     class Garage final : public CGarage
     {
     public:
@@ -234,37 +252,35 @@ namespace
         ExistingOwner&                                   owner;
         std::array<std::unique_ptr<Garage>, MAX_GARAGES> values;
     };
-    class Model final : public fixture::ModelPreparationFixtureBase
+    class Streaming final : public fixture::StreamingPreparationFixtureBase
     {
     public:
-        explicit Model(ExistingOwner& existingOwner) : owner(existingOwner) {}
-        void MakePedModel(const char* name) override
+        explicit Streaming(ExistingOwner& existingOwner) : owner(existingOwner) {}
+        void RequestSpecialModel(DWORD selected, const char* name, DWORD channel) override
         {
             owner.Current();
-            if (selected == 1)
-                owner.Effect(1);
-            // A test-only stand-in for the still-mandatory native creation
-            // effect: record accepted intent before a possible owner fault.
+            Check(channel == 0, "startup retains the actual source special-model channel");
             owner.modelAssignments.emplace_back(selected, name);
             if (selected == owner.failMakeModel)
                 throw Failure(6);
             owner.Current();
         }
         ExistingOwner& owner;
-        std::uint32_t  selected = ~std::uint32_t{};
     };
     class Game final : public fixture::GameInitializationFixtureBase
     {
     public:
-        Game(const NativeGameTimingReader& reader, CClockDE& clock, NativeGameTimingAccess& access, const NativeStreamingFileIdsReader& streaming,
+        Game(const NativeGameTimingReader& reader, CClockDE& clock, ConstructorOwner& access, const NativeStreamingFileIdsReader& streaming,
              const NativeGameStateReader& state, ExistingOwner& existingOwner) noexcept
-            : GameInitializationFixtureBase(reader, clock, access, streaming, state), owner(existingOwner), model(existingOwner)
+            : GameInitializationFixtureBase(reader, clock, access, streaming, state), owner(existingOwner), streamingReceiver(existingOwner)
         {
+            access.modelOwner = &owner;
         }
-        Game(const NativeGameTimingReader& reader, CClockDE& clock, NativeGameTimingAccess& access, const NativeStreamingFileIdsReader& streaming,
+        Game(const NativeGameTimingReader& reader, CClockDE& clock, ConstructorOwner& access, const NativeStreamingFileIdsReader& streaming,
              const NativeGameStateReader& state, ExistingOwner& existingOwner, ConstructorServices tag)
-            : GameInitializationFixtureBase(reader, clock, access, streaming, state, tag), owner(existingOwner), model(existingOwner)
+            : GameInitializationFixtureBase(reader, clock, access, streaming, state, tag), owner(existingOwner), streamingReceiver(existingOwner)
         {
+            access.modelOwner = &owner;
         }
         CGarages* GetGarages() override
         {
@@ -272,23 +288,24 @@ namespace
             owner.Current();
             return garages;
         }
+        CStreaming* GetStreaming() override
+        {
+            owner.Current();
+            const auto selected = owner.modelResolutions.back();
+            if (selected == 1)
+                owner.Effect(1);
+            if (selected == owner.failResolveModel)
+                throw Failure(5);
+            return &streamingReceiver;
+        }
         using GameInitializationFixtureBase::ConstructorServices;
         ExistingOwner& owner;
-        Model          model;
+        Streaming      streamingReceiver;
         CGarages*      garages = nullptr;
         unsigned       garageResolutions = 0;
 
     protected:
-        void        RequireInitializationReady() override { owner.Preflight(); }
-        CModelInfo& ResolveStartupPedModel(std::uint32_t selected) override
-        {
-            owner.Current();
-            owner.modelResolutions.push_back(selected);
-            if (selected == owner.failResolveModel)
-                throw Failure(5);
-            model.selected = selected;
-            return model;
-        }
+        void RequireInitializationReady() override { owner.Preflight(); }
         void FixStartupModelCollision(std::uint32_t target, std::uint32_t source) override
         {
             owner.Current();
@@ -475,16 +492,16 @@ namespace
             Check(owner.modelAssignments.size() == count, "actual SDK dispatch retains exactly the accepted special-model prefix");
             for (std::size_t index = 0; index < count; ++index)
                 Check(owner.modelAssignments[index].first == StartupModels[index].first && owner.modelAssignments[index].second == StartupModels[index].second,
-                      "actual CModelInfo MakePedModel receives the original key/name once in order");
+                      "actual native-owner/streaming assembly receives the original key/name once in order");
         };
         for (unsigned attempt = 0; attempt < 2; ++attempt)
         {
             reset();
             sdk.Initialize();
             exactPrefix(StartupModels.size());
-            Check(owner.modelResolutions.size() == StartupModels.size(), "each model is freshly resolved once, never loaded-only filtered or cached");
+            Check(owner.modelResolutions.size() == StartupModels.size(), "each model reaches the retained native creation owner once without a facade lookup");
             for (std::size_t index = 0; index < StartupModels.size(); ++index)
-                Check(owner.modelResolutions[index] == StartupModels[index].first, "qualified resolver retains exact MTA numeric model identity");
+                Check(owner.modelResolutions[index] == StartupModels[index].first, "native creator retains exact MTA numeric model identity");
             Check(owner.collisionRequests == CollisionModels, "actual DE schedule dispatches mandatory conditional collision hooks in original order");
             Check(owner.effects.size() == 20 && owner.effects[16] == 1 && owner.effects[17] == 2 && owner.effects[18] == 3 && owner.effects[19] == 4,
                   "both repeated calls retain garage, all special models, collision, renderer, menu order");
@@ -494,14 +511,14 @@ namespace
         FailsAt([&] { sdk.Initialize(); }, 5);
         exactPrefix(22);
         Check(owner.modelResolutions.size() == 23 && owner.collisionRequests.empty() && owner.effects.size() == 17,
-              "missing qualified facade stops before its MakePedModel and every later phase, preserving earlier effects");
+              "late missing streaming receiver preserves its creation and earlier requests, then stops every later phase");
         owner.failResolveModel = ~std::uint32_t{};
         reset();
         owner.failMakeModel = StartupModels[22].first;
         FailsAt([&] { sdk.Initialize(); }, 6);
         exactPrefix(23);
         Check(owner.modelResolutions.size() == 23 && owner.collisionRequests.empty() && owner.effects.size() == 17,
-              "entered MakePedModel failure preserves its accepted prefix without rollback, fallback or replay");
+              "entered special request failure preserves its accepted prefix without rollback, fallback or replay");
         owner.failMakeModel = ~std::uint32_t{};
         reset();
         owner.failCollisionTarget = 3553;

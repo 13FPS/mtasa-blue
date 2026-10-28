@@ -4,6 +4,7 @@
  * PURPOSE: Preserve actual MakePedModel creation/publication-before-request order
  *****************************************************************************/
 #include "../../Client/game_de/CModelInfoRequestDE.h"
+#include "../../Client/game_de/CGameModelPreparationDE.h"
 #include "../../Client/game_de/CStreamingDE.h"
 #include <game/CGame.h>
 #include <algorithm>
@@ -14,6 +15,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <utility>
 
 namespace fixture
 {
@@ -70,9 +72,9 @@ namespace
     }
     struct Trace
     {
-        std::array<unsigned, 32> events{};
-        std::size_t              count = 0;
-        void                     Add(unsigned event) noexcept
+        std::array<unsigned, 512> events{};
+        std::size_t               count = 0;
+        void                      Add(unsigned event) noexcept
         {
             if (count == events.size())
                 fixture::Unqualified();
@@ -91,22 +93,29 @@ namespace
         ClockResult RequestStreamingSpecialModel(std::uint32_t model, const char* texture, std::uint32_t channel) noexcept override
         {
             trace.Add(3);
+            if (requests == keys.size())
+                fixture::Unqualified();
+            keys[requests] = model;
+            names[requests] = texture;
+            channels[requests] = channel;
             ++requests;
             lastModel = model;
             lastTexture = texture;
             lastChannel = channel;
-            return status;
+            return failAt == 0 || requests == failAt ? status : ClockResult::Ok;
         }
-        ClockResult   RequestStreamingModel(std::uint32_t, std::uint32_t) noexcept override { fixture::Unqualified(); }
-        ClockResult   RequestStreamingUpgrade(std::uint32_t, std::uint32_t) noexcept override { fixture::Unqualified(); }
-        ClockResult   ReadStreamingModelLoaded(std::uint32_t, NativeModelLoadedReader::Value&) noexcept override { fixture::Unqualified(); }
-        ClockResult   ReadStreamingUpgradeLoaded(std::uint32_t, bool&) noexcept override { fixture::Unqualified(); }
-        ClockResult   LoadStreamingModels(bool) noexcept override { fixture::Unqualified(); }
-        Trace&        trace;
-        unsigned      requests = 0;
-        std::uint32_t lastModel = 0, lastChannel = 0xffffffffu;
-        const char*   lastTexture = nullptr;
-        ClockResult   status = ClockResult::Ok;
+        ClockResult                    RequestStreamingModel(std::uint32_t, std::uint32_t) noexcept override { fixture::Unqualified(); }
+        ClockResult                    RequestStreamingUpgrade(std::uint32_t, std::uint32_t) noexcept override { fixture::Unqualified(); }
+        ClockResult                    ReadStreamingModelLoaded(std::uint32_t, NativeModelLoadedReader::Value&) noexcept override { fixture::Unqualified(); }
+        ClockResult                    ReadStreamingUpgradeLoaded(std::uint32_t, bool&) noexcept override { fixture::Unqualified(); }
+        ClockResult                    LoadStreamingModels(bool) noexcept override { fixture::Unqualified(); }
+        Trace&                         trace;
+        unsigned                       requests = 0, failAt = 0;
+        std::array<std::uint32_t, 128> keys{}, channels{};
+        std::array<const char*, 128>   names{};
+        std::uint32_t                  lastModel = 0, lastChannel = 0xffffffffu;
+        const char*                    lastTexture = nullptr;
+        ClockResult                    status = ClockResult::Ok;
     };
     struct Streaming final : fixture::StreamingFixtureBase
     {
@@ -191,13 +200,14 @@ namespace
             lastModel = modelIndex;
             // This observes the new optional owner channel only. The actual
             // native creation journal is not reimplemented in this SDK spy.
-            if (status == ClockResult::Ok || acknowledgePrefixBeforeRefusal)
+            const auto current = failAt == 0 || calls == failAt ? status : ClockResult::Ok;
+            if (current == ClockResult::Ok || acknowledgePrefixBeforeRefusal)
                 ++acknowledgedPrefixes;
-            return status;
+            return current;
         }
         Trace&        trace;
         std::uint32_t lastModel = 0;
-        unsigned      calls = 0, acknowledgedPrefixes = 0;
+        unsigned      calls = 0, acknowledgedPrefixes = 0, failAt = 0;
         ClockResult   status = ClockResult::Ok;
         bool          acknowledgePrefixBeforeRefusal = false;
     };
@@ -365,6 +375,173 @@ namespace
             s.trace.Expect({});
         }
     }
+    // The original active SA statements are the independent schedule oracle.
+    constexpr std::array<std::pair<std::uint32_t, const char*>, 44> StartupModels{{
+        {1, "TRUTH"},     {2, "MACCER"},   {3, "CDEPUT"},    {4, "SFPDM1"},    {5, "BB"},        {6, "WFYCRP"}, {8, "WMYCD2"},   {42, "SUZIE"},
+        {65, "VWMYAP"},   {86, "VHFYST"},  {119, "LVPDM1"},  {265, "TENPEN"},  {266, "PULASKI"}, {267, "HERN"}, {268, "DWAYNE"}, {269, "SMOKE"},
+        {270, "SWEET"},   {271, "RYDER"},  {272, "FORELLI"}, {273, "MEDIATR"}, {289, "SOMYAP"},  {290, "ROSE"}, {291, "PAUL"},   {292, "CESAR"},
+        {293, "OGLOC"},   {294, "WUZIMU"}, {295, "TORINO"},  {296, "JIZZY"},   {297, "MADDOGG"}, {298, "CAT"},  {299, "CLAUDE"}, {300, "RYDER2"},
+        {301, "RYDER3"},  {302, "EMMET"},  {303, "ANDRE"},   {304, "KENDL"},   {305, "JETHRO"},  {306, "ZERO"}, {307, "TBONE"},  {308, "SINDACO"},
+        {309, "JANITOR"}, {310, "BBTHIN"}, {311, "SMOKEV"},  {312, "PSYCHO"},
+    }};
+
+    void ConcretePreparationChecks()
+    {
+        static_assert(!std::is_abstract_v<CGameModelPreparationDE>);
+        for (unsigned attempt = 0; attempt < 2; ++attempt)
+        {
+            Trace                   trace;
+            CreationOwner           creation(trace);
+            StreamingOwner          requests(trace);
+            Streaming               streaming(requests);
+            CGameModelPreparationDE preparation(creation);
+            Check(!creation.calls && !requests.requests && !trace.count, "concrete model preparation construction has no engine or lookup effect");
+            unsigned resolutions = 0;
+            auto     resolve = [&]() -> CStreaming*
+            {
+                trace.Add(2);
+                ++resolutions;
+                Check(creation.calls == resolutions && requests.requests + 1 == resolutions &&
+                          creation.lastModel == StartupModels[(resolutions - 1) % StartupModels.size()].first,
+                      "each late service lookup follows its corresponding actual native publication");
+                return &streaming;
+            };
+            for (unsigned repeat = 0; repeat <= attempt; ++repeat)
+                preparation.SetupSpecialCharacters(resolve);
+            const auto expected = StartupModels.size() * (attempt + 1);
+            Check(creation.calls == expected && resolutions == expected && requests.requests == expected && trace.count == expected * 3,
+                  "actual shared44 schedule repeats only on explicit calls, with one create/lookup/request per entry");
+            for (std::size_t index = 0; index < expected; ++index)
+            {
+                const auto& entry = StartupModels[index % StartupModels.size()];
+                Check(trace.events[index * 3] == 1 && trace.events[index * 3 + 1] == 2 && trace.events[index * 3 + 2] == 3,
+                      "each full native-owner/real SDK request tuple preserves original effect order");
+                Check(requests.keys[index] == entry.first && std::string(requests.names[index]) == entry.second && requests.channels[index] == 0,
+                      "concrete preparation preserves all44 exact keys, original names and special channel zero");
+            }
+        }
+        constexpr std::array<ClockResult, 14> refusals{
+            {ClockResult::InvalidArgument, ClockResult::NotInitialized, ClockResult::WrongThread, ClockResult::BindingChanged, ClockResult::ReadFailure,
+             ClockResult::WriteFailure, ClockResult::RestoreFailure, ClockResult::PatchFailure, ClockResult::Busy, ClockResult::Expired,
+             ClockResult::UnsupportedBuild, ClockResult::OwnerConflict, ClockResult::Stopped, ClockResult::OriginalException}};
+        for (const auto status : refusals)
+        {
+            Trace                   trace;
+            CreationOwner           creation(trace);
+            StreamingOwner          requests(trace);
+            Streaming               streaming(requests);
+            CGameModelPreparationDE preparation(creation);
+            creation.status = status;
+            creation.failAt = 23;
+            creation.acknowledgePrefixBeforeRefusal = true;
+            unsigned resolutions = 0;
+            auto     resolve = [&]() -> CStreaming*
+            {
+                trace.Add(2);
+                ++resolutions;
+                return &streaming;
+            };
+            const std::string expected = status == ClockResult::NotInitialized
+                                             ? "DE MakePedModel requires qualified native ped metadata creation and bank publication"
+                                             : "DE model owner refused ped metadata creation/publication: " + std::to_string(static_cast<unsigned>(status));
+            Refuses([&] { preparation.SetupSpecialCharacters(resolve); }, expected);
+            Check(creation.calls == 23 && creation.acknowledgedPrefixes == 23 && resolutions == 22 && requests.requests == 22 && trace.count == 67,
+                  "creation refusal retains every accepted native prefix and prevents this/later streaming without retry or rollback");
+        }
+        for (unsigned failure = 0; failure < 3; ++failure)
+        {
+            Trace                   trace;
+            CreationOwner           creation(trace);
+            StreamingOwner          requests(trace);
+            Streaming               streaming(requests);
+            CGameModelPreparationDE preparation(creation);
+            unsigned                resolutions = 0;
+            requests.failAt = 23;
+            requests.status = failure == 2 ? ClockResult::Expired : ClockResult::Ok;
+            auto resolve = [&]() -> CStreaming*
+            {
+                trace.Add(2);
+                ++resolutions;
+                if (resolutions == 23 && failure == 0)
+                    throw Failure(2);
+                return resolutions == 23 && failure == 1 ? nullptr : &streaming;
+            };
+            if (failure == 0)
+                FailsAt([&] { preparation.SetupSpecialCharacters(resolve); }, 2);
+            else
+                Refuses([&] { preparation.SetupSpecialCharacters(resolve); },
+                        failure == 1 ? "DE model request requires the qualified streaming service"
+                                     : "DE streaming owner refused RequestSpecialModel: " + std::to_string(static_cast<unsigned>(ClockResult::Expired)));
+            Check(creation.calls == 23 && creation.acknowledgedPrefixes == 23 && resolutions == 23 && requests.requests == (failure == 2 ? 23u : 22u),
+                  "late getter/null/request refusal preserves source publication and stops the exact accepted itinerary prefix");
+        }
+        for (const auto key : std::array<std::uint32_t, 5>{{0u, 7u, 20000u, 0x80000000u, 0xffffffffu}})
+        {
+            Trace                   trace;
+            CreationOwner           creation(trace);
+            StreamingOwner          requests(trace);
+            Streaming               streaming(requests);
+            CGameModelPreparationDE preparation(creation);
+            const char              texture[] = "original borrowed source texture";
+            auto                    resolve = [&]() -> CStreaming*
+            {
+                trace.Add(2);
+                return &streaming;
+            };
+            for (const char* original : std::array<const char*, 3>{{texture, "", nullptr}})
+            {
+                preparation.MakePedModel(key, original, resolve);
+                trace.Expect({1, 2, 3});
+                Check(creation.lastModel == key && requests.lastModel == key && requests.lastTexture == original && requests.lastChannel == 0,
+                      "concrete assembly forwards full keys and original null/empty/borrowed pointer without policy invention");
+            }
+        }
+        std::puts("Production concrete startup model preparation fixture completed");
+    }
+
+    class ChangingModel final : public DefaultModel
+    {
+    public:
+        using DefaultModel::DefaultModel;
+        DWORD    GetModel() override { return ++reads == 1 ? 7u : 0x80000000u; }
+        unsigned reads = 0;
+    };
+    void OriginalBoundaryChecks()
+    {
+        Trace          trace;
+        CreationOwner  creation(trace);
+        StreamingOwner requests(trace);
+        Streaming      streaming(requests);
+        Game           game(trace);
+        game.streaming = &streaming;
+        ChangingModel model(0u, creation, game);
+        model.MakePedModel("source boundary");
+        trace.Expect({1, 2, 3});
+        Check(model.reads == 2 && creation.lastModel == 7u && requests.lastModel == 0x80000000u,
+              "shared ordering does not cache GetModel or resolve streaming before the original expression boundaries");
+        bool second = false;
+        // Keep refusal runtime-observable so /O2 cannot diagnose the intended
+        // not-called second effect as unreachable code inside this fixture.
+        volatile bool refuseFirst = true;
+        FailsAt(
+            [&]
+            {
+                MtaGame::CModelPedCreationPolicy::MakePedModel(
+                    [&]
+                    {
+                        if (refuseFirst)
+                            throw Failure(1);
+                    },
+                    [&] { second = true; });
+            },
+            1);
+        Check(!second, "shared helper preserves the original first exception and prevents all later effects");
+        unsigned prefix = 0;
+        FailsAt([&] { MtaGame::CModelPedCreationPolicy::MakePedModel([&] { ++prefix; }, [] { throw Failure(2); }); }, 2);
+        Check(prefix == 1, "shared helper preserves accepted publication on the original second exception without replay");
+        std::puts("Production shared ped creation original boundaries fixture completed");
+    }
+
 }
 
 int main()
@@ -374,6 +551,8 @@ int main()
         SuccessAndRepetitionChecks();
         PrefixAndRefusalChecks();
         CreationOwnerDispatchChecks();
+        ConcretePreparationChecks();
+        OriginalBoundaryChecks();
         std::puts("Production actual model MakePedModel SDK fixture completed");
         std::printf("Passed %u actual model MakePedModel SDK checks (%zu-bit)\n", checks, sizeof(void*) * 8);
         return 0;

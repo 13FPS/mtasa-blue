@@ -20,7 +20,7 @@ $record = [ordered]@{
     schema='mta_game_initialization_de_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     generatedFixture=$null;result=$null;failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;
-    scope='Actual shared44+2 startup model itinerary and five-step later CGame Initialize itinerary and actual abstract CGameInitializationDE SDK virtual dispatch with real CGaragesDE sixteen-ID initialization; repeat calls, exact exception prefix, fresh owner/readiness, null/missing garage refusal, reentrant readiness refusal, current-generation revocation and constructor-versus-later distinction. Test-only rejecting unrelated SDK methods. No historic game-policy suite executes.';
+    scope='Actual shared44+2 startup model itinerary and five-step later CGame Initialize itinerary and actual abstract CGameInitializationDE SDK virtual dispatch, concrete native-owner/late-streaming model assembly and real CGaragesDE sixteen-ID initialization; repeat calls, exact exception prefix, fresh owner/readiness, null/missing garage refusal, reentrant readiness refusal, current-generation revocation and constructor-versus-later distinction. Test-only rejecting unrelated SDK methods. No historic game-policy suite executes.';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;
     completeCGameReady=$false;numericNativeGarageMappingReady=$false;rendererReady=$false;
     actualSharedLaterGameInitializationPolicyTested=$false;actualLaterGameInitializationSdkTested=$false;
@@ -88,7 +88,7 @@ try {
         'Client/game_de/NativeGameStateReader.cpp','Client/game_de/NativeGameStateMemory.cpp','Client/game_de/NativeDataFileNamesReader.cpp','Client/game_de/NativeImageAccess.cpp',
         'Client/game_de/NativeCheatProfile.cpp',
         'Client/game_de/CWeaponInfoReadDE.cpp','Client/game_de/CWeaponInfoWriteDE.cpp','Client/game_de/CWeaponInfoDE.cpp','Client/game_de/CWeaponInfoBankDE.cpp','Client/game_de/CWeaponStatNativeDE.cpp','Client/game_de/CWeaponStatManagerPolicyDE.cpp','Client/game_de/CWeaponStatManagerDE.cpp','Client/game_de/NativeWeaponInfoReader.cpp')
-    $sourceNames = $productionSources + @('Client/game_de/CGameInitializationDE.h','Client/game_de/CGaragesDE.h','Client/sdk/game/CGameInitializationPolicy.h','Client/sdk/game/CGameModelPreparationPolicy.h','Client/sdk/game/CModelInfo.h','Client/sdk/game/CGarageInitializationPolicy.h','Client/sdk/game/CGarages.h','Client/sdk/game/CGarage.h','Client/game_de/CGameDE.h','Client/game_de/CGameTimingDE.h','Client/game_de/CGameWeaponInfoDE.h','Client/sdk/game/CWeaponInfoIndexPolicy.h','Client/game_de/CClockDE.h',
+    $sourceNames = $productionSources + @('Client/game_de/CGameModelPreparationDE.h','Client/sdk/game/CModelPedCreationPolicy.h','Client/game_de/NativeModelClassificationAccess.h','Client/sdk/game/CStreaming.h','Client/game_de/CGameInitializationDE.h','Client/game_de/CGaragesDE.h','Client/sdk/game/CGameInitializationPolicy.h','Client/sdk/game/CGameModelPreparationPolicy.h','Client/sdk/game/CModelInfo.h','Client/sdk/game/CGarageInitializationPolicy.h','Client/sdk/game/CGarages.h','Client/sdk/game/CGarage.h','Client/game_de/CGameDE.h','Client/game_de/CGameTimingDE.h','Client/game_de/CGameWeaponInfoDE.h','Client/sdk/game/CWeaponInfoIndexPolicy.h','Client/game_de/CClockDE.h',
         'Client/game_de/CWeaponStatFactoryDE.h','Client/sdk/game/CWeaponStatData.h','Client/sdk/game/CWeaponStatDefaults.h',
         'Client/sdk/game/CWeaponStatFlagPolicy.h','Client/sdk/game/CWeaponStatOwned.h','Client/sdk/game/CWeaponStat.h',
         'Client/game_de/CKeyGenDE.h','Client/game_de/CAsyncLoadingDE.h','Client/game_de/NativeGravityReadAccess.h','Client/game_de/NativeGravityReadProfile.h','Client/game_de/NativeGravityReadAccess.cpp','Client/game_de/NativeGameTimingReader.h',
@@ -125,7 +125,7 @@ try {
     }
     $testedMethods = @('Initialize')
     foreach ($method in $testedMethods) { if ($provided -notcontains $method) { throw "Production SDK override is missing: $method" } }
-    $gameMethods = @(InterfaceMethods 'Client/sdk/game/CGame.h' | Where-Object { $_.name -ne 'GetGarages' -and $provided -notcontains $_.name })
+    $gameMethods = @(InterfaceMethods 'Client/sdk/game/CGame.h' | Where-Object { $_.name -notin @('GetGarages','GetStreaming') -and $provided -notcontains $_.name })
     $generated = Join-Path $scratchRoot 'GameInitializationFixture.generated.h'
     $lines = @('#pragma once','#pragma warning(push)','#pragma warning(disable : 4100)','namespace fixture {',
         'class GameInitializationFixtureBase : public mta::game_de::CGameInitializationDE { public:',
@@ -133,15 +133,15 @@ try {
         'using ConstructorServices = mta::game_de::CGameInitializationDE::ConstructorServices;',
         'GameInitializationFixtureBase(const mta::game_de::NativeGameTimingReader& reader, mta::game_de::CClockDE& clock, mta::game_de::NativeGameTimingAccess& timing, const mta::game_de::NativeStreamingFileIdsReader& streaming, const mta::game_de::NativeGameStateReader& state, ConstructorServices services) : CGameInitializationDE(reader, clock, timing, streaming, state, services) {}')
     $lines += @($gameMethods | ForEach-Object { $_.signature + ' override { Unqualified(); }' })
-    $modelMethods = @(InterfaceMethods 'Client/sdk/game/CModelInfo.h' | Where-Object { $_.name -ne 'MakePedModel' })
-    $lines += @('};','class ModelPreparationFixtureBase : public CModelInfo { public:')
-    $lines += @($modelMethods | ForEach-Object { $_.signature + ' override { Unqualified(); }' })
+    $streamingMethods = @(InterfaceMethods 'Client/sdk/game/CStreaming.h' | Where-Object { $_.name -ne 'RequestSpecialModel' })
+    $lines += @('};','class StreamingPreparationFixtureBase : public CStreaming { public:')
+    $lines += @($streamingMethods | ForEach-Object { $_.signature + ' override { Unqualified(); }' })
     $lines += @('};','}','#pragma warning(pop)')
     $lines | Set-Content -LiteralPath $generated -Encoding utf8NoBOM
     $durableGenerated = Join-Path $outputRoot 'GameInitializationFixture.generated.h'
     Copy-Item -LiteralPath $generated -Destination $durableGenerated
     $record.generatedFixture = [ordered]@{path=$durableGenerated;sha256=(Sha $generated);gameRejectingOverrides=$gameMethods.Count;
-        productionMethodsNotOverridden=$provided;testedMethods=$testedMethods;requiredBackendHooksRemainPure=$true;modelRejectingOverrides=$modelMethods.Count;modelMethodNotOverridden="MakePedModel"}
+        productionMethodsNotOverridden=$provided;testedMethods=$testedMethods;requiredBackendHooksRemainPure=$true;streamingRejectingOverrides=$streamingMethods.Count;streamingMethodNotOverridden="RequestSpecialModel"}
 
     $env:TEMP = $scratchRoot
     $env:TMP = $scratchRoot

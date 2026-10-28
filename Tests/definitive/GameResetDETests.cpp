@@ -361,12 +361,7 @@ namespace
             trace.Call(14);
             return defaultCapacity;
         }
-        void        RequireInitializationReady() override { reset_fixture::Unqualified("later Initialize preflight"); }
-        CModelInfo& ResolveStartupPedModel(std::uint32_t model) override
-        {
-            (void)model;
-            reset_fixture::Unqualified("startup ped model");
-        }
+        void RequireInitializationReady() override { reset_fixture::Unqualified("later Initialize preflight"); }
         void FixStartupModelCollision(std::uint32_t target, std::uint32_t source) override
         {
             (void)target;

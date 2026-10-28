@@ -16,6 +16,7 @@
 #include "CGameSA.h"
 #include "CModelInfoSA.h"
 #include <game/CModelRequestPolicy.h>
+#include <game/CModelPedCreationPolicy.h>
 #include "CPedModelInfoSA.h"
 #include "CPedSA.h"
 #include "CPoolsSA.h"
@@ -1784,11 +1785,12 @@ void CModelInfoSA::CopyStreamingInfoFromModel(ushort usBaseModelID)
 
 void CModelInfoSA::MakePedModel(const char* szTexture)
 {
-    // Create a new CPedModelInfo
+    // Keep this source-local object's lifetime through the streaming request;
+    // the shared policy only orders publication and the later receiver lookup.
     CPedModelInfoSA pedModelInfo;
-    ppModelInfo[m_dwModelID] = (CBaseModelInfoSAInterface*)pedModelInfo.GetPedModelInfoInterface();
-    // Load our texture
-    pGame->GetStreaming()->RequestSpecialModel(m_dwModelID, szTexture, 0);
+    MtaGame::CModelPedCreationPolicy::MakePedModel([this, &pedModelInfo]
+                                                   { ppModelInfo[m_dwModelID] = (CBaseModelInfoSAInterface*)pedModelInfo.GetPedModelInfoInterface(); },
+                                                   [this, szTexture] { pGame->GetStreaming()->RequestSpecialModel(m_dwModelID, szTexture, 0); });
 }
 
 void CModelInfoSA::MakeObjectModel(ushort usBaseID)

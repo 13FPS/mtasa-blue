@@ -9,6 +9,7 @@
 #include <game/CPools.h>
 #include <game/CStreaming.h>
 #include <game/CModelRequestPolicy.h>
+#include <game/CModelPedCreationPolicy.h>
 #include <stdexcept>
 
 namespace mta::game_de
@@ -28,8 +29,8 @@ namespace mta::game_de
         // The source publishes new ped metadata before resolving the
         // streaming service. Preserve that irreversible prefix if the
         // later request refuses; do not validate, retry or roll it back.
-        CreateAndPublishNativePedModel(GetModel());
-        RequireStreaming().RequestSpecialModel(GetModel(), texture, 0);
+        MtaGame::CModelPedCreationPolicy::MakePedModel([this] { CreateAndPublishNativePedModel(GetModel()); },
+                                                       [this, texture] { RequireStreaming().RequestSpecialModel(GetModel(), texture, 0); });
     }
 
     void CModelInfoRequestDE::CreateAndPublishNativePedModel(std::uint32_t modelIndex)

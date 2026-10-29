@@ -21,7 +21,8 @@ namespace mta::game_de
             SequenceArray,
             KeyFrames,
             DynamicAnimation,
-            PedModelMetadata
+            PedModelMetadata,
+            StaticAnimationAssociationArray
         };
         enum class State : std::uint32_t
         {
@@ -32,7 +33,8 @@ namespace mta::game_de
             PublicationPinned,
             FreeEntered,
             Released,
-            FaultDebt
+            FaultDebt,
+            EnginePublished
         };
         NativeCustomAnimSequenceStorage() noexcept = default;
         NativeCustomAnimSequenceStorage(const NativeCustomAnimSequenceStorage&) = delete;
@@ -60,6 +62,8 @@ namespace mta::game_de
     private:
         friend struct NativeCustomAnimSequenceStorageAccess;
         friend struct NativeAnimationAssociationStorageAccess;
+        friend struct NativeStaticAssociationArrayPublicationAccess;
+        friend struct NativeStaticAssociationInitializeOwnershipAccess;
         bool                            BindReturnedDynamicCopy(const NativeAnimationAssociationCopyReturnTicket&) noexcept;
         NativeModelReferenceHeap::Value origin{};
         std::uintptr_t                  base = 0, tag = 0, hierarchyAffinity = 0;

@@ -48,6 +48,19 @@ namespace mta::game_de
         };
         ClockResult ReadAssociationGroupCopySource(const NativeAnimationAssociationGroupReferenceToken&, std::uint32_t,
                                                    AssociationGroupCopySource&) const noexcept;
+        struct AssociationGroupReplacementLayout
+        {
+            NativeAnimationAssociationGroupReferenceToken group;
+            std::uintptr_t                                groups = 0, children = 0;
+            std::uint64_t                                 groupCapacity = 0, childCapacity = 0;
+            std::int32_t                                  groupCount = 0;
+            std::array<unsigned char, 32>                 parent{};
+        };
+        // Replacement consumes the physical child even when NumAnims is zero.
+        // Keep this full-parent channel separate from InitEmpty's source skip.
+        ClockResult ReadAssociationGroupReplacementLayout(const NativeAnimationAssociationGroupReferenceToken&,
+                                                          AssociationGroupReplacementLayout&) const noexcept;
+        ClockResult RecheckAssociationGroupReplacementLayout(const AssociationGroupReplacementLayout&) const noexcept;
         struct AssociationGroupInitializationLayout
         {
             NativeAnimationAssociationGroupReferenceToken group;

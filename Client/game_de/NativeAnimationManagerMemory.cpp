@@ -1112,6 +1112,99 @@ namespace mta::game_de
         return ClockResult::Ok;
     }
 
+    namespace AnimationAssociationGroupReplacementDetail
+    {
+        namespace Group = AnimationGroupCreatedDetail;
+        namespace P = NativeAnimationGroupArrayProfile;
+        namespace A = NativeAnimationStaticAssociationProfile;
+        namespace M = NativeModelReferenceMap;
+        using Layout = NativeAnimationManagerMemory::AssociationGroupReplacementLayout;
+        bool Same(const Layout& a, const Layout& b) noexcept
+        {
+            return a.group.ownerGeneration == b.group.ownerGeneration && a.group.index == b.group.index && a.group.locator == b.group.locator &&
+                   a.groups == b.groups && a.children == b.children && a.groupCapacity == b.groupCapacity && a.childCapacity == b.childCapacity &&
+                   a.groupCount == b.groupCount && a.parent == b.parent;
+        }
+        ClockResult Capture(NativeAnimationManagerMemory::Binding binding, NativeAnimationManagerMemory::CheckOwner owner,
+                            const NativeAnimationAssociationGroupReferenceToken& token, Layout& output) noexcept
+        {
+            if (!token.locator)
+                return ClockResult::InvalidArgument;
+            Group::Snapshot parent, after;
+            auto            result = Group::Capture(binding, owner, token.index, parent);
+            if (result != ClockResult::Ok)
+                return result;
+            if (parent.rows + static_cast<std::uintptr_t>(token.index) * P::RowBytes != token.locator)
+                return ClockResult::BindingChanged;
+            Layout next;
+            next.group = token;
+            next.groups = parent.rows;
+            next.groupCapacity = parent.capacity;
+            next.groupCount = parent.count;
+            if (!M::Copy(token.locator, next.parent.data(), next.parent.size()))
+                return ClockResult::ReadFailure;
+            std::uint32_t count = 0;
+            std::memcpy(&count, next.parent.data() + P::CreatedOffset, 4);
+            std::memcpy(&next.children, next.parent.data() + 8, 8);
+            if (count != parent.value)
+                return ClockResult::BindingChanged;
+            if (next.children)
+            {
+                if (next.children < A::CookieBytes || next.children % alignof(std::uint64_t))
+                    return ClockResult::BindingChanged;
+                const auto base = next.children - A::CookieBytes;
+                if (!Group::HeapSpan(base, A::CookieBytes) || !M::Copy(base, &next.childCapacity, 8))
+                    return ClockResult::ReadFailure;
+                if (next.childCapacity > static_cast<std::uint64_t>((std::numeric_limits<std::int32_t>::max)()) ||
+                    next.childCapacity > ((std::numeric_limits<std::size_t>::max)() - A::CookieBytes) / A::RowBytes)
+                    return ClockResult::BindingChanged;
+                const auto bytes = A::CookieBytes + static_cast<std::size_t>(next.childCapacity) * A::RowBytes;
+                const auto parentBase = parent.rows - P::CookieBytes;
+                const auto parentBytes = P::CookieBytes + static_cast<std::size_t>(parent.capacity) * P::RowBytes;
+                if (!Group::HeapSpan(base, bytes) || !M::Disjoint(base, bytes, parentBase, parentBytes))
+                    return ClockResult::BindingChanged;
+                std::uint64_t cookie = 0;
+                if (!M::Copy(base, &cookie, 8))
+                    return ClockResult::ReadFailure;
+                if (cookie != next.childCapacity)
+                    return ClockResult::BindingChanged;
+            }
+            if ((result = Group::Capture(binding, owner, token.index, after)) != ClockResult::Ok)
+                return result;
+            std::array<unsigned char, 32> row{};
+            if (!M::Copy(token.locator, row.data(), row.size()))
+                return ClockResult::ReadFailure;
+            if (parent.rows != after.rows || parent.capacity != after.capacity || parent.count != after.count || parent.value != after.value ||
+                row != next.parent)
+                return ClockResult::BindingChanged;
+            if ((result = Group::Begin(binding, owner)) != ClockResult::Ok)
+                return result;
+            output = next;
+            return ClockResult::Ok;
+        }
+    }
+    ClockResult NativeAnimationManagerMemory::ReadAssociationGroupReplacementLayout(const NativeAnimationAssociationGroupReferenceToken& token,
+                                                                                    AssociationGroupReplacementLayout&                   output) const noexcept
+    {
+        namespace D = AnimationAssociationGroupReplacementDetail;
+        AssociationGroupReplacementLayout a, b;
+        auto                              result = D::Capture(binding, owner, token, a);
+        if (result != ClockResult::Ok || (result = D::Capture(binding, owner, token, b)) != ClockResult::Ok)
+            return result;
+        if (!D::Same(a, b))
+            return ClockResult::BindingChanged;
+        output = b;
+        return ClockResult::Ok;
+    }
+    ClockResult NativeAnimationManagerMemory::RecheckAssociationGroupReplacementLayout(const AssociationGroupReplacementLayout& expected) const noexcept
+    {
+        AssociationGroupReplacementLayout current;
+        const auto                        result = ReadAssociationGroupReplacementLayout(expected.group, current);
+        return result != ClockResult::Ok                                             ? result
+               : AnimationAssociationGroupReplacementDetail::Same(expected, current) ? ClockResult::Ok
+                                                                                     : ClockResult::BindingChanged;
+    }
+
     namespace AnimationAssociationGroupWriteDetail
     {
         namespace Read = AnimationAssociationGroupReadDetail;

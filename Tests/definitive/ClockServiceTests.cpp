@@ -3793,6 +3793,7 @@ namespace ClockAnimationAssociationNodeArrayTest
 #define MTA_DE_ANIMATION_ASSOCIATION_DESTRUCTOR_INVOKE  ::ClockAnimationAssociationNodeArrayTest::Destroy
 #define MTA_DE_ANIMATION_ASSOCIATION_EXCHANGE           ::ClockPrivateAnimationAssociationTest::Exchange
 #define MTA_DE_ANIMATION_ASSOCIATION_GROUP_COPY_INVOKE  ::ClockGroupCopyAnimationInvokeTest::Invoke
+#include "../../Client/game_de/NativeAnimationAssociationGroupReplacement.cpp"
 #include "../../Client/game_de/NativeAnimationAssociationStorage.cpp"
 #undef MTA_DE_ANIMATION_ASSOCIATION_GROUP_COPY_INVOKE
 #undef MTA_DE_ANIMATION_ASSOCIATION_NODE_FREE_INVOKE
@@ -8605,6 +8606,7 @@ namespace
 #include "PrivateAnimationAssociationFixture.generated.h"
 #include "NativePrivateAnimationAssociationOwnerTests.inl"
 #include "NativeAnimationAssociationGroupCopyOwnerTests.inl"
+#include "NativeAnimationAssociationGroupReplacementOwnerTests.inl"
 #include "NativeAnimationAssociationBonesOwnerTests.inl"
 #include "NativeAnimationAssociationFloatOwnerTests.inl"
 #include "NativeAnimationAssociationProgressOwnerTests.inl"
@@ -8758,6 +8760,15 @@ int main(int argc, char** argv)
         staticAssociationInitializationUnknown || (argc == 3 && std::strcmp(argv[2], "--static-association-initialization-success") == 0);
     const bool animationStaticAssociationReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-static-association-reads") == 0;
     const bool animationAssociationGroupReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-association-group-reads") == 0;
+    const bool groupReplacementOnly = argc == 3 && std::strncmp(argv[2], "--group-replacement-", 20) == 0;
+    unsigned   groupReplacementScenario = 0;
+    if (groupReplacementOnly)
+    {
+        const char* names[] = {"success", "child-rejected", "child-unknown", "child-owner-loss", "retire-unknown"};
+        for (unsigned n = 0; n != 5; ++n)
+            if (std::strcmp(argv[2] + 20, names[n]) == 0)
+                groupReplacementScenario = n;
+    }
     const bool groupCopyAnimationOnly = argc == 3 && std::strncmp(argv[2], "--group-copy-animation-", 23) == 0;
     unsigned   groupCopyAnimationScenario = 0;
     if (groupCopyAnimationOnly)
@@ -8899,7 +8910,7 @@ int main(int argc, char** argv)
            freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly || customAnimationCleanupOnly ||
            standaloneSequenceOperationsOnly || animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly ||
            animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly || animationGroupValidityOnly ||
-           animationIdValidityOnly || animationAssociationGroupReadsOnly || groupCopyAnimationOnly || groupEmptyInitializationOnly ||
+           animationIdValidityOnly || animationAssociationGroupReadsOnly || groupReplacementOnly || groupCopyAnimationOnly || groupEmptyInitializationOnly ||
            animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly || animationStaticAssociationReadsOnly ||
            staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly || privateAssociationsOnly || associationBonesOnly ||
            associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
@@ -9080,6 +9091,15 @@ int main(int argc, char** argv)
         fixture.Create(argv[1]);
         // One real module-pinned lifetime needs one pristine host process.
         NativeAnimationBlocksOwnedSdk(fixture, &AnimationAssociationGroupChildProductsOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (groupReplacementOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        AnimationAssociationGroupReplacementOwnerFixture::scenario = groupReplacementScenario;
+        NativeAnimationBlocksOwnedSdk(fixture, &AnimationAssociationGroupReplacementOwnerFixture::RunPrepared);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

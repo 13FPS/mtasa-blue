@@ -27,6 +27,19 @@ namespace mta::game_de
         Require(native.ReadAnimationAssociationGroup(token, value), operation);
         return value;
     }
+    NativeAnimationAssociationGroupChildBorrowInvalidator CAnimBlendAssocGroupDE::ChildBorrowInvalidator() noexcept
+    {
+        return {this, [](void* context) noexcept
+                {
+                    auto& group = *static_cast<CAnimBlendAssocGroupDE*>(context);
+                    // Native replacement expires these raw child borrows even when a
+                    // later allocation/model step fails. Deleting CPU facades neither
+                    // frees native rows nor rolls back the accepted engine effects.
+                    group.staticFacades.clear();
+                    group.blockFacade.reset();
+                    group.blockIdentity = {};
+                }};
+    }
     CAnimBlendAssociationSAInterface* CAnimBlendAssocGroupDE::CopyAnimation(unsigned int requested)
     {
         static_assert(sizeof(unsigned int) == sizeof(std::uint32_t));

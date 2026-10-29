@@ -4,6 +4,8 @@
  * PURPOSE: Exactly-once native array allocation and storage-only retirement
  ****************************************************************************/
 #include "NativeCustomAnimSequenceStorage.h"
+#include "NativeStaticAssociationArrayStorageCalls.h"
+#include "NativeStaticAssociationArrayProfile.h"
 #include "NativeAnimationAssociationGroupCopy.h"
 #include "NativeCustomAnimSequenceStorageProfile.h"
 #include "NativeAnimationAssociationOuterStorageCalls.h"
@@ -76,6 +78,117 @@ namespace mta::game_de
                 return result;
             output = next;
             return ClockResult::Ok;
+        }
+        bool StaticConstructorRecipe(std::uintptr_t image) noexcept
+        {
+            namespace S = NativeStaticAssociationArrayProfile;
+            std::array<unsigned char, S::ConstructorRecipeBytes.size()> actual{};
+            return Image::ReadImage(image, image + S::ConstructorRecipeRva, actual.data(), actual.size(), false, true) && actual == S::ConstructorRecipeBytes;
+        }
+        ClockResult CaptureStaticRetirementHeap(std::uintptr_t image, CheckOwner owner, Heap::Value& output) noexcept
+        {
+            namespace S = NativeStaticAssociationArrayProfile;
+            auto result = Context::Owner(image, owner);
+            if (result != ClockResult::Ok)
+                return result;
+            if (!Heap::QualifyProfile(image))
+                return ClockResult::BindingChanged;
+            const Profile::Pin routes[] = {{Profile::AuthorityMallocRva, Profile::AuthorityMalloc, sizeof(Profile::AuthorityMalloc)},
+                                           {Profile::AuthorityFreeRva, Profile::AuthorityFree, sizeof(Profile::AuthorityFree)},
+                                           {Profile::ProxyMallocRva, Profile::ProxyMalloc, sizeof(Profile::ProxyMalloc)},
+                                           {Profile::ProxyFreeRva, Profile::ProxyFree, sizeof(Profile::ProxyFree)}};
+            for (const auto& pin : routes)
+            {
+                std::array<unsigned char, Profile::MaximumPinBytes> actual{};
+                if (!Image::ReadImage(image, image + pin.rva, actual.data(), pin.size, false, true) || std::memcmp(actual.data(), pin.bytes, pin.size))
+                    return ClockResult::BindingChanged;
+            }
+            std::array<unsigned char, S::DeletingDestructorBytes.size()> body{};
+            std::uintptr_t                                               destructor = 0;
+            if (!Image::ReadImage(image, image + S::DeletingDestructorRva, body.data(), body.size(), false, true) || body != S::DeletingDestructorBytes ||
+                !Heap::ReadOnlyImage(image, image + S::VtableRva, 8) || !Image::ReadImage(image, image + S::VtableRva, &destructor, 8) ||
+                destructor != image + S::DeletingDestructorRva)
+                return ClockResult::BindingChanged;
+            Heap::Value heap;
+            if ((result = Heap::Capture(image, heap)) != ClockResult::Ok)
+                return result;
+            if (!Slots(image, heap.authorityVtable, Profile::AuthorityMallocRva, Profile::AuthorityFreeRva) ||
+                (heap.current != heap.authority && !Slots(image, heap.currentVtable, Profile::ProxyMallocRva, Profile::ProxyFreeRva)))
+                return ClockResult::BindingChanged;
+            if ((result = Context::Owner(image, owner)) != ClockResult::Ok)
+                return result;
+            output = heap;
+            return ClockResult::Ok;
+        }
+        ClockResult InitializeStaticArray(std::uintptr_t image, std::uintptr_t base, std::size_t count, std::uint32_t& exception) noexcept
+        {
+            __try
+            {
+                const std::uint64_t  cookie = count;
+                const std::uintptr_t table = image + NativeStaticAssociationArrayProfile::VtableRva, zero = 0;
+                const std::uint32_t  ids = 0xffffffff;
+                const std::uint16_t  flags = 0;
+                std::memcpy(reinterpret_cast<void*>(base), &cookie, 8);
+                for (std::size_t i = 0; i < count; ++i)
+                {
+                    const auto row = base + 8 + i * 32;
+                    // Exact FEB3F0 inline stores preserve the undefined
+                    // countWORD8; neither a memset nor an invented ctor runs.
+                    std::memcpy(reinterpret_cast<void*>(row), &table, 8);
+                    std::memcpy(reinterpret_cast<void*>(row + 0xa), &ids, 4);
+                    std::memcpy(reinterpret_cast<void*>(row + 0xe), &flags, 2);
+                    std::memcpy(reinterpret_cast<void*>(row + 0x10), &zero, 8);
+                    std::memcpy(reinterpret_cast<void*>(row + 0x18), &zero, 8);
+                }
+                return ClockResult::Ok;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                exception = GetExceptionCode();
+                return ClockResult::OriginalException;
+            }
+        }
+        template <class T>
+        T StaticField(const std::array<unsigned char, 32>& bytes, std::size_t at) noexcept
+        {
+            T value;
+            std::memcpy(&value, bytes.data() + at, sizeof(value));
+            return value;
+        }
+        bool FreshStaticRow(std::uintptr_t image, const std::array<unsigned char, 32>& bytes) noexcept
+        {
+            return StaticField<std::uintptr_t>(bytes, 0) == image + NativeStaticAssociationArrayProfile::VtableRva &&
+                   StaticField<std::uint32_t>(bytes, 0xa) == 0xffffffff && StaticField<std::uint16_t>(bytes, 0xe) == 0 &&
+                   StaticField<std::uintptr_t>(bytes, 0x10) == 0 && StaticField<std::uintptr_t>(bytes, 0x18) == 0;
+        }
+        bool FreshStaticArray(std::uintptr_t image, std::uintptr_t base, std::size_t count) noexcept
+        {
+            if (!base || base % 8 || count > ((std::numeric_limits<std::size_t>::max)() - 8) / 32 || !Heap::M::PrivateWritable(base, 8 + count * 32))
+                return false;
+            std::uint64_t cookie = 0, after = 0;
+            if (!Heap::M::Copy(base, &cookie, 8) || cookie != count)
+                return false;
+            for (std::size_t i = 0; i < count; ++i)
+            {
+                std::array<unsigned char, 32> row{};
+                if (!Heap::M::Copy(base + 8 + i * 32, row.data(), row.size()) || !FreshStaticRow(image, row))
+                    return false;
+            }
+            return Heap::M::Copy(base, &after, 8) && after == cookie;
+        }
+        ClockResult NativeStaticArrayDestructor(NativeStaticAssociationArrayStorageCalls::DeletingDestructorFunction function, std::uintptr_t rows,
+                                                std::uint32_t flags, std::uintptr_t& returned, std::uint32_t& exception) noexcept
+        {
+            __try
+            {
+                returned = function(rows, flags);
+                return ClockResult::Ok;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                exception = GetExceptionCode();
+                return ClockResult::OriginalException;
+            }
         }
         bool RowProfileMatches(std::uintptr_t image) noexcept
         {
@@ -286,14 +399,14 @@ namespace mta::game_de
     bool NativeCustomAnimSequenceStorage::CanDiscard() const noexcept
     {
         const auto current = GetState();
-        return current == State::Empty || current == State::Released;
+        return current == State::Empty || current == State::Released || current == State::EnginePublished;
     }
     bool NativeCustomAnimSequenceStorage::CanFreeStorage() const noexcept
     {
         namespace Detail = CustomAnimSequenceStorageDetail;
         const auto current = GetState();
-        return (current == State::LiveUnpublished || current == State::FaultDebt) && !hierarchyAffinity && base && tag && (effects & Detail::AllocReturned) &&
-               !(effects & Detail::FreeEntered);
+        return kind != Kind::StaticAnimationAssociationArray && (current == State::LiveUnpublished || current == State::FaultDebt) && !hierarchyAffinity &&
+               base && tag && (effects & Detail::AllocReturned) && !(effects & Detail::FreeEntered);
     }
     struct NativeCustomAnimSequenceStorageAccess
     {
@@ -302,11 +415,153 @@ namespace mta::game_de
         using Kind = Storage::Kind;
         using Receipt = NativeCustomAnimSequenceStorageCalls::Receipt;
         using CheckOwner = NativeCustomAnimSequenceStorageCalls::CheckOwner;
+        static ClockResult StaticFreshShape(const Storage& storage, std::uint64_t generation) noexcept
+        {
+            namespace D = CustomAnimSequenceStorageDetail;
+            const auto state = storage.GetState();
+            if (!generation || generation != storage.generation)
+                return ClockResult::OwnerConflict;
+            if (storage.kind != Kind::StaticAnimationAssociationArray || (state != State::LiveUnpublished && state != State::FaultDebt) ||
+                storage.hierarchyAffinity || !storage.base || storage.tag != storage.base + 8 ||
+                storage.capacity > static_cast<std::size_t>((std::numeric_limits<std::int32_t>::max)()) ||
+                storage.capacity > ((std::numeric_limits<std::size_t>::max)() - 8) / 32 || storage.bytes != 8 + storage.capacity * 32 ||
+                (storage.effects & (D::AllocReturned | D::Initialized)) != (D::AllocReturned | D::Initialized) || (storage.effects & D::FreeEntered))
+                return ClockResult::OwnerConflict;
+            return ClockResult::Ok;
+        }
+        static ClockResult ReadFreshStaticRow(std::uintptr_t image, const Storage& storage, std::uint64_t generation, std::uint32_t index, CheckOwner owner,
+                                              NativeStaticAssociationArrayStorageCalls::FreshRow& output) noexcept
+        {
+            namespace D = CustomAnimSequenceStorageDetail;
+            auto result = StaticFreshShape(storage, generation);
+            if (result != ClockResult::Ok)
+                return result;
+            if (index >= storage.capacity)
+                return ClockResult::InvalidArgument;
+            D::Heap::Value first, after;
+            if ((result = D::CaptureStaticRetirementHeap(image, owner, first)) != ClockResult::Ok)
+                return result;
+            if (first.authority != storage.origin.authority || first.authorityVtable != storage.origin.authorityVtable ||
+                !D::FreshStaticArray(image, storage.base, storage.capacity))
+                return ClockResult::BindingChanged;
+            NativeStaticAssociationArrayStorageCalls::FreshRow next;
+            next.index = index;
+            next.locator = storage.tag + static_cast<std::uintptr_t>(index) * 32;
+            std::array<unsigned char, 32> confirmed{};
+            if (!D::Heap::M::Copy(next.locator, next.bytes.data(), next.bytes.size()) || !D::Heap::M::Copy(next.locator, confirmed.data(), confirmed.size()))
+                return ClockResult::ReadFailure;
+            if (next.bytes != confirmed || !D::FreshStaticRow(image, next.bytes))
+                return ClockResult::BindingChanged;
+            if ((result = D::CaptureStaticRetirementHeap(image, owner, after)) != ClockResult::Ok ||
+                (result = StaticFreshShape(storage, generation)) != ClockResult::Ok)
+                return result;
+            if (!D::Heap::Same(first, after) || !D::FreshStaticArray(image, storage.base, storage.capacity))
+                return ClockResult::BindingChanged;
+            output = next;
+            return ClockResult::Ok;
+        }
+        static ClockResult RetireFreshStaticArray(std::uintptr_t image, Storage& storage, std::uint64_t generation, CheckOwner owner, Receipt* output,
+                                                  NativeStaticAssociationArrayStorageCalls::InvokeDeletingDestructor invoke,
+                                                  NativeCustomAnimSequenceStorageCalls::InvokeFree                   release) noexcept
+        {
+            namespace D = CustomAnimSequenceStorageDetail;
+            Receipt receipt;
+            receipt.generation = generation;
+            const auto prior = storage.GetState();
+            bool       reserved = false;
+            auto       finish = [&](ClockResult result)
+            {
+                if (reserved && !receipt.entered)
+                    storage.state.store(prior, std::memory_order_release);
+                receipt.debt = storage.HasOutstandingResource();
+                if (output)
+                    *output = receipt;
+                return result;
+            };
+            auto result = StaticFreshShape(storage, generation);
+            if (result != ClockResult::Ok)
+                return finish(result);
+            if (!D::Context::TryEnter())
+                return finish(ClockResult::Busy);
+            D::Context::Scope scope;
+            State             expected = prior;
+            if (!storage.state.compare_exchange_strong(expected, State::Preparing, std::memory_order_acq_rel))
+                return finish(ClockResult::Busy);
+            reserved = true;
+            D::Heap::Value before, after;
+            if ((result = D::CaptureStaticRetirementHeap(image, owner, before)) != ClockResult::Ok)
+                return finish(result);
+            if (before.authority != storage.origin.authority || before.authorityVtable != storage.origin.authorityVtable ||
+                !D::FreshStaticArray(image, storage.base, storage.capacity))
+                return finish(ClockResult::BindingChanged);
+            if ((result = D::CaptureStaticRetirementHeap(image, owner, after)) != ClockResult::Ok)
+                return finish(result);
+            if (!D::Heap::Same(before, after) || !D::FreshStaticArray(image, storage.base, storage.capacity))
+                return finish(ClockResult::BindingChanged);
+            if ((result = D::Context::Owner(image, owner)) != ClockResult::Ok)
+                return finish(result);
+            receipt.base = storage.base;
+            receipt.readyTag = storage.tag;
+            receipt.capacity = storage.capacity;
+            receipt.bytes = storage.bytes;
+            receipt.heap = after.current;
+            receipt.authority = after.authority;
+            receipt.initialized = true;
+            storage.effects |= D::FreeEntered;
+            storage.state.store(State::FreeEntered, std::memory_order_release);
+            receipt.entered = true;
+            if (storage.capacity)
+            {
+                receipt.entryRva = NativeStaticAssociationArrayProfile::DeletingDestructorRva;
+#if defined(MTA_DE_STATIC_ASSOCIATION_ARRAY_DESTRUCTOR_INVOKE)
+                const auto entry = invoke ? invoke : &MTA_DE_STATIC_ASSOCIATION_ARRAY_DESTRUCTOR_INVOKE;
+#else
+                const auto entry = invoke ? invoke : &D::NativeStaticArrayDestructor;
+#endif
+                std::uintptr_t returned = 0;
+                result = entry(reinterpret_cast<NativeStaticAssociationArrayStorageCalls::DeletingDestructorFunction>(image + receipt.entryRva), storage.tag, 3,
+                               returned, receipt.exceptionCode);
+                receipt.returned = result == ClockResult::Ok;
+                if (receipt.returned && returned != storage.base)
+                    result = ClockResult::BindingChanged;
+            }
+            else
+            {
+                // FEB580's zero-cookie branch never touches a nonexistent
+                // row vtable; it releases the causal original cookie base.
+                receipt.entryRva = after.current == after.authority ? D::Profile::AuthorityFreeRva : D::Profile::ProxyFreeRva;
+#if defined(MTA_DE_CUSTOM_ANIM_SEQUENCE_FREE_INVOKE)
+                const auto entry = release ? release : &MTA_DE_CUSTOM_ANIM_SEQUENCE_FREE_INVOKE;
+#else
+                const auto entry = release ? release : &D::NativeFree;
+#endif
+                result = entry(reinterpret_cast<NativeCustomAnimSequenceStorageCalls::FreeFunction>(image + receipt.entryRva), after.current, storage.base,
+                               receipt.exceptionCode);
+                receipt.returned = result == ClockResult::Ok;
+            }
+            if (result != ClockResult::Ok)
+            {
+                storage.state.store(State::FaultDebt, std::memory_order_release);
+                return finish(result);
+            }
+            // Acknowledged native consumption precedes owner postchecks.
+            // No freed row/cookie is read and a lost final owner cannot replay.
+            storage.effects |= D::FreeReturned;
+            storage.state.store(State::Released, std::memory_order_release);
+            receipt.released = true;
+            if ((result = D::CaptureStaticRetirementHeap(image, owner, after)) != ClockResult::Ok)
+                return finish(result);
+            if (!D::Heap::Same(before, after))
+                return finish(ClockResult::BindingChanged);
+            receipt.verified = true;
+            return finish(ClockResult::Ok);
+        }
         static ClockResult Allocate(std::uintptr_t image, Storage& storage, std::uint64_t generation, std::size_t amount, CheckOwner owner, Receipt* output,
                                     NativeCustomAnimSequenceStorageCalls::InvokeMalloc invoke, Kind kind) noexcept
         {
             namespace Detail = CustomAnimSequenceStorageDetail;
-            const auto capacity = kind == Kind::SequenceArray ? amount : 0;
+            const bool staticArray = kind == Kind::StaticAnimationAssociationArray;
+            const auto capacity = (kind == Kind::SequenceArray || staticArray) ? amount : 0;
             Receipt    receipt;
             receipt.generation = generation;
             receipt.capacity = capacity;
@@ -320,13 +575,16 @@ namespace mta::game_de
                     *output = receipt;
                 return result;
             };
-            if (!amount)
+            if (!amount && !staticArray)
             {
                 receipt.verified = true;
                 return finish(ClockResult::Ok);
             }
-            if (!generation || (kind == Kind::SequenceArray &&
-                                capacity > ((std::numeric_limits<std::size_t>::max)() - Detail::Profile::CookieBytes) / Detail::Profile::RowBytes))
+            if ((staticArray && (amount > static_cast<std::size_t>((std::numeric_limits<std::int32_t>::max)()) ||
+                                 amount > ((std::numeric_limits<std::size_t>::max)() - 8) / 32)) ||
+                !generation ||
+                (kind == Kind::SequenceArray &&
+                 capacity > ((std::numeric_limits<std::size_t>::max)() - Detail::Profile::CookieBytes) / Detail::Profile::RowBytes))
                 return finish(ClockResult::InvalidArgument);
             State expected = State::Empty;
             if (!storage.state.compare_exchange_strong(expected, State::Preparing, std::memory_order_acq_rel))
@@ -335,12 +593,16 @@ namespace mta::game_de
             if (!Detail::Context::TryEnter())
                 return finish(ClockResult::Busy);
             Detail::Context::Scope scope;
-            auto                   result = Detail::Capture(image, owner, storage.origin);
+            auto result = staticArray ? Detail::CaptureStaticRetirementHeap(image, owner, storage.origin) : Detail::Capture(image, owner, storage.origin);
+            if (result == ClockResult::Ok && staticArray && !Detail::StaticConstructorRecipe(image))
+                result = ClockResult::BindingChanged;
             if (result != ClockResult::Ok)
                 return finish(result);
             storage.kind = kind;
             storage.capacity = capacity;
-            storage.bytes = kind == Kind::SequenceArray ? Detail::Profile::CookieBytes + capacity * Detail::Profile::RowBytes : amount;
+            storage.bytes = staticArray                   ? 8 + capacity * 32
+                            : kind == Kind::SequenceArray ? Detail::Profile::CookieBytes + capacity * Detail::Profile::RowBytes
+                                                          : amount;
             storage.generation = generation;
             receipt.bytes = storage.bytes;
             receipt.heap = storage.origin.current;
@@ -389,7 +651,7 @@ namespace mta::game_de
             if (base % alignof(std::uintptr_t) || storage.bytes > (std::numeric_limits<std::uintptr_t>::max)() - base ||
                 !Detail::Heap::M::PrivateWritable(base, storage.bytes))
                 return finish(ClockResult::WriteFailure);
-            storage.tag = kind == Kind::SequenceArray ? base + Detail::Profile::CookieBytes : base;
+            storage.tag = (kind == Kind::SequenceArray || staticArray) ? base + Detail::Profile::CookieBytes : base;
             if (kind == Kind::SequenceArray)
             {
                 if ((result = Detail::InitializeArray(base, capacity, receipt.exceptionCode)) != ClockResult::Ok)
@@ -397,14 +659,23 @@ namespace mta::game_de
                 storage.effects |= Detail::Initialized;
                 receipt.initialized = true;
             }
+            if (staticArray)
+            {
+                if ((result = Detail::InitializeStaticArray(image, base, capacity, receipt.exceptionCode)) != ClockResult::Ok)
+                    return finish(result);
+                storage.effects |= Detail::Initialized;
+                receipt.initialized = true;
+            }
             // Frame buffers return the original native allocation directly.
             // Their payload has no sequence cookie or initialization promise.
             Detail::Heap::Value after;
-            if ((result = Detail::Capture(image, owner, after)) != ClockResult::Ok)
+            if ((result = staticArray ? Detail::CaptureStaticRetirementHeap(image, owner, after) : Detail::Capture(image, owner, after)) != ClockResult::Ok)
                 return finish(result);
             if (!Detail::Heap::Same(storage.origin, after))
                 return finish(ClockResult::BindingChanged);
-            if (kind == Kind::SequenceArray)
+            if (staticArray && (!Detail::StaticConstructorRecipe(image) || !Detail::FreshStaticArray(image, storage.base, storage.capacity)))
+                return finish(ClockResult::BindingChanged);
+            if (kind == Kind::SequenceArray || staticArray)
             {
                 std::uint64_t cookie = 0;
                 if (!Detail::Heap::M::Copy(base, &cookie, sizeof(cookie)) || cookie != capacity)
@@ -1433,6 +1704,29 @@ namespace mta::game_de
         ClockResult PinPublication(NativeCustomAnimSequenceStorage& storage, std::uint64_t generation, std::uintptr_t affinity) noexcept
         {
             return NativeCustomAnimSequenceStorageAccess::PinPublication(storage, generation, affinity);
+        }
+    }
+    namespace NativeStaticAssociationArrayStorageCalls
+    {
+        ClockResult CaptureRetirementHeap(std::uintptr_t image, CheckOwner owner, NativeModelReferenceHeap::Value& output) noexcept
+        {
+            return CustomAnimSequenceStorageDetail::CaptureStaticRetirementHeap(image, owner, output);
+        }
+        ClockResult AllocateFresh(std::uintptr_t image, Storage& storage, std::uint64_t generation, std::uint32_t count, CheckOwner owner, Receipt* output,
+                                  InvokeMalloc invoke) noexcept
+        {
+            return NativeCustomAnimSequenceStorageAccess::Allocate(image, storage, generation, count, owner, output, invoke,
+                                                                   Storage::Kind::StaticAnimationAssociationArray);
+        }
+        ClockResult ReadFreshRow(std::uintptr_t image, const Storage& storage, std::uint64_t generation, std::uint32_t index, CheckOwner owner,
+                                 FreshRow& output) noexcept
+        {
+            return NativeCustomAnimSequenceStorageAccess::ReadFreshStaticRow(image, storage, generation, index, owner, output);
+        }
+        ClockResult RetireFresh(std::uintptr_t image, Storage& storage, std::uint64_t generation, CheckOwner owner, Receipt* output,
+                                InvokeDeletingDestructor invoke, InvokeFree release) noexcept
+        {
+            return NativeCustomAnimSequenceStorageAccess::RetireFreshStaticArray(image, storage, generation, owner, output, invoke, release);
         }
     }
     namespace NativeAnimationAssociationOuterStorageCalls

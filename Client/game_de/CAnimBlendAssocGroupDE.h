@@ -5,6 +5,7 @@
  ****************************************************************************/
 #pragma once
 #include "NativeAnimationAssociationGroupAccess.h"
+#include "NativeAnimationAssociationGroupChildBorrow.h"
 #include <cstddef>
 #include <game/CAnimBlendAssocGroup.h>
 #include <game/CAnimBlock.h>
@@ -30,6 +31,9 @@ namespace mta::game_de
         CAnimBlendAssocGroupSAInterface*  GetInterface() override;
 
     protected:
+        // The future source-order Create composer passes this exact CPU owner
+        // to the replacement ledger; it is not a raw native release callback.
+        NativeAnimationAssociationGroupChildBorrowInvalidator ChildBorrowInvalidator() noexcept;
         CAnimBlendAssocGroupDE(NativeAnimationAssociationGroupAccess& owner, const NativeAnimationAssociationGroupReferenceToken& token) noexcept
             : native(owner), reference(token)
         {
@@ -60,7 +64,8 @@ namespace mta::game_de
         };
         // SDK raw results borrow CPU facades owned by this group. Block
         // borrows expire on source pointer refresh/null; static borrows expire
-        // with the group. Every operation still re-admits the native row.
+        // with the group or entry into native child replacement. Every operation
+        // still re-admits the native row.
         std::vector<StaticProduct> staticFacades;
     };
     // Genuine CreateAssociations remains

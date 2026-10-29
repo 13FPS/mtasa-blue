@@ -21,7 +21,7 @@ $record = [ordered]@{
     schema='mta_animation_association_group_offset_sdk_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     results=@();failure=$null;scratchDirectory=$scratchRoot;scratchFilesRemaining=$null;scratchRemoved=$false;
-    scope='Actual ID-offset setter only: exact signed32 values and one copied same-owner token, status propagation without SDK read/resolve/retry/clamp or other field mutation. Strict stack-only receiver inherits six real methods and rejects five unresolved methods. Native field ownership and entered-write receipts are separate owner checks; no full factory or SDK-base deletion.';
+    scope='Actual ID-offset setter only: exact signed32 values and one copied same-owner token, status propagation without SDK read/resolve/retry/clamp or other field mutation. Strict stack-only receiver inherits eight real methods and rejects three unresolved methods. Native field ownership and entered-write receipts are separate owner checks; no full factory or SDK-base deletion.';
     ownedBuffersOnly=$true;nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;
     completeAnimationHierarchyReady=$false;fullMtaReady=$false;installationChanged=$false;
     actualAnimationAssociationGroupOffsetSdkTested=$false
@@ -79,7 +79,7 @@ function RunOwned([string]$Executable,[string[]]$Arguments,[string]$Directory,[s
 }
 
 try {
-    $productionSources=@('Client/game_de/CAnimBlendAssocGroupDE.cpp')
+    $productionSources=@('Client/game_de/CAnimBlendAssocGroupDE.cpp','Client/game_de/CAnimBlockDE.cpp','Client/game_de/CAnimBlockRequestDE.cpp','Client/game_de/CAnimBlendStaticAssociationDE.cpp')
     $sourceNames=$productionSources+@('Tests/definitive/AnimationAssociationGroupOffsetSdkTests.cpp','Tests/definitive/test_animation_association_group_offset_sdk.ps1',
         'Tests/definitive/Write-AnimationAssociationGroupFixture.ps1')
     $pending=[Collections.Generic.Queue[string]]::new()
@@ -141,7 +141,8 @@ try {
         $executable = Join-Path $directory 'animation_association_group_offset_sdk_tests.exe'
         $arguments = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
             ('/I'+(Join-Path $taskRoot 'Shared/sdk')),('/I'+(Join-Path $taskRoot 'Client/sdk')),('/I'+$scratchRoot),
-            (Join-Path $PSScriptRoot 'AnimationAssociationGroupOffsetSdkTests.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlendAssocGroupDE.cpp'),
+            (Join-Path $PSScriptRoot 'AnimationAssociationGroupOffsetSdkTests.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlendAssocGroupDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlockDE.cpp'),
+            (Join-Path $taskRoot 'Client/game_de/CAnimBlockRequestDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlendStaticAssociationDE.cpp'),
             ('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'compiler.pdb')),('/Fe'+$executable))
         $result = [ordered]@{architecture=$architecture;environment=$environmentResult;compile=$null;test=$null;
             checks=0;pointerBits=$null;executable=$executable;executableSha256=$null;actualAnimationAssociationGroupOffsetSdkTested=$false}

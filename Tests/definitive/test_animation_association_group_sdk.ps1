@@ -20,7 +20,7 @@ $record = [ordered]@{
     schema='mta_animation_association_group_sdk_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     results=@();failure=$null;scratchDirectory=$scratchRoot;scratchFilesRemaining=$null;scratchRemoved=$false;
-    scope='Actual abstract group5read virtual dispatch with immutable copied same-provider token. Scalar/fullsigned32 and opaque tag semantics are independent from owner-qualified Loaded. Stack-only strict receiver inherits the ID-offset setter without exercising it here and rejects five remaining SDK methods; no full factory, SDK-base deletion, native engine or Has45B130 claim.';
+    scope='Actual abstract group5read virtual dispatch with immutable copied same-provider token. Scalar/fullsigned32 and opaque tag semantics are independent from owner-qualified Loaded. Stack-only strict receiver inherits the ID-offset/child-product operations without exercising them here and rejects three remaining SDK methods; no full factory, SDK-base deletion, native engine or Has45B130 claim.';
     ownedBuffersOnly=$true;nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;
     completeAnimationHierarchyReady=$false;fullMtaReady=$false;installationChanged=$false;
     actualAnimationAssociationGroupSdkTested=$false
@@ -78,7 +78,7 @@ function RunOwned([string]$Executable,[string[]]$Arguments,[string]$Directory,[s
 }
 
 try {
-    $productionSources=@('Client/game_de/CAnimBlendAssocGroupDE.cpp')
+    $productionSources=@('Client/game_de/CAnimBlendAssocGroupDE.cpp','Client/game_de/CAnimBlockDE.cpp','Client/game_de/CAnimBlockRequestDE.cpp','Client/game_de/CAnimBlendStaticAssociationDE.cpp')
     $sourceNames=$productionSources+@('Tests/definitive/AnimationAssociationGroupSdkTests.cpp','Tests/definitive/test_animation_association_group_sdk.ps1',
         'Tests/definitive/Write-AnimationAssociationGroupFixture.ps1',
         'Build/definitive-recovery/mta-animation-association-group-sdk-20261025/animation-association-group-sdk-source-ready.json',
@@ -142,7 +142,8 @@ try {
         $executable = Join-Path $directory 'animation_association_group_sdk_tests.exe'
         $arguments = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
             ('/I'+(Join-Path $taskRoot 'Shared/sdk')),('/I'+(Join-Path $taskRoot 'Client/sdk')),('/I'+$scratchRoot),
-            (Join-Path $PSScriptRoot 'AnimationAssociationGroupSdkTests.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlendAssocGroupDE.cpp'),
+            (Join-Path $PSScriptRoot 'AnimationAssociationGroupSdkTests.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlendAssocGroupDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlockDE.cpp'),
+            (Join-Path $taskRoot 'Client/game_de/CAnimBlockRequestDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlendStaticAssociationDE.cpp'),
             ('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'compiler.pdb')),('/Fe'+$executable))
         $result = [ordered]@{architecture=$architecture;environment=$environmentResult;compile=$null;test=$null;
             checks=0;pointerBits=$null;executable=$executable;executableSha256=$null;actualAnimationAssociationGroupSdkTested=$false}

@@ -32,6 +32,7 @@ namespace mta::game_de
 
     private:
         friend class CAnimManagerDE;
+        friend class CAnimBlendAssocGroupDE;
         NativeAnimationStaticAssociationValues               Read(const char*) const;
         NativeAnimationStaticAssociationAccess&              native;
         const NativeAnimationStaticAssociationReferenceToken reference;

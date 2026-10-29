@@ -10,6 +10,7 @@
 #include "NativeAnimationStaticAssociationProfile.h"
 #include "NativeModelReferenceMap.h"
 #include "NativeAnimationBlockMemory.h"
+#include "NativeAnimationBlockFactoryMemory.h"
 #include "NativeAnimationBlockProfile.h"
 #include "NativeGameStateMemory.h"
 #include "NativeImageAccess.h"
@@ -744,13 +745,13 @@ namespace mta::game_de
             std::uintptr_t  child = 0;
             std::uint32_t   num = 0, offset = 0;
         };
-        ClockResult ParentSnapshot(Binding binding, CheckOwner owner, std::uint32_t group, Parent& output) noexcept
+        ClockResult ParentSnapshot(Binding binding, CheckOwner owner, std::uint32_t group, Parent& output, bool requireCreated = true) noexcept
         {
             Parent next;
             auto   result = Group::Capture(binding, owner, group, next.array);
             if (result != ClockResult::Ok)
                 return result;
-            if (!next.array.value)
+            if (requireCreated && !next.array.value)
                 return ClockResult::NotInitialized;
             std::array<unsigned char, 16> fields{};
             const auto                    row = next.array.rows + static_cast<std::uintptr_t>(group) * NativeAnimationGroupArrayProfile::RowBytes;
@@ -780,13 +781,13 @@ namespace mta::game_de
             std::uint32_t selected = 0;
             std::uint16_t id = 0;
         };
-        ClockResult Capture(Binding binding, CheckOwner owner, std::uint32_t group, std::uint32_t anim, Snapshot& output) noexcept
+        ClockResult Capture(Binding binding, CheckOwner owner, std::uint32_t group, std::uint32_t anim, Snapshot& output, bool requireCreated = true) noexcept
         {
             auto result = Begin(binding, owner);
             if (result != ClockResult::Ok)
                 return result;
             Snapshot next;
-            if ((result = ParentSnapshot(binding, owner, group, next.parent)) != ClockResult::Ok)
+            if ((result = ParentSnapshot(binding, owner, group, next.parent, requireCreated)) != ClockResult::Ok)
                 return result;
             const auto base = next.parent.child - Association::CookieBytes;
             if (!Group::HeapSpan(base, Association::CookieBytes) || !Memory::Copy(base, &next.capacity, sizeof(next.capacity)))
@@ -795,8 +796,9 @@ namespace mta::game_de
                 next.capacity > ((std::numeric_limits<std::size_t>::max)() - Association::CookieBytes) / Association::RowBytes)
                 return ClockResult::BindingChanged;
             // Native SUB EDX,[group+14] then MOV EBX,EDX is modulo32 and
-            // zeroextends before32-byte scaling. Logical NumAnims is only the
-            // nonzero Created gate, not this original allocation's capacity.
+            // zeroextends before32-byte scaling. Logical NumAnims supplies a
+            // Created gate only to manager callers. Direct group lookup uses
+            // the same physical capacity without importing that SDK policy.
             next.selected = anim - next.parent.offset;
             if (next.selected >= next.capacity)
                 return ClockResult::InvalidArgument;
@@ -810,7 +812,7 @@ namespace mta::game_de
             if (!Memory::Copy(field, &next.id, sizeof(next.id)))
                 return ClockResult::ReadFailure;
             Parent after;
-            if ((result = ParentSnapshot(binding, owner, group, after)) != ClockResult::Ok)
+            if ((result = ParentSnapshot(binding, owner, group, after, requireCreated)) != ClockResult::Ok)
                 return result;
             std::uint64_t capacityAfter = 0;
             if (!Memory::Copy(base, &capacityAfter, sizeof(capacityAfter)))
@@ -1005,6 +1007,70 @@ namespace mta::game_de
         if (result != ClockResult::Ok)
             return result;
         output = observed.loaded != 0;
+        return ClockResult::Ok;
+    }
+
+    ClockResult NativeAnimationManagerMemory::ReadAssociationGroupBlock(const NativeAnimationAssociationGroupReferenceToken& source,
+                                                                        NativeAnimationAssociationGroupBlock&                output) const noexcept
+    {
+        namespace D = AnimationAssociationGroupReadDetail;
+        const auto  token = source;
+        D::Snapshot first, second;
+        auto        result = D::Read(binding, owner, token, true, first);
+        if (result != ClockResult::Ok)
+            return result;
+        NativeAnimationAssociationGroupBlock next;
+        next.interfaceAddress = first.block;
+        if (first.block && (result = NativeAnimationBlockFactoryMemory(binding, owner).ResolveInterface(first.block, next.identity)) != ClockResult::Ok)
+            return result;
+        if ((result = D::Read(binding, owner, token, true, second)) != ClockResult::Ok)
+            return result;
+        if (!D::Same(first, second))
+            return ClockResult::BindingChanged;
+        if (second.block)
+        {
+            NativeAnimationBlockIdentity current;
+            if ((result = NativeAnimationBlockFactoryMemory(binding, owner).ResolveInterface(second.block, current)) != ClockResult::Ok)
+                return result;
+            if (current.index != next.identity.index || current.name != next.identity.name)
+                return ClockResult::BindingChanged;
+        }
+        if ((result = D::Group::Begin(binding, owner)) != ClockResult::Ok)
+            return result;
+        // Null remains Ok/default identity. Only the actual runtime stamps
+        // generation on a nonnull current bank child after its own bookends.
+        output = next;
+        return ClockResult::Ok;
+    }
+    ClockResult NativeAnimationManagerMemory::ResolveAssociationGroupStaticById(const NativeAnimationAssociationGroupReferenceToken& source,
+                                                                                std::uint32_t                                        requested,
+                                                                                NativeAnimationStaticAssociationReferenceToken&      output) const noexcept
+    {
+        namespace D = AnimationStaticAssociationIdDetail;
+        const auto token = source;
+        const auto id = requested;
+        if (!token.locator)
+            return ClockResult::InvalidArgument;
+        D::Snapshot first, second;
+        // Exact addressed4CE090 Group::GetAnimation indexes id-offset. It
+        // has no manager enum/Created gate; genuine cookie bounds still apply.
+        auto result = D::Capture(binding, owner, token.index, id, first, false);
+        if (result != ClockResult::Ok)
+            return result;
+        const auto row = first.parent.array.rows + static_cast<std::uintptr_t>(token.index) * NativeAnimationGroupArrayProfile::RowBytes;
+        if (row != token.locator)
+            return ClockResult::BindingChanged;
+        if ((result = D::Capture(binding, owner, token.index, id, second, false)) != ClockResult::Ok)
+            return result;
+        if (!D::Same(first.parent, second.parent) || first.capacity != second.capacity || first.selected != second.selected || first.id != second.id)
+            return ClockResult::BindingChanged;
+        if ((result = D::Begin(binding, owner)) != ClockResult::Ok)
+            return result;
+        NativeAnimationStaticAssociationReferenceToken next;
+        next.groupIndex = token.index;
+        next.index = second.selected;
+        next.locator = second.parent.child + static_cast<std::uintptr_t>(second.selected) * NativeAnimationStaticAssociationProfile::RowBytes;
+        output = next;
         return ClockResult::Ok;
     }
 

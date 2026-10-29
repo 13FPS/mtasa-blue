@@ -8585,6 +8585,7 @@ namespace
 #include "AnimationStaticAssociationFixture.generated.h"
 #include "NativeAnimationStaticAssociationOwnerTests.inl"
 #include "NativeStaticAssociationInitializationOwnerTests.inl"
+#include "NativeAnimationAssociationGroupChildProductsOwnerTests.inl"
 #include "NativeAnimationStaticAssociationWritesOwnerTests.inl"
 #include "PrivateAnimationAssociationFixture.generated.h"
 #include "NativePrivateAnimationAssociationOwnerTests.inl"
@@ -8741,6 +8742,7 @@ int main(int argc, char** argv)
         staticAssociationInitializationUnknown || (argc == 3 && std::strcmp(argv[2], "--static-association-initialization-success") == 0);
     const bool animationStaticAssociationReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-static-association-reads") == 0;
     const bool animationAssociationGroupReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-association-group-reads") == 0;
+    const bool animationAssociationGroupChildProductsOnly = argc == 3 && std::strcmp(argv[2], "--animation-association-group-child-products") == 0;
     const bool animationAssociationGroupOffsetLostAck = argc == 3 && std::strcmp(argv[2], "--animation-association-group-offset-lost-ack") == 0;
     const bool animationAssociationGroupOffsetConflict = argc == 3 && std::strcmp(argv[2], "--animation-association-group-offset-conflict") == 0;
     const bool animationAssociationGroupOffsetOnly = animationAssociationGroupOffsetLostAck || animationAssociationGroupOffsetConflict ||
@@ -8869,9 +8871,9 @@ int main(int argc, char** argv)
            freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly || customAnimationCleanupOnly ||
            standaloneSequenceOperationsOnly || animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly ||
            animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly || animationGroupValidityOnly ||
-           animationIdValidityOnly || animationAssociationGroupReadsOnly || animationAssociationGroupOffsetOnly || animationStaticAssociationReadsOnly ||
-           staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly || privateAssociationsOnly || associationBonesOnly ||
-           associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
+           animationIdValidityOnly || animationAssociationGroupReadsOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
+           animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
+           privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
     if (presentTransitionClockOnly)
@@ -9040,6 +9042,15 @@ int main(int argc, char** argv)
         // neither native owner fields nor public rejection guards are reset.
         AnimationAssociationGroupOffsetOwnerFixture::scenario = animationAssociationGroupOffsetLostAck ? 1u : animationAssociationGroupOffsetConflict ? 2u : 0u;
         NativeAnimationBlocksOwnedSdk(fixture, &AnimationAssociationGroupOffsetOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (animationAssociationGroupChildProductsOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        // One real module-pinned lifetime needs one pristine host process.
+        NativeAnimationBlocksOwnedSdk(fixture, &AnimationAssociationGroupChildProductsOwnerFixture::RunPrepared);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

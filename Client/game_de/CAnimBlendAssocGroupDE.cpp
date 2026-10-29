@@ -4,6 +4,9 @@
  * PURPOSE: Keep source scalar semantics distinct from owner/read refusals
  ****************************************************************************/
 #include "CAnimBlendAssocGroupDE.h"
+#include "CAnimBlockRequestDE.h"
+#include "CAnimBlendStaticAssociationDE.h"
+#include <algorithm>
 #include <stdexcept>
 #include <string>
 namespace mta::game_de
@@ -23,6 +26,65 @@ namespace mta::game_de
         NativeAnimationAssociationGroupValues value;
         Require(native.ReadAnimationAssociationGroup(token, value), operation);
         return value;
+    }
+    CAnimBlock* CAnimBlendAssocGroupDE::GetAnimBlock()
+    {
+        const auto                           token = reference;
+        NativeAnimationAssociationGroupBlock next;
+        Require(native.ReadAnimationAssociationGroupBlock(token, next), "GetAnimBlock");
+        if (!next.interfaceAddress)
+        {
+            // Classic SetupAnimBlock retires its cached CPU wrapper when the
+            // actual parent pointer becomes null. It owns no native ref/free.
+            blockFacade.reset();
+            blockIdentity = {};
+            return nullptr;
+        }
+        if (!reference.ownerGeneration || next.identity.ownerGeneration != reference.ownerGeneration ||
+            std::find(next.identity.name.begin(), next.identity.name.end(), 0) == next.identity.name.end())
+            Require(ClockResult::BindingChanged, "GetAnimBlock");
+        if (!blockAccess || !gameProvider)
+            Require(ClockResult::NotInitialized, "GetAnimBlock");
+        if (blockFacade && blockIdentity.interfaceAddress == next.interfaceAddress)
+        {
+            // A stable native address does not authorize reviving a facade
+            // whose immutable DE name/index affinity has expired in-place.
+            if (blockIdentity.identity.index != next.identity.index || blockIdentity.identity.name != next.identity.name ||
+                blockIdentity.identity.ownerGeneration != next.identity.ownerGeneration)
+                Require(ClockResult::BindingChanged, "GetAnimBlock");
+            return blockFacade.get();
+        }
+        auto product = std::unique_ptr<CAnimBlock>(new CAnimBlockRequestDE(*blockAccess, next.identity, *gameProvider));
+        blockFacade = std::move(product);
+        blockIdentity = next;
+        return blockFacade.get();
+    }
+    CAnimBlendStaticAssociation* CAnimBlendAssocGroupDE::GetAnimation(unsigned int requested)
+    {
+        static_assert(sizeof(unsigned int) == sizeof(std::uint32_t));
+        const auto                                     group = reference;
+        const auto                                     id = static_cast<std::uint32_t>(requested);
+        NativeAnimationStaticAssociationReferenceToken next;
+        Require(native.ResolveAnimationAssociationGroupStaticById(group, id, next), "GetAnimation");
+        if (!group.ownerGeneration || next.ownerGeneration != group.ownerGeneration || next.groupIndex != group.index || !next.locator)
+            Require(ClockResult::BindingChanged, "GetAnimation");
+        if (!staticAccess)
+            Require(ClockResult::NotInitialized, "GetAnimation");
+        NativeAnimationStaticAssociationValues current;
+        Require(staticAccess->ReadAnimationStaticAssociation(next, current), "GetAnimation");
+        if (current.interfaceAddress != next.locator)
+            Require(ClockResult::BindingChanged, "GetAnimation");
+        for (const auto& product : staticFacades)
+            if (product.token.ownerGeneration == next.ownerGeneration && product.token.groupIndex == next.groupIndex && product.token.index == next.index &&
+                product.token.locator == next.locator)
+                return product.facade.get();
+        // Classic exposes a raw result. A DE engine row cannot be cast into
+        // this C++ SDK vtable: keep its actual completed CPU facade here, with
+        // the group's raw-borrow lifetime and the existing native owner.
+        auto  product = std::unique_ptr<CAnimBlendStaticAssociation>(new CAnimBlendStaticAssociationDE(*staticAccess, next));
+        auto* result = product.get();
+        staticFacades.push_back({next, std::move(product)});
+        return result;
     }
     bool CAnimBlendAssocGroupDE::IsCreated()
     {

@@ -4,6 +4,8 @@
  * PURPOSE: Re-admit current association-group row observations through one owner
  ****************************************************************************/
 #pragma once
+#include "NativeAnimationBlockAccess.h"
+#include "NativeAnimationStaticAssociationAccess.h"
 #include <game/CGameClockService.h>
 #include <cstdint>
 namespace mta::game_de
@@ -20,6 +22,11 @@ namespace mta::game_de
         std::int32_t   numAnimations = 0;
         std::int32_t   groupId = 0;
     };
+    struct NativeAnimationAssociationGroupBlock
+    {
+        std::uintptr_t               interfaceAddress = 0;
+        NativeAnimationBlockIdentity identity{};
+    };
     class NativeAnimationAssociationGroupAccess
     {
     public:
@@ -33,6 +40,21 @@ namespace mta::game_de
         // Scalar/source-tag reads do not acquire a child array or require a
         // loaded block, a C-string name, or a nonzero animation count.
         virtual ClockResult ReadAnimationAssociationGroup(const NativeAnimationAssociationGroupReferenceToken&, NativeAnimationAssociationGroupValues&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
+        // Null is an admitted current parent fact, not a missing provider.
+        // Nonnull child identities remain coupled to that exact current row;
+        // no block reference or child allocation is acquired by this read.
+        virtual ClockResult ReadAnimationAssociationGroupBlock(const NativeAnimationAssociationGroupReferenceToken&,
+                                                               NativeAnimationAssociationGroupBlock&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
+        // Direct Group::GetAnimation has no manager Created/enum gate. It
+        // resolves the raw modulo32 ID offset within the genuine child cookie.
+        virtual ClockResult ResolveAnimationAssociationGroupStaticById(const NativeAnimationAssociationGroupReferenceToken&, std::uint32_t,
+                                                                       NativeAnimationStaticAssociationReferenceToken&) noexcept
         {
             return ClockResult::NotInitialized;
         }

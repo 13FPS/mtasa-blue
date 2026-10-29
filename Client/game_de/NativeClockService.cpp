@@ -230,6 +230,10 @@ namespace mta::game_de
             ClockResult ReadAnimationAssociationGroup(const NativeAnimationAssociationGroupReferenceToken&,
                                                       NativeAnimationAssociationGroupValues&) noexcept override;
             ClockResult ReadAnimationAssociationGroupLoaded(const NativeAnimationAssociationGroupReferenceToken&, bool&) noexcept override;
+            ClockResult ReadAnimationAssociationGroupBlock(const NativeAnimationAssociationGroupReferenceToken&,
+                                                           NativeAnimationAssociationGroupBlock&) noexcept override;
+            ClockResult ResolveAnimationAssociationGroupStaticById(const NativeAnimationAssociationGroupReferenceToken&, std::uint32_t,
+                                                                   NativeAnimationStaticAssociationReferenceToken&) noexcept override;
             ClockResult SetAnimationAssociationGroupIdOffset(const NativeAnimationAssociationGroupReferenceToken&, std::int32_t) noexcept override;
             ClockResult BeginPrivateAnimationCleanup(const NativeCustomAnimationCleanupRequest&, NativeCustomAnimationCleanupBeginReceipt&) noexcept override;
             ClockResult ResumePrivateAnimationCleanup(const NativeCustomAnimationCleanupToken&, SCustomAnimationCleanupResult&) noexcept override;
@@ -7069,6 +7073,49 @@ namespace mta::game_de
                 return result;
             if (expected.ownerGeneration != runtime.generation.load())
                 return ClockResult::OwnerConflict;
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::ReadAnimationAssociationGroupBlock(const NativeAnimationAssociationGroupReferenceToken& source,
+                                                                     NativeAnimationAssociationGroupBlock&                output) noexcept
+        {
+            const auto token = source;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            if (!token.ownerGeneration || token.ownerGeneration != generation)
+                return ClockResult::OwnerConflict;
+            NativeAnimationAssociationGroupBlock next;
+            result = NativeAnimationManagerMemory({runtime.image}, &CheckTimingOwner).ReadAssociationGroupBlock(token, next);
+            if (result != ClockResult::Ok || (result = CheckTimingOwner()) != ClockResult::Ok)
+                return result;
+            if (runtime.generation.load() != generation)
+                return ClockResult::OwnerConflict;
+            if (next.interfaceAddress)
+                next.identity.ownerGeneration = generation;
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::ResolveAnimationAssociationGroupStaticById(const NativeAnimationAssociationGroupReferenceToken& source,
+                                                                             std::uint32_t                                        requested,
+                                                                             NativeAnimationStaticAssociationReferenceToken&      output) noexcept
+        {
+            const auto token = source;
+            const auto id = requested;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            if (!token.ownerGeneration || token.ownerGeneration != generation)
+                return ClockResult::OwnerConflict;
+            NativeAnimationStaticAssociationReferenceToken next;
+            result = NativeAnimationManagerMemory({runtime.image}, &CheckTimingOwner).ResolveAssociationGroupStaticById(token, id, next);
+            if (result != ClockResult::Ok || (result = CheckTimingOwner()) != ClockResult::Ok)
+                return result;
+            if (runtime.generation.load() != generation || next.groupIndex != token.index)
+                return ClockResult::OwnerConflict;
+            next.ownerGeneration = generation;
             output = next;
             return ClockResult::Ok;
         }

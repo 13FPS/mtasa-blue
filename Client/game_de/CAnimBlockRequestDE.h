@@ -30,6 +30,7 @@ namespace mta::game_de
         // Keep construction tied to an explicitly configured same-backend
         // manager while allowing derived CPU-only lifetime witnesses in tests.
         friend class CAnimManagerDE;
+        friend class CAnimBlendAssocGroupDE;
         CStreaming& RequireStreaming();
         // The same actual game and native block owner must outlive the facade;
         // request orchestration creates no second native owner or ref counter.

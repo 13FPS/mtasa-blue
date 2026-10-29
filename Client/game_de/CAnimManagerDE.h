@@ -5,6 +5,7 @@
  ****************************************************************************/
 #pragma once
 #include "NativeAnimationManagerAccess.h"
+#include "NativeAnimationStaticAssociationAccess.h"
 #include "NativeAnimationSequenceStorageAccess.h"
 #include "NativeAnimationHierarchyAccess.h"
 #include "NativeAnimationSequenceAccess.h"
@@ -30,6 +31,8 @@ namespace mta::game_de
         std::unique_ptr<CCustomAnimationSequenceOperation> BeginCustomAnimationSequenceCleanup(const SCustomAnimationSequenceCleanupRequest&) override;
         std::unique_ptr<CCustomAnimationSequenceOperation> BeginCustomAnimationSequenceTransfer(const SCustomAnimationSequenceTransferRequest&) override;
         std::unique_ptr<CCustomAnimationSequenceOperation> BeginCustomAnimationFrameAttachment(const SCustomAnimationFrameAttachmentRequest&) override;
+        StaticAssocIntface_type                            GetAnimStaticAssociation(eAnimGroup, eAnimID) const override;
+        StaticAssocIntface_type                            GetAnimStaticAssociation(CAnimBlendStaticAssociationSAInterface*) override;
         using CAnimManager::GetAnimation;
         std::unique_ptr<CAnimBlendHierarchy> GetAnimation(int) override;
         std::unique_ptr<CAnimBlendHierarchy> GetAnimation(unsigned int, std::unique_ptr<CAnimBlock>&) override;
@@ -94,11 +97,14 @@ namespace mta::game_de
         NativeAnimationManagerCounts          Read(const char*) const;
         NativeAnimationManagerAccess&         native;
         const std::uint64_t                   ownerGeneration;
-        NativeAnimationBlockAccess*           blockAccess = nullptr;
-        CGame*                                gameProvider = nullptr;
-        NativeAnimationSequenceStorageAccess* storageAccess = nullptr;
-        NativeAnimationHierarchyAccess*       hierarchyAccess = nullptr;
-        NativeAnimationSequenceAccess*        sequenceAccess = nullptr;
+        // Resolve this optional service only from the actual complete owner,
+        // shared by every constructor; no second manager or CGame is fabricated.
+        NativeAnimationStaticAssociationAccess* staticAccess = dynamic_cast<NativeAnimationStaticAssociationAccess*>(&native);
+        NativeAnimationBlockAccess*             blockAccess = nullptr;
+        CGame*                                  gameProvider = nullptr;
+        NativeAnimationSequenceStorageAccess*   storageAccess = nullptr;
+        NativeAnimationHierarchyAccess*         hierarchyAccess = nullptr;
+        NativeAnimationSequenceAccess*          sequenceAccess = nullptr;
         // Cleanup is optional only for partial observation receivers. Such a
         // receiver cannot certify teardown and reports pending conservatively.
         NativeCustomAnimationCleanupAccess*           cleanupAccess = nullptr;

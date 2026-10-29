@@ -72,6 +72,9 @@
 #include "NativeAnimationManagerMemory.h"
 #include "NativeAnimationAssociationGroupAccess.h"
 #include "NativeAnimationStaticAssociationAccess.h"
+#include "NativeStaticAssociationInitializeCalls.h"
+#include "NativeAnimationBlockProfile.h"
+#include "NativeModelReferenceMap.h"
 #include "NativeAnimationAssociationAccess.h"
 #include "NativeAnimationAssociationController.h"
 #include "NativePedVelocityMemory.h"
@@ -217,6 +220,12 @@ namespace mta::game_de
                                                           NativeAnimationStaticAssociationReferenceToken&) noexcept override;
             ClockResult ReadAnimationStaticAssociation(const NativeAnimationStaticAssociationReferenceToken&,
                                                        NativeAnimationStaticAssociationValues&) noexcept override;
+            ClockResult ResolveAnimationStaticAssociationById(std::uint64_t, std::uint32_t, std::uint32_t,
+                                                              NativeAnimationStaticAssociationReferenceToken&) noexcept override;
+            ClockResult ResolveAnimationStaticAssociationInterface(std::uint64_t, std::uintptr_t,
+                                                                   NativeAnimationStaticAssociationReferenceToken&) noexcept override;
+            ClockResult InitializeAnimationStaticAssociation(const NativeAnimationStaticAssociationReferenceToken&, std::uintptr_t,
+                                                             std::uintptr_t) noexcept override;
             ClockResult ResolveAnimationAssociationGroup(std::uint64_t, std::uint32_t, NativeAnimationAssociationGroupReferenceToken&) noexcept override;
             ClockResult ReadAnimationAssociationGroup(const NativeAnimationAssociationGroupReferenceToken&,
                                                       NativeAnimationAssociationGroupValues&) noexcept override;
@@ -596,6 +605,11 @@ namespace mta::game_de
             // controller and callback generation until every exact cell
             // address has disappeared from the native reference bank.
             NativePedReferenceController pedReferences;
+            // Reserve one receipt before the native entry. Accepted initialized
+            // nodes belong to the existing engine row; uncertain entered effects
+            // retain this owner/module and can never be replayed or CPU-freed.
+            NativeStaticAssociationInitializeCalls::Receipt staticAssociationInitialization;
+            std::atomic<bool>                               staticAssociationInitializationBusy{false}, staticAssociationInitializationRecovery{false};
             // Keep backing acquisition in this same owner when source CPU
             // counters cannot acknowledge it. No release/custom absence is
             // inferred by construction, destruction or another generation.
@@ -811,7 +825,8 @@ namespace mta::game_de
 
         bool NativeLifetimeRetained() noexcept
         {
-            return runtime.presentationRecovery.Held() || runtime.weatherOverridePeers.PresentationHeld() || runtime.startupMenuBusy.load() ||
+            return runtime.staticAssociationInitializationBusy.load() || runtime.staticAssociationInitializationRecovery.load() ||
+                   runtime.presentationRecovery.Held() || runtime.weatherOverridePeers.PresentationHeld() || runtime.startupMenuBusy.load() ||
                    runtime.startupMenuRetained.load() || runtime.startupCollisionBusy.load() || runtime.startupCollisionRetained.load() ||
                    runtime.pedModelCreationBusy.load() || runtime.pedModelCreationRetained.load() || runtime.modelBackingReferences.IsRetained() ||
                    runtime.pedReferences.IsRetained() || WorldIgnoreRetained() || runtime.customSequences.IsRetained() ||
@@ -7077,6 +7092,220 @@ namespace mta::game_de
             output = next;
             return ClockResult::Ok;
         }
+        ClockResult NativeAccess::ResolveAnimationStaticAssociationById(std::uint64_t requestedGeneration, std::uint32_t requestedGroup,
+                                                                        std::uint32_t                                   requestedAnimation,
+                                                                        NativeAnimationStaticAssociationReferenceToken& output) noexcept
+        {
+            const auto generation = requestedGeneration;
+            const auto group = requestedGroup, animation = requestedAnimation;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (!generation || generation != runtime.generation.load())
+                return ClockResult::OwnerConflict;
+            NativeAnimationStaticAssociationReferenceToken next;
+            result = NativeAnimationManagerMemory({runtime.image}, &CheckTimingOwner).ResolveStaticAssociationById(group, animation, next);
+            if (result != ClockResult::Ok || (result = CheckTimingOwner()) != ClockResult::Ok)
+                return result;
+            if (generation != runtime.generation.load())
+                return ClockResult::OwnerConflict;
+            next.ownerGeneration = generation;
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::ResolveAnimationStaticAssociationInterface(std::uint64_t requestedGeneration, std::uintptr_t requested,
+                                                                             NativeAnimationStaticAssociationReferenceToken& output) noexcept
+        {
+            const auto generation = requestedGeneration;
+            const auto locator = requested;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (!generation || generation != runtime.generation.load())
+                return ClockResult::OwnerConflict;
+            if (!locator)
+                return ClockResult::InvalidArgument;
+            NativeAnimationStaticAssociationReferenceToken next;
+            result = NativeAnimationManagerMemory({runtime.image}, &CheckTimingOwner).ResolveStaticAssociationReference(locator, next);
+            if (result != ClockResult::Ok || (result = CheckTimingOwner()) != ClockResult::Ok)
+                return result;
+            if (generation != runtime.generation.load())
+                return ClockResult::OwnerConflict;
+            next.ownerGeneration = generation;
+            output = next;
+            return ClockResult::Ok;
+        }
+
+        namespace StaticAssociationInitializationDetail
+        {
+            namespace Calls = NativeStaticAssociationInitializeCalls;
+            struct Borrow
+            {
+                NativePedReferenceToken                        ped;
+                NativeAnimationStaticAssociationReferenceToken row;
+                std::uintptr_t                                 clump = 0, hierarchy = 0;
+                NativeAnimationAssociationGroupReferenceToken  group;
+                NativeAnimationAssociationGroupValues          groupValues;
+                NativeAnimationBlockIdentity                   block;
+                NativeAnimationBlockValues                     blockValues;
+                NativeAnimationHierarchyValues                 hierarchyValues;
+                NativeAnimationStaticAssociationValues         rowValues;
+                std::uintptr_t                                 groupBlock = 0;
+                bool                                           captured = false;
+            };
+            bool SamePed(const NativePedPoolReader::Value& a, const NativePedPoolReader::Value& b) noexcept
+            {
+                return a.handle == b.handle && a.slot == b.slot && a.pool == b.pool && a.objects == b.objects && a.flags == b.flags &&
+                       a.nativePed == b.nativePed && a.vtable == b.vtable && a.firstMethod == b.firstMethod && a.capacity == b.capacity &&
+                       a.cursor == b.cursor && a.generation == b.generation && a.ownsAllocations == b.ownsAllocations;
+            }
+            ClockResult MatchClump(const NativePedReferenceToken&, const NativePedPoolReader::Value& value, bool& matches, void* context) noexcept
+            {
+                const auto&    borrow = *static_cast<Borrow*>(context);
+                std::uintptr_t render = 0;
+                const auto     result = NativePedRenderMemory({runtime.image}, &CheckTimingOwner).Read(value, render);
+                if (result != ClockResult::Ok)
+                    return result;
+                matches = render == borrow.clump;
+                return ClockResult::Ok;
+            }
+            ClockResult Capture(Borrow& expected, bool after) noexcept
+            {
+                if (!expected.row.ownerGeneration || expected.row.ownerGeneration != runtime.generation.load())
+                    return ClockResult::OwnerConflict;
+                NativeAnimationManagerMemory                   manager({runtime.image}, &CheckTimingOwner);
+                NativeAnimationStaticAssociationReferenceToken row;
+                auto                                           result = manager.ResolveStaticAssociation(expected.row.groupIndex, expected.row.index, row);
+                if (result != ClockResult::Ok)
+                    return result;
+                if (row.locator != expected.row.locator)
+                    return ClockResult::BindingChanged;
+                Borrow next;
+                next.row = expected.row;
+                if ((result = manager.ReadStaticAssociation(row, next.rowValues)) != ClockResult::Ok)
+                    return result;
+                if (!expected.hierarchy || next.rowValues.hierarchyAddress != expected.hierarchy)
+                    return ClockResult::OwnerConflict;
+                if ((result = manager.ResolveAssociationGroup(row.groupIndex, next.group)) != ClockResult::Ok ||
+                    (result = manager.ReadAssociationGroup(next.group, next.groupValues)) != ClockResult::Ok)
+                    return result;
+                bool loaded = false;
+                if ((result = manager.ReadAssociationGroupLoaded(next.group, loaded)) != ClockResult::Ok)
+                    return result;
+                if (!loaded)
+                    return ClockResult::NotInitialized;
+                if (!NativeModelReferenceMap::Copy(next.group.locator, &next.groupBlock, sizeof(next.groupBlock)))
+                    return ClockResult::ReadFailure;
+                if ((result = NativeAnimationHierarchyMemory({runtime.image}, &CheckTimingOwner).Read(expected.hierarchy, next.hierarchyValues)) !=
+                    ClockResult::Ok)
+                    return result;
+                if (next.hierarchyValues.blockId < 0 ||
+                    static_cast<std::uint32_t>(next.hierarchyValues.blockId) >= NativeAnimationBlockProfile::ObservationLimit)
+                    return ClockResult::OwnerConflict;
+                const auto blockIndex = static_cast<std::uint32_t>(next.hierarchyValues.blockId);
+                if (next.groupBlock !=
+                    runtime.image + NativeAnimationBlockProfile::BankRva + static_cast<std::uintptr_t>(blockIndex) * NativeAnimationBlockProfile::RowBytes)
+                    return ClockResult::OwnerConflict;
+                if ((result = NativeAnimationBlockRefMemory({runtime.image}, &CheckTimingOwner).ReadCounterIdentity(blockIndex, next.block)) !=
+                        ClockResult::Ok ||
+                    (result = NativeAnimationBlockMemory({runtime.image}, &CheckTimingOwner).Read(next.block, next.blockValues)) != ClockResult::Ok)
+                    return result;
+                if (!next.blockValues.loaded)
+                    return ClockResult::NotInitialized;
+                if (expected.captured)
+                {
+                    const auto& a = expected;
+                    const auto& b = next;
+                    if (a.group.locator != b.group.locator || a.groupValues.numAnimations != b.groupValues.numAnimations ||
+                        a.groupValues.groupId != b.groupValues.groupId || a.groupBlock != b.groupBlock || a.block.index != b.block.index ||
+                        a.block.name != b.block.name || a.blockValues.idOffset != b.blockValues.idOffset ||
+                        a.blockValues.animationCount != b.blockValues.animationCount ||
+                        a.hierarchyValues.interfaceAddress != b.hierarchyValues.interfaceAddress || a.hierarchyValues.hash != b.hierarchyValues.hash ||
+                        a.hierarchyValues.sequenceCount != b.hierarchyValues.sequenceCount || a.hierarchyValues.blockId != b.hierarchyValues.blockId ||
+                        a.rowValues.animId != b.rowValues.animId || a.rowValues.animGroup != b.rowValues.animGroup || a.rowValues.flags != b.rowValues.flags)
+                        return ClockResult::BindingChanged;
+                }
+                else
+                {
+                    if (after)
+                        return ClockResult::OwnerConflict;
+                    next.ped = expected.ped;
+                    next.clump = expected.clump;
+                    next.hierarchy = expected.hierarchy;
+                    next.captured = true;
+                    expected = next;
+                }
+                return CheckTimingOwner();
+            }
+            ClockResult Recheck(const Calls::Arguments& arguments, bool after, void* context) noexcept
+            {
+                auto& expected = *static_cast<Borrow*>(context);
+                auto  result = CheckTimingOwner();
+                if (result != ClockResult::Ok)
+                    return result;
+                if (arguments.clump != expected.clump || arguments.hierarchy != expected.hierarchy || arguments.association != expected.row.locator)
+                    return ClockResult::OwnerConflict;
+                NativePedPoolReader::Value ped;
+                result = runtime.pedReferences.Resolve(PedReferenceMemory(), runtime.generation.load(), expected.ped, ped);
+                if (result != ClockResult::Ok)
+                    return result;
+                if (!SamePed(ped, arguments.ped))
+                    return ClockResult::BindingChanged;
+                return Capture(expected, after);
+            }
+        }
+        ClockResult NativeAccess::InitializeAnimationStaticAssociation(const NativeAnimationStaticAssociationReferenceToken& source,
+                                                                       std::uintptr_t requestedClump, std::uintptr_t requestedHierarchy) noexcept
+        {
+            namespace D = StaticAssociationInitializationDetail;
+            const auto token = source;
+            const auto clump = requestedClump, hierarchy = requestedHierarchy;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (!token.ownerGeneration || token.ownerGeneration != runtime.generation.load())
+                return ClockResult::OwnerConflict;
+            if (!clump || !hierarchy || !token.locator)
+                return ClockResult::InvalidArgument;
+            if (runtime.staticAssociationInitializationRecovery.load())
+                return ClockResult::OwnerConflict;
+            bool idle = false;
+            if (!runtime.staticAssociationInitializationBusy.compare_exchange_strong(idle, true))
+                return ClockResult::Busy;
+            struct Busy
+            {
+                ~Busy() { runtime.staticAssociationInitializationBusy.store(false); }
+            } busy;
+            runtime.staticAssociationInitialization = {};
+            D::Borrow borrow;
+            borrow.row = token;
+            borrow.clump = clump;
+            borrow.hierarchy = hierarchy;
+            NativePedPoolReader::Value ped;
+            result = runtime.pedReferences.FindPublished(PedReferenceMemory(), token.ownerGeneration, &D::MatchClump, &borrow, borrow.ped, ped);
+            if (result != ClockResult::Ok)
+                return result;
+            D::Calls::Arguments arguments;
+            arguments.ped = ped;
+            arguments.clump = clump;
+            arguments.association = token.locator;
+            arguments.hierarchy = hierarchy;
+            result = D::Calls::Initialize(runtime.image, arguments, &CheckTimingOwner, &D::Recheck, &borrow, &runtime.staticAssociationInitialization);
+            const auto& receipt = runtime.staticAssociationInitialization;
+            if (result == ClockResult::Ok && (!receipt.entered || !receipt.returned || !receipt.verified))
+                result = ClockResult::BindingChanged;
+            if (receipt.entered && (result != ClockResult::Ok || !receipt.returned || !receipt.verified))
+            {
+                // The genuine allocation may already be published in an
+                // engine row. Keep accepted/unknown facts; neither End nor a
+                // CPU facade may replay, free or roll back that native state.
+                runtime.staticAssociationInitializationRecovery.store(true);
+                Stop(result == ClockResult::Ok ? ClockResult::BindingChanged : result);
+                return result == ClockResult::Ok ? ClockResult::BindingChanged : result;
+            }
+            return result;
+        }
+
         ClockResult NativeAccess::ReadAnimationStaticAssociation(const NativeAnimationStaticAssociationReferenceToken& source,
                                                                  NativeAnimationStaticAssociationValues&               output) noexcept
         {
@@ -8657,7 +8886,8 @@ namespace mta::game_de
             next.ready = runtime.ready.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() && !runtime.weatherGeneration.load() &&
                          !runtime.weaponVectorRecovery.load() && !runtime.weaponVectorGeneration.load() && !WeatherOverridePending() &&
                          !runtime.pedReferences.RecoveryPending() && !runtime.worldIgnoreRecovery.load() && !runtime.customSequences.RecoveryPending() &&
-                         !runtime.privateHierarchies.RecoveryPending() && !runtime.privateAssociations.RecoveryPending();
+                         !runtime.privateHierarchies.RecoveryPending() && !runtime.privateAssociations.RecoveryPending() &&
+                         !runtime.staticAssociationInitializationRecovery.load();
             next.stopping = runtime.stopping.load();
             next.restored = runtime.restored.load() && !runtime.timingDirty.load() && !runtime.timingRecovery.load() && !runtime.weatherRecovery.load() &&
                             !runtime.weatherSuperseded.load() && !runtime.weatherGeneration.load() && !runtime.weaponVectorRecovery.load() &&
@@ -8687,7 +8917,7 @@ namespace mta::game_de
                                        runtime.weatherRecovery.load() || runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() ||
                                        runtime.weaponVectorGeneration.load() || WeatherOverridePending() || runtime.pedReferences.RecoveryPending() ||
                                        runtime.worldIgnoreRecovery.load() || runtime.privateAssociations.RecoveryPending() ||
-                                       (runtime.stopping.load() && NativeLifetimeRetained());
+                                       runtime.staticAssociationInitializationRecovery.load() || (runtime.stopping.load() && NativeLifetimeRetained());
             next.protectionRestorePending = runtime.protectionPending.load();
             state = next;
             return true;

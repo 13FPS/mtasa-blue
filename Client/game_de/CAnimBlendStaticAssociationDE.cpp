@@ -17,6 +17,16 @@ namespace mta::game_de
                                          std::to_string(static_cast<unsigned>(result)));
         }
     }
+    void CAnimBlendStaticAssociationDE::Initialize(RpClump* clump, CAnimBlendHierarchySAInterface* hierarchy)
+    {
+        // Copy source tags and immutable physical identity before callbacks.
+        // Native admission supplies the registered clump/current bank and
+        // preserves entered effects; this CPU facade never allocates/frees rows.
+        const auto token = reference;
+        const auto clumpTag = reinterpret_cast<std::uintptr_t>(clump);
+        const auto hierarchyTag = reinterpret_cast<std::uintptr_t>(hierarchy);
+        Require(native.InitializeAnimationStaticAssociation(token, clumpTag, hierarchyTag), "Initialize");
+    }
     NativeAnimationStaticAssociationValues CAnimBlendStaticAssociationDE::Read(const char* operation) const
     {
         const auto                             token = reference;

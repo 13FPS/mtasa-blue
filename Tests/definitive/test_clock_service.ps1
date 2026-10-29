@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('PresentTransitionClock','StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
+    [ValidateSet('StaticAssociationInitialization','PresentTransitionClock','StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -23,6 +23,9 @@ $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;a
 # Historical markers start false and are set only by the branch that actually
 # executed. Focus mode must never inherit the cumulative suite's claims.
 $record['runScope'] = $Scope
+$record['nativeStaticAssociationInitializationRuntimeTested']=$false
+$record['nativeStaticAssociationInitializationRegisteredBankTested']=$false
+$record['nativeStaticAssociationInitializationEnteredDebtRetained']=$false
 $record['nativePresentTransitionClockRuntimeTested']=$false
 $record['nativePresentTransitionPeerHoldReaderExclusionTested']=$false
 $record['nativePresentTransitionPeerFailureRecoveryTested']=$false
@@ -581,6 +584,8 @@ try {
     $sourceNames += @('Tests/definitive/NativeAnimationAssociationBonesOwnerTests.inl','Tests/definitive/NativeAnimationAssociationFloatOwnerTests.inl','Tests/definitive/NativeAnimationAssociationProgressOwnerTests.inl','Tests/definitive/NativeAnimationAssociationNodeArrayOwnerTests.inl','Client/game_de/NativeAnimationAssociationProgressProfile.h')
     $sourceNames += @('Tests/definitive/NativePedRenderOwnerTests.inl','Tests/definitive/Write-PedRenderFixture.ps1','Client/game_de/NativePedRenderMemory.h','Client/game_de/NativePedRenderMemory.cpp','Client/game_de/NativePedRenderProfile.h','Client/game_de/NativePedMetadataAccess.h','Client/game_de/CPedMetadataDE.h','Client/game_de/CPedMetadataDE.cpp')
     $sourceNames += @('Tests/definitive/NativeAnimationStaticAssociationWritesOwnerTests.inl')
+    $sourceNames += @('Tests/definitive/NativeStaticAssociationInitializationOwnerTests.inl','Tests/definitive/NativeStaticAssociationInitializeFixture.h',
+        'Client/game_de/NativeStaticAssociationInitializeCalls.h','Client/game_de/NativeStaticAssociationInitializeCalls.cpp','Client/game_de/NativeStaticAssociationInitializeProfile.h')
     $sourceNames += @('Tests/definitive/NativeAnimationStaticAssociationOwnerTests.inl','Tests/definitive/Write-AnimationStaticAssociationFixture.ps1','Client/game_de/NativeAnimationStaticAssociationAccess.h','Client/game_de/CAnimBlendStaticAssociationDE.h','Client/game_de/CAnimBlendStaticAssociationDE.cpp','Client/sdk/game/CAnimBlendStaticAssociation.h')
     $sourceNames += @('Tests/definitive/NativeAnimationAssociationGroupOwnerTests.inl','Tests/definitive/Write-AnimationAssociationGroupFixture.ps1','Client/game_de/NativeAnimationAssociationGroupAccess.h','Client/game_de/CAnimBlendAssocGroupDE.h','Client/game_de/CAnimBlendAssocGroupDE.cpp','Client/sdk/game/CAnimBlendAssocGroup.h')
     $sourceNames += @('Tests/definitive/NativeAnimationIdValidityOwnerTests.inl','Client/game_de/NativeAnimationStaticAssociationProfile.h','Client/sdk/game/CAnimValidityPolicy.h')
@@ -1101,7 +1106,7 @@ namespace ClockPrivateHierarchyParentWriteFixture {
     # process retirement; keep its large synthetic PE in owned disposable scratch.
     # Preserve the argument vector: an if result with one item becomes a
     # scalar string, so later += would append the switch to the path.
-    $fixtureArguments = @(if ($Scope -in @('StartupPreparationReadiness','StartupNumericGarages','StartupStreamingReceiver','StartupInitializationReadiness','PresentTransitionClock')) { $scratchRoot } else { $outputRoot })
+    $fixtureArguments = @(if ($Scope -in @('StaticAssociationInitialization','StartupPreparationReadiness','StartupNumericGarages','StartupStreamingReceiver','StartupInitializationReadiness','PresentTransitionClock')) { $scratchRoot } else { $outputRoot })
     if ($Scope -eq 'PresentTransitionClock') { $fixtureArguments += '--present-transition-clock' }
     if ($Scope -eq 'StartupInitializationReadiness') { $fixtureArguments += '--startup-initialization-readiness' }
     if ($Scope -eq 'StartupStreamingReceiver') { $fixtureArguments += '--startup-streaming-receiver' }
@@ -1355,6 +1360,31 @@ namespace ClockPrivateHierarchyParentWriteFixture {
                 Remove-Item -LiteralPath $scenarioExecutable -Force
                 $entry.copyRetired=$true
             }
+        }
+        $record.testRun=$record.testRuns[-1];$text=$texts -join [Environment]::NewLine
+    } elseif($Scope -eq 'StaticAssociationInitialization'){
+        # Compile once, then isolate accepted retirement and entered-unknown
+        # lifetimes. Do not reset sticky module pins or actual native debt to
+        # let BeginOwned's pristine wrong-executable assertions pass again.
+        $record['testRuns']=@();$record['testScenarioExecutables']=@();$texts=@()
+        $compiledHash=Sha $executable
+        foreach($scenario in @('success','unknown')){
+            $scenarioRoot=Join-Path $scratchRoot ('static-initialization-'+$scenario)
+            [IO.Directory]::CreateDirectory($scenarioRoot)|Out-Null
+            $scenarioExecutable=Join-Path $scenarioRoot ([IO.Path]::GetFileName($executable))
+            if(Test-Path -LiteralPath $scenarioExecutable){throw 'Static initialization scenario execution copy already exists'}
+            Copy-Item -LiteralPath $executable -Destination $scenarioExecutable
+            $scenarioHash=Sha $scenarioExecutable
+            if($scenarioHash -cne $compiledHash){throw 'Static initialization scenario differs from the once-compiled exact executable'}
+            $record.testScenarioExecutables+=@([ordered]@{scenario=$scenario;path=$scenarioExecutable;sha256=$scenarioHash;removedWithOwnedScratch=$true})
+            $run=RunBounded $scenarioExecutable @($scenarioRoot,('--static-association-initialization-'+$scenario)) ('test-static-initialization-'+$scenario) 60000
+            $record.testRuns+=$run
+            $part=[IO.File]::ReadAllText($run.stdout)+[IO.File]::ReadAllText($run.stderr)
+            if($run.exitCode -ne 0 -or $run.timedOut -or $part -notmatch 'Passed (\d+) production clock service checks'){
+                throw ('Static initialization '+$scenario+' failed')
+            }
+            if((Sha $scenarioExecutable) -cne $compiledHash){throw 'Static initialization execution copy changed while running'}
+            $record.checks+=[int]$Matches[1];$texts+=$part
         }
         $record.testRun=$record.testRuns[-1];$text=$texts -join [Environment]::NewLine
     } elseif($Scope -eq 'AnimationStaticAssociationWrites'){
@@ -1700,7 +1730,7 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         $text = $texts -join [Environment]::NewLine
     } else {
         $testExecutable = $executable
-    if ($Scope -in @('StartupPreparationReadiness','StartupNumericGarages','StartupStreamingReceiver','StartupInitializationReadiness','PresentTransitionClock')) {
+    if ($Scope -in @('StaticAssociationInitialization','StartupPreparationReadiness','StartupNumericGarages','StartupStreamingReceiver','StartupInitializationReadiness','PresentTransitionClock')) {
         # The fixture's existing path guard requires its backing-image directory
         # to equal its executable directory. Run an exact owned scratch copy so
         # that guard stays intact and neither retained synthetic PE survives.
@@ -1838,6 +1868,12 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         $record.nativePedRenderOwnerTested=$text.Contains('Production native ped render owner fixture completed')
         $record.actualPedRenderSdkOwnerTested=$text.Contains('Production actual ped render SDK fixture completed')
         if(-not($record.nativePedRenderOwnerTested -and $record.actualPedRenderSdkOwnerTested)){throw 'Ped render selected scope incomplete'}
+        $record.productionNativeCallbackTested=$true
+    } elseif($Scope -eq 'StaticAssociationInitialization'){
+        $record.nativeStaticAssociationInitializationRuntimeTested=$text.Contains('Production static association initialization actual owner and SDK fixture completed')
+        $record.nativeStaticAssociationInitializationRegisteredBankTested=$text.Contains('Production static association initialization registered same bank refusals completed')
+        $record.nativeStaticAssociationInitializationEnteredDebtRetained=$text.Contains('Production static association initialization entered debt retained without replay')
+        if(-not($record.nativeStaticAssociationInitializationRuntimeTested -and $record.nativeStaticAssociationInitializationRegisteredBankTested -and $record.nativeStaticAssociationInitializationEnteredDebtRetained)){throw 'Actual static association initialization runtime scope incomplete'}
         $record.productionNativeCallbackTested=$true
     } elseif($Scope -eq 'AnimationStaticAssociationWrites'){
         $record.nativeAnimationStaticAssociationWritesOwnerTested=$text.Contains('Production static association scalar writes owner fixture completed')

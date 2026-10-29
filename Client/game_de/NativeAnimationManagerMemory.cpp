@@ -823,6 +823,26 @@ namespace mta::game_de
             return ClockResult::Ok;
         }
     }
+    ClockResult NativeAnimationManagerMemory::ResolveStaticAssociationById(std::uint32_t requestedGroup, std::uint32_t requestedAnimation,
+                                                                           NativeAnimationStaticAssociationReferenceToken& output) const noexcept
+    {
+        namespace D = AnimationStaticAssociationIdDetail;
+        const auto  group = requestedGroup, animation = requestedAnimation;
+        D::Snapshot before, after;
+        auto        result = D::Capture(binding, owner, group, animation, before);
+        if (result != ClockResult::Ok || (result = D::Capture(binding, owner, group, animation, after)) != ClockResult::Ok)
+            return result;
+        if (!D::Same(before.parent, after.parent) || before.capacity != after.capacity || before.selected != after.selected || before.id != after.id)
+            return ClockResult::BindingChanged;
+        if ((result = D::Begin(binding, owner)) != ClockResult::Ok)
+            return result;
+        NativeAnimationStaticAssociationReferenceToken next;
+        next.groupIndex = group;
+        next.index = after.selected;
+        next.locator = after.parent.child + static_cast<std::uintptr_t>(after.selected) * NativeAnimationStaticAssociationProfile::RowBytes;
+        output = next;
+        return ClockResult::Ok;
+    }
     ClockResult NativeAnimationManagerMemory::ReadStaticAssociationAnimID(std::uint32_t requestedGroup, std::uint32_t requestedAnim,
                                                                           std::int16_t& output) const noexcept
     {

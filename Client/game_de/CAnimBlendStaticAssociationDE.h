@@ -12,6 +12,7 @@ namespace mta::game_de
     class CAnimBlendStaticAssociationDE : public CAnimBlendStaticAssociation
     {
     public:
+        void                                    Initialize(RpClump*, CAnimBlendHierarchySAInterface*) override;
         void                                    SetNumBlendNodes(unsigned short) override;
         void                                    SetAnimID(short) override;
         void                                    SetAnimGroup(short) override;
@@ -30,13 +31,15 @@ namespace mta::game_de
         }
 
     private:
+        friend class CAnimManagerDE;
         NativeAnimationStaticAssociationValues               Read(const char*) const;
         NativeAnimationStaticAssociationAccess&              native;
         const NativeAnimationStaticAssociationReferenceToken reference;
     };
-    // Initialize still needs genuine clump/node/hierarchy authority and stays
-    // pure. Scalar writes grant no child ownership or complete factory; no
-    // deletion through the SDK base without a virtual dtor is introduced.
-    static_assert(std::is_abstract_v<CAnimBlendStaticAssociationDE> && std::is_base_of_v<CAnimBlendStaticAssociation, CAnimBlendStaticAssociationDE>);
+    // This receiver completes its eleven SDK methods through the same owner.
+    // Its destructor frees the CPU facade only; unsupported initialization
+    // phases remain explicit owner refusals rather than successful no-ops.
+    static_assert(!std::is_abstract_v<CAnimBlendStaticAssociationDE> && std::is_base_of_v<CAnimBlendStaticAssociation, CAnimBlendStaticAssociationDE>);
+    static_assert(std::has_virtual_destructor_v<CAnimBlendStaticAssociation>);
     static_assert(!std::is_default_constructible_v<CAnimBlendStaticAssociationDE>);
 }

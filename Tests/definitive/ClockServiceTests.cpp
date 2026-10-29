@@ -103,6 +103,7 @@
 #include "../../Client/game_de/NativeAnimationManagerProfile.h"
 #include "../../Client/game_de/NativeAnimationGroupArrayProfile.h"
 #include "../../Client/game_de/NativeAnimationStaticAssociationProfile.h"
+#include "NativeStaticAssociationInitializeFixture.h"
 #include "../../Client/game_de/CAnimBlockDE.h"
 #include "../../Client/game_de/NativePedPlacementMemory.h"
 #include "../../Client/game_de/NativePedPoseMutation.h"
@@ -3475,6 +3476,17 @@ namespace ClockWorldIgnoreOwnerTest
 #undef ReadImage
 // The focused writer delegates to the genuine guarded word exchange before
 // scheduling conflicts or lost acknowledgements in its owned private rows.
+namespace ClockStaticAssociationInitializationInvokeTest
+{
+    namespace Calls = mta::game_de::NativeStaticAssociationInitializeCalls;
+    mta::game_de::ClockResult Invoke(Calls::NativeFunction, std::uintptr_t, std::uintptr_t, std::uintptr_t, std::uint32_t&) noexcept;
+}
+// Include the real original-entry boundary once. Only its final typed native
+// call is substituted by owned effects; all profile, membership and gate checks
+// remain production. Other selected scopes never execute this new fixture.
+#define MTA_DE_STATIC_ASSOCIATION_INITIALIZE_NATIVE_INVOKE ClockStaticAssociationInitializationInvokeTest::Invoke
+#include "../../Client/game_de/NativeStaticAssociationInitializeCalls.cpp"
+#undef MTA_DE_STATIC_ASSOCIATION_INITIALIZE_NATIVE_INVOKE
 namespace ClockAnimationStaticAssociationWriteTest
 {
     mta::game_de::ClockResult Exchange(std::uintptr_t, std::uint16_t, std::uint16_t, std::uint16_t&, bool&, std::uint32_t&) noexcept;
@@ -8565,6 +8577,7 @@ namespace
 #include "NativeAnimationAssociationGroupOwnerTests.inl"
 #include "AnimationStaticAssociationFixture.generated.h"
 #include "NativeAnimationStaticAssociationOwnerTests.inl"
+#include "NativeStaticAssociationInitializationOwnerTests.inl"
 #include "NativeAnimationStaticAssociationWritesOwnerTests.inl"
 #include "PrivateAnimationAssociationFixture.generated.h"
 #include "NativePrivateAnimationAssociationOwnerTests.inl"
@@ -8716,6 +8729,9 @@ int main(int argc, char** argv)
                                                     : staticAssociationWriteLostAck ? 2u
                                                     : staticAssociationWriteUnknown ? 3u
                                                                                     : 0u;
+    const bool     staticAssociationInitializationUnknown = argc == 3 && std::strcmp(argv[2], "--static-association-initialization-unknown") == 0;
+    const bool     staticAssociationInitializationOnly =
+        staticAssociationInitializationUnknown || (argc == 3 && std::strcmp(argv[2], "--static-association-initialization-success") == 0);
     const bool     animationStaticAssociationReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-static-association-reads") == 0;
     const bool     animationAssociationGroupReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-association-group-reads") == 0;
     const bool     animationIdValidityOnly = argc == 3 && std::strcmp(argv[2], "--animation-id-validity") == 0;
@@ -8843,7 +8859,8 @@ int main(int argc, char** argv)
            standaloneSequenceOperationsOnly || animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly ||
            animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly || animationGroupValidityOnly ||
            animationIdValidityOnly || animationAssociationGroupReadsOnly || animationStaticAssociationReadsOnly || staticAssociationWritesOnly ||
-           pedRenderOnly || privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
+           staticAssociationInitializationOnly || pedRenderOnly || privateAssociationsOnly || associationBonesOnly || associationFloatOnly ||
+           associationProgressOnly || associationNodeArrayOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
     if (presentTransitionClockOnly)
@@ -8980,6 +8997,18 @@ int main(int argc, char** argv)
         ClockImageFixture fixture;
         fixture.Create(argv[1]);
         NativeAnimationBlocksOwnedSdk(fixture, &AnimationStaticAssociationWritesOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (staticAssociationInitializationOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        // A fresh process preserves BeginOwned's pristine public rejection
+        // contract. Module pins and entered debt are never erased to squeeze
+        // a second independent lifetime into the same ordinary fixture host.
+        StaticAssociationInitializationOwnerFixture::scenario = staticAssociationInitializationUnknown ? 1u : 0u;
+        NativeAnimationBlocksOwnedSdk(fixture, &StaticAssociationInitializationOwnerFixture::RunPrepared);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

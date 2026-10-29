@@ -30,4 +30,9 @@ public:
     virtual short                                   GetFlags() = 0;
     virtual CAnimBlendHierarchySAInterface*         GetAnimHierarchyInterface() = 0;
     virtual CAnimBlendStaticAssociationSAInterface* GetInterface() = 0;
+    // Both manager factories return unique_ptr<Base> CPU facades. Destruction
+    // owns only that wrapper; the engine group's row/node/bank lifetime stays
+    // with its genuine native owner. Rebuild classic/DE providers and consumers
+    // together for this deliberate shared C++ ABI change.
+    virtual ~CAnimBlendStaticAssociation() = default;
 };

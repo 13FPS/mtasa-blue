@@ -78,7 +78,7 @@ function RunOwned([string]$Executable,[string[]]$Arguments,[string]$Directory,[s
 }
 
 try {
-    $productionSources=@('Client/game_de/CAnimManagerDE.cpp','Client/game_de/CAnimBlockDE.cpp','Client/game_de/CAnimBlockRequestDE.cpp','Client/game_de/CKeyGenDE.cpp')
+    $productionSources=@('Client/game_de/CAnimManagerDE.cpp','Client/game_de/CAnimBlendStaticAssociationDE.cpp','Client/game_de/CAnimBlockDE.cpp','Client/game_de/CAnimBlockRequestDE.cpp','Client/game_de/CKeyGenDE.cpp')
     $sourceNames=$productionSources+@('Tests/definitive/AnimManagerRefsDETests.cpp','Tests/definitive/Write-AnimationManagerRefsFixture.ps1',
         'Tests/definitive/Write-AnimBlockRefsFixture.ps1','Tests/definitive/AnimBlockNameDETests.cpp',
         'Tests/definitive/test_anim_manager_refs_de.ps1',
@@ -154,7 +154,7 @@ try {
         $executable = Join-Path $directory 'anim_manager_refs_de_tests.exe'
         $arguments = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
             ('/I'+(Join-Path $taskRoot 'Shared/sdk')),('/I'+(Join-Path $taskRoot 'Client/sdk')),('/I'+$scratchRoot),
-            (Join-Path $PSScriptRoot 'AnimManagerRefsDETests.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimManagerDE.cpp'),
+            (Join-Path $PSScriptRoot 'AnimManagerRefsDETests.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimManagerDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlendStaticAssociationDE.cpp'),
             (Join-Path $taskRoot 'Client/game_de/CAnimBlockDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlockRequestDE.cpp'),
             (Join-Path $taskRoot 'Client/game_de/CKeyGenDE.cpp'),
             ('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'compiler.pdb')),('/Fe'+$executable))

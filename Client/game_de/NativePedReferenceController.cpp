@@ -139,6 +139,57 @@ namespace mta::game_de
         return result;
     }
 
+    ClockResult NativePedReferenceController::FindPublished(const Memory& memory, std::uint64_t generation, MatchPublished match, void* context,
+                                                            Token& tokenOutput, Value& valueOutput) noexcept
+    {
+        PedReferenceControllerDetail::Lock lock(operation);
+        if (!lock.held)
+            return ClockResult::Busy;
+        if (!generation || !match)
+            return ClockResult::InvalidArgument;
+        if (generation != ownerGeneration)
+            return ClockResult::OwnerConflict;
+        if (stopping)
+            return ClockResult::Stopped;
+        for (std::size_t index = 0; index != slots.size(); ++index)
+        {
+            auto& slot = slots[index];
+            if (!slot.issued || !slot.published || slot.releaseRequested || slot.generation != generation || !slot.cell.IsRetained())
+                continue;
+            Token token;
+            token.slot = static_cast<std::uint32_t>(index);
+            token.version = slot.version;
+            token.ownerGeneration = generation;
+            Value before, after;
+            auto  result = memory.Read(slot.cell, before);
+            if (result != ClockResult::Ok)
+            {
+                slot.published = false;
+                Publish();
+                // Ordinary native destruction invalidates this cell. Other
+                // registered peds remain eligible; global owner failures do not.
+                if (result == ClockResult::NotInitialized)
+                    continue;
+                return result;
+            }
+            bool matches = false;
+            if ((result = match(token, before, matches, context)) != ClockResult::Ok)
+                return result;
+            if (!matches)
+                continue;
+            if ((result = memory.Read(slot.cell, after)) != ClockResult::Ok)
+                return result;
+            if (before.handle != after.handle || before.slot != after.slot || before.pool != after.pool || before.objects != after.objects ||
+                before.flags != after.flags || before.nativePed != after.nativePed || before.vtable != after.vtable ||
+                before.firstMethod != after.firstMethod || before.capacity != after.capacity || before.cursor != after.cursor ||
+                before.generation != after.generation || before.ownsAllocations != after.ownsAllocations)
+                return ClockResult::BindingChanged;
+            tokenOutput = token;
+            valueOutput = after;
+            return ClockResult::Ok;
+        }
+        return ClockResult::NotInitialized;
+    }
     ClockResult NativePedReferenceController::Resolve(const Memory& memory, std::uint64_t generation, const Token& token, Value& output) noexcept
     {
         PedReferenceControllerDetail::Lock lock(operation);

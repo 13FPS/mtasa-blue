@@ -78,7 +78,7 @@ function RunOwned([string]$Executable,[string[]]$Arguments,[string]$Directory,[s
 }
 
 try {
-    $productionSources=@('Client/game_de/CAnimManagerDE.cpp','Client/game_de/CAnimBlockDE.cpp','Client/game_de/CAnimBlockRequestDE.cpp','Client/game_de/CKeyGenDE.cpp','Client/game_de/CAnimBlendHierarchyDE.cpp','Client/game_de/NativeClassicAnimationNameHash.cpp','Client/game_de/CAnimBlendSequenceDE.cpp')
+    $productionSources=@('Client/game_de/CAnimManagerDE.cpp','Client/game_de/CAnimBlendStaticAssociationDE.cpp','Client/game_de/CAnimBlockDE.cpp','Client/game_de/CAnimBlockRequestDE.cpp','Client/game_de/CKeyGenDE.cpp','Client/game_de/CAnimBlendHierarchyDE.cpp','Client/game_de/NativeClassicAnimationNameHash.cpp','Client/game_de/CAnimBlendSequenceDE.cpp')
     $sourceNames=$productionSources+@('Tests/definitive/PrivateAnimationFactorySDKTests.cpp','Tests/definitive/test_private_animation_factory_sdk.ps1','Tests/definitive/Write-PrivateAnimationFactoryFixture.ps1','Build/definitive-recovery/mta-sequence-fresh-setframes-sdk-20261025/fresh-setframes-sdk-source-ready.json','Build/definitive-recovery/mta-private-animation-manager-factory-native-20261025/private-manager-factory-access-source-ready.json','Build/definitive-recovery/mta-private-animation-manager-factory-sdk-20261025/private-manager-factory-sdk-final-source-ready.json','Build/definitive-recovery/mta-private-animation-factory-sdk-tests-20261025/private-animation-factory-fixture-source-ready.json','Build/definitive-recovery/mta-private-animation-factory-sdk-tests-20261025/private-animation-factory-sdk-tests-source-ready.json')
     $pending=[Collections.Generic.Queue[string]]::new()
     $seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -141,7 +141,7 @@ try {
         $executable = Join-Path $directory 'private_animation_factory_sdk_tests.exe'
         $arguments = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
             ('/I'+(Join-Path $taskRoot 'Shared/sdk')),('/I'+(Join-Path $taskRoot 'Client/sdk')),('/I'+$scratchRoot),
-            (Join-Path $PSScriptRoot 'PrivateAnimationFactorySDKTests.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimManagerDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlockDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlockRequestDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CKeyGenDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlendHierarchyDE.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeClassicAnimationNameHash.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlendSequenceDE.cpp'),
+            (Join-Path $PSScriptRoot 'PrivateAnimationFactorySDKTests.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimManagerDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlendStaticAssociationDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlockDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlockRequestDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CKeyGenDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlendHierarchyDE.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeClassicAnimationNameHash.cpp'),(Join-Path $taskRoot 'Client/game_de/CAnimBlendSequenceDE.cpp'),
             ('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'compiler.pdb')),('/Fe'+$executable))
         $result = [ordered]@{architecture=$architecture;environment=$environmentResult;compile=$null;test=$null;
             checks=0;pointerBits=$null;executable=$executable;executableSha256=$null;actualPrivateAnimationFactorySdkTested=$false}

@@ -43,6 +43,25 @@ namespace mta::game_de
         {
             return ClockResult::NotInitialized;
         }
+        // Factory selectors return a freshly admitted physical row. Numeric
+        // animation IDs use the original modulo32 offset/physical capacity;
+        // raw interface tags are resolved, never adopted as private storage.
+        virtual ClockResult ResolveAnimationStaticAssociationById(std::uint64_t, std::uint32_t, std::uint32_t,
+                                                                  NativeAnimationStaticAssociationReferenceToken&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
+        virtual ClockResult ResolveAnimationStaticAssociationInterface(std::uint64_t, std::uintptr_t, NativeAnimationStaticAssociationReferenceToken&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
+        // This is the original initializer on the current genuine node-less
+        // same-bank row and a registered live clump. A tag alone grants no
+        // clump, node allocation, arbitrary hierarchy or replacement authority.
+        virtual ClockResult InitializeAnimationStaticAssociation(const NativeAnimationStaticAssociationReferenceToken&, std::uintptr_t, std::uintptr_t) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
         // Source setters store exactly one WORD. The owner must re-admit the
         // physical row before/after; borrowing it grants no node allocation,
         // initialization or free rights. Count growth needs separate payload

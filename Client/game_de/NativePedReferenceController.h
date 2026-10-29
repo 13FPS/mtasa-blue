@@ -37,6 +37,11 @@ namespace mta::game_de
         ClockResult Acquire(const Memory&, std::uint64_t generation, std::uint32_t handle, Token&, Receipt* = nullptr,
                             Memory::InvokeRegister = nullptr) noexcept;
         ClockResult Resolve(const Memory&, std::uint64_t generation, const Token&, Value&) noexcept;
+        using MatchPublished = ClockResult (*)(const Token&, const Value&, bool&, void*) noexcept;
+        // Search only issued current native-reference cells, never the native
+        // ped bank or an arbitrary clump pointer. The predicate observes a
+        // candidate; publication is revalidated after that read-only callback.
+        ClockResult FindPublished(const Memory&, std::uint64_t generation, MatchPublished, void*, Token&, Value&) noexcept;
         ClockResult Release(const Memory&, std::uint64_t generation, const Token&, Receipt* = nullptr, Memory::InvokeUnregister = nullptr) noexcept;
         ClockResult Retire(const Memory&, std::uint64_t generation, std::uint32_t budget, RetireProgress&, Memory::InvokeUnregister = nullptr) noexcept;
 

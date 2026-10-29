@@ -20,7 +20,7 @@ static_assert(std::is_same_v<decltype(&AnimationStaticAssociationReceiver::GetFl
 static_assert(std::is_same_v<decltype(&AnimationStaticAssociationReceiver::GetAnimHierarchyInterface),
                              decltype(&CAnimBlendStaticAssociationDE::GetAnimHierarchyInterface)>);
 static_assert(std::is_same_v<decltype(&AnimationStaticAssociationReceiver::GetInterface), decltype(&CAnimBlendStaticAssociationDE::GetInterface)>);
-static_assert(std::is_abstract_v<CAnimBlendStaticAssociationDE> && !std::is_abstract_v<AnimationStaticAssociationReceiver>);
+static_assert(!std::is_abstract_v<CAnimBlendStaticAssociationDE> && !std::is_abstract_v<AnimationStaticAssociationReceiver>);
 namespace
 {
     unsigned checks = 0;

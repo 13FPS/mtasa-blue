@@ -7,6 +7,7 @@
 #include "CAnimBlockRequestDE.h"
 #include "CAnimBlendHierarchyDE.h"
 #include "CAnimBlendSequenceDE.h"
+#include "CAnimBlendStaticAssociationDE.h"
 #include "CKeyGenDE.h"
 #include "NativeClassicAnimationNameHash.h"
 #include <algorithm>
@@ -202,6 +203,45 @@ namespace mta::game_de
         // observation constructors never silently acquire teardown authority.
         cleanupAccess = dynamic_cast<NativeCustomAnimationCleanupAccess*>(&manager);
         sequenceOperationAccess = dynamic_cast<NativeCustomAnimationSequenceOperationAccess*>(&manager);
+    }
+    CAnimManagerDE::StaticAssocIntface_type CAnimManagerDE::GetAnimStaticAssociation(eAnimGroup requestedGroup, eAnimID requestedAnimation) const
+    {
+        const auto group = static_cast<std::uint32_t>(requestedGroup);
+        const auto animation = static_cast<std::uint32_t>(requestedAnimation);
+        // Preserve the classic validity precheck before the actual static-row
+        // selection. An unavailable provider must not look like absent data.
+        if (!IsValidGroup(group))
+            return nullptr;
+        if (!staticAccess)
+            Require(ClockResult::NotInitialized, "GetAnimStaticAssociation");
+        NativeAnimationStaticAssociationReferenceToken token;
+        Require(staticAccess->ResolveAnimationStaticAssociationById(ownerGeneration, group, animation, token), "GetAnimStaticAssociation");
+        if (!ownerGeneration || token.ownerGeneration != ownerGeneration)
+            Require(ClockResult::OwnerConflict, "GetAnimStaticAssociation");
+        if (!token.locator)
+            return nullptr;
+        if (token.groupIndex != group)
+            Require(ClockResult::OwnerConflict, "GetAnimStaticAssociation");
+        // Construction is private to the matching manager; default deletion
+        // through the common virtual destructor owns only this CPU wrapper.
+        return StaticAssocIntface_type(new CAnimBlendStaticAssociationDE(*staticAccess, token));
+    }
+    CAnimManagerDE::StaticAssocIntface_type CAnimManagerDE::GetAnimStaticAssociation(CAnimBlendStaticAssociationSAInterface* source)
+    {
+        const auto locator = reinterpret_cast<std::uintptr_t>(source);
+        if (!locator)
+            return nullptr;
+        if (!staticAccess)
+            Require(ClockResult::NotInitialized, "GetAnimStaticAssociation(interface)");
+        NativeAnimationStaticAssociationReferenceToken token;
+        Require(staticAccess->ResolveAnimationStaticAssociationInterface(ownerGeneration, locator, token), "GetAnimStaticAssociation(interface)");
+        if (!ownerGeneration || token.ownerGeneration != ownerGeneration)
+            Require(ClockResult::OwnerConflict, "GetAnimStaticAssociation(interface)");
+        if (!token.locator)
+            return nullptr;
+        if (token.locator != locator)
+            Require(ClockResult::OwnerConflict, "GetAnimStaticAssociation(interface)");
+        return StaticAssocIntface_type(new CAnimBlendStaticAssociationDE(*staticAccess, token));
     }
     std::unique_ptr<CCustomAnimationCleanup> CAnimManagerDE::BeginCustomAnimationCleanup(const SCustomAnimationCleanupRequest& request)
     {

@@ -58,6 +58,13 @@ namespace mta::game_de
         {
             return ClockResult::NotInitialized;
         }
+        // Source CopyAnimation returns a native dynamic interface, not a C++
+        // facade. Its causal original-call record stays with the existing
+        // private association owner; the Group wrapper never frees the copy.
+        virtual ClockResult CopyAnimationAssociationGroup(const NativeAnimationAssociationGroupReferenceToken&, std::uint32_t, std::uintptr_t&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
         // Source4CDFB0 walks existing physical rows backwards and calls the
         // genuine static initializer only when their node pointer is zero.
         // Empty/all-valid groups never consume the supplied clump at all.

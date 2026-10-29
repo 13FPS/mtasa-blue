@@ -25,7 +25,9 @@ namespace mta::game_de
         ~NativeAnimationAssociationController();
         NativeAnimationAssociationController(const NativeAnimationAssociationController&) = delete;
         NativeAnimationAssociationController& operator=(const NativeAnimationAssociationController&) = delete;
-        ClockResult                           Create(std::uintptr_t, std::uint64_t, CheckOwner, Token&, Receipt* = nullptr) noexcept;
+        ClockResult CopyFromGroup(std::uintptr_t, std::uint64_t, const NativeAnimationAssociationGroupReferenceToken&, std::uint32_t, CheckOwner,
+                                  std::uintptr_t&, NativeAnimationAssociationCalls::GroupCopyReceipt* = nullptr) noexcept;
+        ClockResult Create(std::uintptr_t, std::uint64_t, CheckOwner, Token&, Receipt* = nullptr) noexcept;
         ClockResult Construct(std::uintptr_t, std::uint64_t, const Token&, std::uintptr_t, CheckOwner, std::uintptr_t&, Receipt* = nullptr) noexcept;
         ClockResult Read(std::uintptr_t, std::uint64_t, const Token&, CheckOwner, Values&) noexcept;
         ClockResult ReadLength(std::uintptr_t, std::uint64_t, const Token&, CheckOwner, std::uint32_t&) noexcept;

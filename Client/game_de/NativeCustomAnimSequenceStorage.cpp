@@ -4,6 +4,7 @@
  * PURPOSE: Exactly-once native array allocation and storage-only retirement
  ****************************************************************************/
 #include "NativeCustomAnimSequenceStorage.h"
+#include "NativeAnimationAssociationGroupCopy.h"
 #include "NativeCustomAnimSequenceStorageProfile.h"
 #include "NativeAnimationAssociationOuterStorageCalls.h"
 #include "NativePedModelMetadataStorageCalls.h"
@@ -264,6 +265,23 @@ namespace mta::game_de
             }
         }
 #endif
+    }
+    bool NativeCustomAnimSequenceStorage::BindReturnedDynamicCopy(const NativeAnimationAssociationCopyReturnTicket& ticket) noexcept
+    {
+        if (ticket.target != this || !ticket.issued.ownerGeneration || !ticket.issued.serial || !ticket.receiver || GetState() != State::Empty || base || tag ||
+            effects)
+            return false;
+        // Record the acknowledged return before inspecting its pages. This
+        // preserves the original allocation even when acceptance later fails.
+        origin = ticket.heap;
+        generation = ticket.issued.ownerGeneration;
+        base = tag = ticket.receiver;
+        bytes = 104;
+        capacity = 0;
+        kind = Kind::DynamicAnimation;
+        effects = CustomAnimSequenceStorageDetail::AllocEntered | CustomAnimSequenceStorageDetail::AllocReturned;
+        state.store(State::FaultDebt, std::memory_order_release);
+        return true;
     }
     bool NativeCustomAnimSequenceStorage::CanDiscard() const noexcept
     {

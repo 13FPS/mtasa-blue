@@ -1074,6 +1074,44 @@ namespace mta::game_de
         return ClockResult::Ok;
     }
 
+    ClockResult NativeAnimationManagerMemory::ReadAssociationGroupCopySource(const NativeAnimationAssociationGroupReferenceToken& source,
+                                                                             std::uint32_t animationId, AssociationGroupCopySource& output) const noexcept
+    {
+        namespace D = AnimationStaticAssociationIdDetail;
+        const auto token = source;
+        if (!token.locator || token.index > static_cast<std::uint32_t>((std::numeric_limits<std::int32_t>::max)()))
+            return ClockResult::InvalidArgument;
+        D::Snapshot first, second;
+        auto        result = D::Capture(binding, owner, token.index, animationId, first, false);
+        if (result != ClockResult::Ok)
+            return result;
+        if (first.parent.array.rows + static_cast<std::uintptr_t>(token.index) * 32 != token.locator)
+            return ClockResult::BindingChanged;
+        AssociationGroupCopySource next;
+        next.group = token;
+        next.groups = first.parent.array.rows;
+        next.children = first.parent.child;
+        next.groupCapacity = first.parent.array.capacity;
+        next.childCapacity = first.capacity;
+        next.groupCount = first.parent.array.count;
+        next.rawIdOffset = first.parent.offset;
+        next.selected = {0, token.index, first.selected, first.parent.child + static_cast<std::uintptr_t>(first.selected) * 32};
+        if (!NativeModelReferenceMap::Copy(token.locator, next.parent32.data(), next.parent32.size()))
+            return ClockResult::ReadFailure;
+        if ((result = D::Capture(binding, owner, token.index, animationId, second, false)) != ClockResult::Ok)
+            return result;
+        std::array<unsigned char, 32> after{};
+        if (!NativeModelReferenceMap::Copy(token.locator, after.data(), after.size()))
+            return ClockResult::ReadFailure;
+        if (!D::Same(first.parent, second.parent) || first.capacity != second.capacity || first.selected != second.selected || first.id != second.id ||
+            next.parent32 != after)
+            return ClockResult::BindingChanged;
+        if ((result = D::Begin(binding, owner)) != ClockResult::Ok)
+            return result;
+        output = next;
+        return ClockResult::Ok;
+    }
+
     namespace AnimationAssociationGroupWriteDetail
     {
         namespace Read = AnimationAssociationGroupReadDetail;

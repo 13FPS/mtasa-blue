@@ -18,15 +18,16 @@ namespace mta::game_de
     class CAnimBlendAssocGroupDE : public CAnimBlendAssocGroup
     {
     public:
-        void                             InitEmptyAssociations(RpClump*) override;
-        CAnimBlock*                      GetAnimBlock() override;
-        CAnimBlendStaticAssociation*     GetAnimation(unsigned int) override;
-        bool                             IsCreated() override;
-        int                              GetNumAnimations() override;
-        eAnimGroup                       GetGroupID() override;
-        bool                             IsLoaded() override;
-        void                             SetIDOffset(int) override;
-        CAnimBlendAssocGroupSAInterface* GetInterface() override;
+        CAnimBlendAssociationSAInterface* CopyAnimation(unsigned int) override;
+        void                              InitEmptyAssociations(RpClump*) override;
+        CAnimBlock*                       GetAnimBlock() override;
+        CAnimBlendStaticAssociation*      GetAnimation(unsigned int) override;
+        bool                              IsCreated() override;
+        int                               GetNumAnimations() override;
+        eAnimGroup                        GetGroupID() override;
+        bool                              IsLoaded() override;
+        void                              SetIDOffset(int) override;
+        CAnimBlendAssocGroupSAInterface*  GetInterface() override;
 
     protected:
         CAnimBlendAssocGroupDE(NativeAnimationAssociationGroupAccess& owner, const NativeAnimationAssociationGroupReferenceToken& token) noexcept
@@ -62,7 +63,7 @@ namespace mta::game_de
         // with the group. Every operation still re-admits the native row.
         std::vector<StaticProduct> staticFacades;
     };
-    // Genuine CopyAnimation/CreateAssociations remain
+    // Genuine CreateAssociations remains
     // pure. Child CPU products do not publish a complete group factory or
     // justify deletion through the still-unmodified common group base.
     static_assert(std::is_abstract_v<CAnimBlendAssocGroupDE> && std::is_base_of_v<CAnimBlendAssocGroup, CAnimBlendAssocGroupDE>);

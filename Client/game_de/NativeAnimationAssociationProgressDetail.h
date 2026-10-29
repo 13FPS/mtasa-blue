@@ -45,6 +45,15 @@ namespace mta::game_de::AnimationAssociationProgressDetail
     {
         return (Bits(v) & 0x7f800000u) != 0x7f800000u;
     }
+    // FF0D10 returns without cache/decompression effects in exactly this
+    // phase. Copy admission shares the predicate without importing the time
+    // helper's arithmetic or weakening Build's earlier finite-value checks.
+    template <class A>
+    bool IsWarmNoEffect(const A& hierarchy) noexcept
+    {
+        const auto length = At<float>(hierarchy, 0x18);
+        return hierarchy[0x13] != 0 ? Finite(length) && length != 0.0f : hierarchy[0x12] == 0 && At<std::uintptr_t>(hierarchy, 0x20) == 0;
+    }
     // Explicit scalar SSE operations preserve the native helper's rounding and
     // ordering; the admission calculation must not become fused arithmetic.
     inline float Mul(float a, float b) noexcept
@@ -268,7 +277,7 @@ namespace mta::game_de::AnimationAssociationProgressDetail
         if (!Finite(length) || !Finite(value))
             return ClockResult::InvalidArgument;
         const bool compressed = p.hierarchyBytes[0x13] != 0;
-        if (compressed ? length == 0.0f : (p.hierarchyBytes[0x12] != 0 || At<std::uintptr_t>(p.hierarchyBytes, 0x20) != 0))
+        if (!IsWarmNoEffect(p.hierarchyBytes))
             return ClockResult::OwnerConflict;
         const auto absolute = Mul(length, value);
         if (!Finite(absolute))

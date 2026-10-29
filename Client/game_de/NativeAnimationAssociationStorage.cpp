@@ -4,6 +4,8 @@
  * PURPOSE: Causal ownership of genuinely constructed unpublished associations
  ****************************************************************************/
 #include "NativeAnimationAssociationStorage.h"
+#include "NativeAnimationAssociationGroupCopy.h"
+#include "NativeAnimationAssociationGroupCopyProfile.h"
 #include "NativeAnimationAssociationOuterStorageCalls.h"
 #include "NativeCustomAnimSequenceStorageProfile.h"
 #include "NativeAnimationAssociationProfile.h"
@@ -246,6 +248,165 @@ namespace mta::game_de
             std::uint64_t                                  sequenceCapacity = 0;
             std::uint16_t                                  count = 0;
         };
+        ClockResult InvokeGroupCopy(GroupCopyFunction function, std::int32_t group, std::uint32_t animation, std::uintptr_t& returned,
+                                    std::uint32_t& exception) noexcept
+        {
+            __try
+            {
+                returned = function(group, animation);
+                return ClockResult::Ok;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                exception = GetExceptionCode();
+                return ClockResult::OriginalException;
+            }
+        }
+        bool QualifyCopyProfile(std::uintptr_t image) noexcept
+        {
+            for (const auto& pin : NativeAnimationAssociationGroupCopyProfile::Code)
+            {
+                std::array<unsigned char, NativeAnimationAssociationGroupCopyProfile::MaximumPinBytes> bytes{};
+                if (!Image::ReadImage(image, image + pin.rva, bytes.data(), pin.size, false, true) || std::memcmp(bytes.data(), pin.bytes, pin.size))
+                    return false;
+            }
+            // FF1120 and its node producer call the same current/authority
+            // allocator routes as the existing outer owner. Qualify those
+            // exact bodies before entry; array80 construction is not consumed.
+            namespace HeapProfile = NativeCustomAnimSequenceStorageProfile;
+            const HeapProfile::Pin allocatorPins[] = {{HeapProfile::AuthorityMallocRva, HeapProfile::AuthorityMalloc, sizeof(HeapProfile::AuthorityMalloc)},
+                                                      {HeapProfile::AuthorityFreeRva, HeapProfile::AuthorityFree, sizeof(HeapProfile::AuthorityFree)},
+                                                      {HeapProfile::ProxyMallocRva, HeapProfile::ProxyMalloc, sizeof(HeapProfile::ProxyMalloc)},
+                                                      {HeapProfile::ProxyFreeRva, HeapProfile::ProxyFree, sizeof(HeapProfile::ProxyFree)}};
+            for (const auto& pin : allocatorPins)
+            {
+                std::array<unsigned char, HeapProfile::MaximumPinBytes> bytes{};
+                if (!Image::ReadImage(image, image + pin.rva, bytes.data(), pin.size, false, true) || std::memcmp(bytes.data(), pin.bytes, pin.size))
+                    return false;
+            }
+            return QualifyAssociationProfile(image) && NativeModelReferenceHeap::QualifyProfile(image);
+        }
+        ClockResult CaptureCopyHeap(std::uintptr_t image, NativeAnimationAssociationCalls::CheckOwner owner, NativeModelReferenceHeap::Value& heap) noexcept
+        {
+            auto result = Context::Owner(image, owner);
+            if (result != ClockResult::Ok)
+                return result;
+            if (!QualifyCopyProfile(image))
+                return ClockResult::BindingChanged;
+            if ((result = NativeModelReferenceHeap::Capture(image, heap)) != ClockResult::Ok)
+                return result;
+            namespace P = NativeCustomAnimSequenceStorageProfile;
+            const auto slots = [&](std::uintptr_t table, std::uintptr_t allocateRva, std::uintptr_t releaseRva) noexcept
+            {
+                std::uintptr_t allocate = 0, release = 0;
+                return NativeModelReferenceHeap::ReadOnlyImage(image, table, 0x38) && Image::ReadImage(image, table + 0x10, &allocate, 8) &&
+                       Image::ReadImage(image, table + 0x30, &release, 8) && allocate == image + allocateRva && release == image + releaseRva;
+            };
+            if (!slots(heap.authorityVtable, P::AuthorityMallocRva, P::AuthorityFreeRva) ||
+                (heap.current != heap.authority && !slots(heap.currentVtable, P::ProxyMallocRva, P::ProxyFreeRva)))
+                return ClockResult::BindingChanged;
+            return Context::Owner(image, owner);
+        }
+        bool SameCopySource(const NativeAnimationManagerMemory::AssociationGroupCopySource& a,
+                            const NativeAnimationManagerMemory::AssociationGroupCopySource& b) noexcept
+        {
+            return a.group.index == b.group.index && a.group.locator == b.group.locator && a.selected.groupIndex == b.selected.groupIndex &&
+                   a.selected.index == b.selected.index && a.selected.locator == b.selected.locator && a.groups == b.groups && a.children == b.children &&
+                   a.groupCapacity == b.groupCapacity && a.childCapacity == b.childCapacity && a.groupCount == b.groupCount && a.rawIdOffset == b.rawIdOffset &&
+                   a.parent32 == b.parent32;
+        }
+        // This bookend uses the prepared physical row and fixed-size map
+        // chunks. No post-entry all-groups resolver or CPU allocation occurs.
+        ClockResult RecheckCopySource(std::uintptr_t image, NativeAnimationAssociationCalls::CheckOwner owner,
+                                      const NativeAnimationManagerMemory::AssociationGroupCopySource& expected, std::uint32_t animation,
+                                      const Prepared& prepared, const std::array<unsigned char, 40>& hierarchy, std::uint16_t refs) noexcept
+        {
+            NativeAnimationManagerMemory                             manager({image}, owner);
+            NativeAnimationManagerMemory::AssociationGroupCopySource current;
+            auto                                                     result = manager.ReadAssociationGroupCopySource(expected.group, animation, current);
+            if (result != ClockResult::Ok)
+                return result;
+            if (!SameCopySource(expected, current))
+                return ClockResult::BindingChanged;
+            std::array<unsigned char, 32> row{};
+            std::array<unsigned char, 40> hierarchyAfter{};
+            if (!M::Copy(expected.selected.locator, row.data(), row.size()) ||
+                !Image::ReadImage(image, prepared.bank.hierarchy, hierarchyAfter.data(), hierarchyAfter.size(), true))
+                return ClockResult::ReadFailure;
+            if (row != prepared.source || hierarchyAfter != hierarchy)
+                return ClockResult::BindingChanged;
+            const auto                     map = Field<std::uintptr_t>(row, 0x10);
+            std::array<std::uintptr_t, 32> chunk{};
+            for (std::size_t first = 0; first < prepared.map.size(); first += chunk.size())
+            {
+                const auto count = (std::min)(chunk.size(), prepared.map.size() - first);
+                if (!M::Copy(map + first * 8, chunk.data(), count * 8))
+                    return ClockResult::ReadFailure;
+                if (!std::equal(chunk.begin(), chunk.begin() + count, prepared.map.begin() + first))
+                    return ClockResult::BindingChanged;
+            }
+            Bank bank;
+            if ((result = CaptureBank(image, owner, prepared.bank.hierarchy, bank)) != ClockResult::Ok)
+                return result;
+            if (!SameBank(prepared.bank, bank) || bank.refs != refs || (prepared.sequenceCapacity && !SequenceSpan(bank, prepared.sequenceCapacity)))
+                return ClockResult::BindingChanged;
+            return Context::Owner(image, owner);
+        }
+        ClockResult PrepareCopySource(std::uintptr_t image, NativeAnimationAssociationCalls::CheckOwner owner,
+                                      const NativeAnimationAssociationGroupReferenceToken& group, std::uint32_t animation,
+                                      NativeAnimationManagerMemory::AssociationGroupCopySource& source, Prepared& prepared,
+                                      std::array<unsigned char, 40>& hierarchy) noexcept
+        {
+            NativeAnimationManagerMemory manager({image}, owner);
+            auto                         result = manager.ReadAssociationGroupCopySource(group, animation, source);
+            if (result != ClockResult::Ok)
+                return result;
+            prepared.reference = source.selected;
+            if (!M::Copy(prepared.reference.locator, prepared.source.data(), prepared.source.size()))
+                return ClockResult::ReadFailure;
+            prepared.count = Field<std::uint16_t>(prepared.source, 8);
+            if (prepared.count > 0x7fff || (Field<std::uint16_t>(prepared.source, 0xe) & 0x4000))
+                return ClockResult::InvalidArgument;
+            if ((result = CaptureBank(image, owner, Field<std::uintptr_t>(prepared.source, 0x18), prepared.bank)) != ClockResult::Ok)
+                return result;
+            if (prepared.bank.refs == 0xffff)
+                return ClockResult::OwnerConflict;
+            if (!Image::ReadImage(image, prepared.bank.hierarchy, hierarchy.data(), hierarchy.size(), true))
+                return ClockResult::ReadFailure;
+            if (!AnimationAssociationProgressDetail::IsWarmNoEffect(hierarchy))
+                return ClockResult::OwnerConflict;
+            if (prepared.count)
+            {
+                const auto map = Field<std::uintptr_t>(prepared.source, 0x10);
+                const auto size = static_cast<std::size_t>(prepared.count) * 8;
+                if (!map || map % 8 || !M::PrivateWritable(map, size))
+                    return ClockResult::BindingChanged;
+                try
+                {
+                    prepared.map.resize(prepared.count);
+                }
+                catch (...)
+                {
+                    return ClockResult::WriteFailure;
+                }
+                if (!M::Copy(map, prepared.map.data(), size))
+                    return ClockResult::ReadFailure;
+                bool needsSequences = false;
+                for (auto value : prepared.map)
+                    needsSequences |= value != 0;
+                if (needsSequences)
+                {
+                    const auto sequences = prepared.bank.observation.payload.sequences;
+                    if (sequences < 8 || sequences % 8 || !M::PrivateWritable(sequences - 8, 8) || !M::Copy(sequences - 8, &prepared.sequenceCapacity, 8) ||
+                        !SequenceSpan(prepared.bank, prepared.sequenceCapacity))
+                        return ClockResult::BindingChanged;
+                    for (auto value : prepared.map)
+                        if (value && (value < sequences || (value - sequences) % 80 || (value - sequences) / 80 >= prepared.sequenceCapacity))
+                            return ClockResult::BindingChanged;
+                }
+            }
+            return RecheckCopySource(image, owner, source, animation, prepared, hierarchy, prepared.bank.refs);
+        }
         ClockResult CapturePrepared(std::uintptr_t image, NativeAnimationAssociationCalls::CheckOwner owner, std::uintptr_t raw, Prepared& output) noexcept
         {
             NativeAnimationManagerMemory manager({image}, owner);
@@ -502,6 +663,184 @@ namespace mta::game_de
             if (!NativeModelReferenceHeap::Same(heap, after))
                 return ClockResult::BindingChanged;
             return ClockResult::Ok;
+        }
+        static ClockResult CopyFromGroup(std::uintptr_t image, S& s, const NativeAnimationAssociationReferenceToken& issued,
+                                         const NativeAnimationAssociationGroupReferenceToken& group, std::uint32_t animation, C owner, std::uintptr_t& output,
+                                         NativeAnimationAssociationCalls::GroupCopyReceipt* receipt,
+                                         NativeAnimationAssociationCalls::InvokeGroupCopy   invoke) noexcept
+        {
+            using namespace AnimationAssociationStorageDetail;
+            NativeAnimationAssociationCalls::GroupCopyReceipt r;
+            r.issued = issued;
+            r.group = group;
+            r.animationId = animation;
+            auto finish = [&](ClockResult result)
+            {
+                if (s.data)
+                    Fill(*s.data, r.resources);
+                r.resources.pinned = s.GetState() == State::PublicationPinned;
+                if (receipt)
+                    *receipt = r;
+                return result;
+            };
+            if (!issued.ownerGeneration || !issued.serial || group.ownerGeneration != issued.ownerGeneration)
+                return finish(ClockResult::OwnerConflict);
+            if (s.GetState() != State::Empty || s.data)
+                return finish(ClockResult::OwnerConflict);
+            if (!Context::TryEnter())
+                return finish(ClockResult::Busy);
+            Context::Scope                  gate;
+            NativeModelReferenceHeap::Value heap;
+            auto                            result = CaptureCopyHeap(image, owner, heap);
+            if (result != ClockResult::Ok)
+                return finish(result);
+            NativeAnimationManagerMemory::AssociationGroupCopySource source;
+            Prepared                                                 prepared;
+            std::array<unsigned char, 40>                            hierarchy{};
+            if ((result = PrepareCopySource(image, owner, group, animation, source, prepared, hierarchy)) != ClockResult::Ok)
+                return finish(result);
+            // All durable state and acceptance buffers precede FF1120. The
+            // exact original function owns allocation and construction.
+            try
+            {
+                s.data = std::make_unique<Data>();
+                s.data->suppressed.assign(prepared.count, 0);
+                s.data->cache.assign(prepared.count, AnimationAssociationProgressDetail::Cache{});
+            }
+            catch (...)
+            {
+                s.data.reset();
+                return finish(ClockResult::WriteFailure);
+            }
+            auto& d = *s.data;
+            d.generation = issued.ownerGeneration;
+            d.source = std::move(prepared);
+            r.sourcePrepared = true;
+            r.hierarchyWarm = true;
+            r.rawIdOffset = source.rawIdOffset;
+            r.selected = source.selected;
+            r.resources.heap = heap.current;
+            if ((result = RecheckCopySource(image, owner, source, animation, d.source, hierarchy, d.source.bank.refs)) != ClockResult::Ok)
+            {
+                s.data.reset();
+                return finish(result);
+            }
+            NativeModelReferenceHeap::Value before;
+            if ((result = CaptureCopyHeap(image, owner, before)) != ClockResult::Ok)
+            {
+                s.data.reset();
+                return finish(result);
+            }
+            if (!NativeModelReferenceHeap::Same(heap, before))
+            {
+                s.data.reset();
+                return finish(ClockResult::BindingChanged);
+            }
+#if defined(MTA_DE_ANIMATION_ASSOCIATION_GROUP_COPY_INVOKE)
+            const auto entry = invoke ? invoke : &MTA_DE_ANIMATION_ASSOCIATION_GROUP_COPY_INVOKE;
+#else
+            const auto entry = invoke ? invoke : &AnimationAssociationStorageDetail::InvokeGroupCopy;
+#endif
+            d.constructorEntered = true;
+            s.state.store(State::CopyEntered);
+            r.entered = r.resources.entered = true;
+            std::uintptr_t returned = 0;
+            result = entry(reinterpret_cast<NativeAnimationAssociationCalls::GroupCopyFunction>(image + r.entryRva), static_cast<std::int32_t>(group.index),
+                           animation, returned, r.resources.exceptionCode);
+            r.returned = r.resources.returned = result == ClockResult::Ok;
+            s.state.store(State::FaultDebt);
+            if (!r.returned)
+                return finish(result);
+            r.returnedInterface = returned;
+            r.returnedNull = returned == 0;
+            if (!returned)
+            {
+                // Acknowledged null owns no outer, nodes or reference even
+                // when the later owner/heap acknowledgement is unavailable.
+                s.state.store(State::Released);
+                NativeModelReferenceHeap::Value after;
+                if ((result = CaptureCopyHeap(image, owner, after)) != ClockResult::Ok)
+                    return finish(result);
+                if (!NativeModelReferenceHeap::Same(heap, after))
+                    return finish(ClockResult::BindingChanged);
+                if ((result = RecheckCopySource(image, owner, source, animation, d.source, hierarchy, d.source.bank.refs)) != ClockResult::Ok)
+                    return finish(result);
+                r.verified = r.resources.verified = true;
+                output = 0;
+                return finish(ClockResult::Ok);
+            }
+            d.receiver = returned;
+            NativeAnimationAssociationCopyReturnTicket ticket(d.outer, issued, heap, returned);
+            if (!d.outer.BindReturnedDynamicCopy(ticket))
+                return finish(ClockResult::BindingChanged);
+            r.resources.allocated = r.resources.accepted = true;
+            NativeModelReferenceHeap::Value after;
+            if ((result = Qualify(image, s, issued.ownerGeneration, owner, after)) != ClockResult::Ok)
+                return finish(result);
+            if (!NativeModelReferenceHeap::Same(heap, after))
+                return finish(ClockResult::BindingChanged);
+            Bytes bytes{};
+            if (!M::Copy(returned, bytes.data(), bytes.size()))
+                return finish(ClockResult::ReadFailure);
+            // Verify only fields written by FEB970/FEBC10. Callback payloads
+            // and padding without native stores remain opaque, not zeroed.
+            if (Field<std::uintptr_t>(bytes, 0) != image + NativeAnimationAssociationProfile::VtableRva || Field<std::uintptr_t>(bytes, 8) ||
+                Field<std::uintptr_t>(bytes, 0x10) || Field<std::uint16_t>(bytes, 0x18) != d.source.count ||
+                Field<std::uint16_t>(bytes, 0x1a) != Field<std::uint16_t>(d.source.source, 0xc) ||
+                Field<std::uintptr_t>(bytes, 0x28) != d.source.bank.hierarchy || Field<std::uint64_t>(bytes, 0x30) != 0x3f800000 ||
+                Field<std::uint32_t>(bytes, 0x38) || Field<std::uint64_t>(bytes, 0x3c) != 0x3f800000 ||
+                Field<std::uint16_t>(bytes, 0x44) != Field<std::uint16_t>(d.source.source, 0xa) ||
+                Field<std::uint16_t>(bytes, 0x46) != (Field<std::uint16_t>(d.source.source, 0xe) | 0x4000) || Field<std::uint32_t>(bytes, 0x48) || bytes[0x60])
+                return finish(ClockResult::BindingChanged);
+            d.nodes = Field<std::uintptr_t>(bytes, 0x20);
+            const auto amount = static_cast<std::uint64_t>(d.source.count) * 40;
+            d.request = static_cast<std::size_t>(((amount - 1) & ~std::uint64_t{63}) + 128);
+            if (d.nodes < 8 || d.nodes % 64 || !M::Copy(d.nodes - 8, &d.nodeRaw, 8) || !d.nodeRaw ||
+                d.nodeRaw > (std::numeric_limits<std::uintptr_t>::max)() - 64 || ((d.nodeRaw + 64) & ~std::uintptr_t{63}) != d.nodes ||
+                !M::PrivateWritable(d.nodeRaw, d.request) || !M::Disjoint(d.nodeRaw, d.request, returned, 104) ||
+                !M::Disjoint(returned, 104, d.source.reference.locator, 32) || !M::Disjoint(d.nodeRaw, d.request, d.source.reference.locator, 32))
+                return finish(ClockResult::BindingChanged);
+            const auto map = Field<std::uintptr_t>(d.source.source, 0x10);
+            if ((d.source.count && (!M::Disjoint(d.nodeRaw, d.request, map, static_cast<std::size_t>(d.source.count) * 8) ||
+                                    !M::Disjoint(returned, 104, map, static_cast<std::size_t>(d.source.count) * 8))) ||
+                (d.source.sequenceCapacity &&
+                 (!M::Disjoint(d.nodeRaw, d.request, d.source.bank.observation.payload.sequences - 8,
+                               8 + static_cast<std::size_t>(d.source.sequenceCapacity) * 80) ||
+                  !M::Disjoint(returned, 104, d.source.bank.observation.payload.sequences - 8, 8 + static_cast<std::size_t>(d.source.sequenceCapacity) * 80))))
+                return finish(ClockResult::BindingChanged);
+            if ((result = RecheckCopySource(image, owner, source, animation, d.source, hierarchy, static_cast<std::uint16_t>(d.source.bank.refs + 1))) !=
+                ClockResult::Ok)
+                return finish(result);
+            d.knownConstructed = true;
+            s.state.store(State::LiveUnpublished);
+            Bytes                           confirmed{};
+            NativeModelReferenceHeap::Value finalHeap;
+            if ((result = Snapshot(image, s, issued.ownerGeneration, owner, confirmed, finalHeap)) != ClockResult::Ok)
+            {
+                if (s.GetState() != State::PublicationPinned)
+                    s.state.store(State::FaultDebt);
+                return finish(result);
+            }
+            if (confirmed != bytes || !NativeModelReferenceHeap::Same(heap, finalHeap))
+            {
+                s.state.store(State::FaultDebt);
+                return finish(ClockResult::BindingChanged);
+            }
+            if ((result = RecheckCopySource(image, owner, source, animation, d.source, hierarchy, static_cast<std::uint16_t>(d.source.bank.refs + 1))) !=
+                    ClockResult::Ok ||
+                (result = CaptureCopyHeap(image, owner, finalHeap)) != ClockResult::Ok)
+            {
+                s.state.store(State::FaultDebt);
+                return finish(result);
+            }
+            if (!NativeModelReferenceHeap::Same(heap, finalHeap))
+            {
+                s.state.store(State::FaultDebt);
+                return finish(ClockResult::BindingChanged);
+            }
+            r.verified = r.resources.verified = true;
+            output = returned;
+            return finish(ClockResult::Ok);
         }
         static ClockResult Create(std::uintptr_t image, S& s, std::uint64_t generation, C owner, Receipt* output,
                                   NativeCustomAnimSequenceStorageCalls::InvokeMalloc invoke) noexcept
@@ -1390,6 +1729,14 @@ namespace mta::game_de
     };
     namespace NativeAnimationAssociationCalls
     {
+        ClockResult CopyFromGroup(std::uintptr_t image, Storage& storage, const NativeAnimationAssociationReferenceToken& issued,
+                                  const NativeAnimationAssociationGroupReferenceToken& group, std::uint32_t animationId, CheckOwner owner,
+                                  std::uintptr_t& output, GroupCopyReceipt* receipt, InvokeGroupCopy invoke) noexcept
+        {
+            const auto request = group;
+            const auto ticket = issued;
+            return NativeAnimationAssociationStorageAccess::CopyFromGroup(image, storage, ticket, request, animationId, owner, output, receipt, invoke);
+        }
         ClockResult Create(std::uintptr_t i, Storage& s, std::uint64_t g, CheckOwner o, Receipt* r,
                            NativeCustomAnimSequenceStorageCalls::InvokeMalloc v) noexcept
         {

@@ -1,6 +1,6 @@
 # Derive every remaining mandatory group operation from the actual SDK.
-# Inherit nine completed production operations, including the owner-command
-# empty initializer. The remaining two SDK methods are fixture-only rejectors.
+# Inherit ten completed production operations, including raw native copy
+# transport. CreateAssociations remains an explicit fixture-only rejector.
 function Write-AnimationAssociationGroupFixture([string]$RepositoryRoot,[string]$OutputPath) {
     $source='Client/sdk/game/CAnimBlendAssocGroup.h'
     $text=[IO.File]::ReadAllText((Join-Path $RepositoryRoot $source))
@@ -11,11 +11,11 @@ function Write-AnimationAssociationGroupFixture([string]$RepositoryRoot,[string]
         if($signature -notmatch '=\s*0\s*$'){continue}
         $signature=[regex]::Replace($signature,'\s*=\s*0\s*$','').Trim()
         $name=[regex]::Match($signature,'(?<name>\w+)\s*\(').Groups['name'].Value
-        if($name -in @('IsCreated','GetNumAnimations','GetGroupID','IsLoaded','GetInterface','SetIDOffset','GetAnimBlock','GetAnimation','InitEmptyAssociations')) {$provided+=$signature}
+        if($name -in @('IsCreated','GetNumAnimations','GetGroupID','IsLoaded','GetInterface','SetIDOffset','GetAnimBlock','GetAnimation','InitEmptyAssociations','CopyAnimation')) {$provided+=$signature}
         else {[regex]::Replace($signature,'\s+',' ')}
     })
-    if($provided.Count -ne 9 -or $methods.Count -ne 2){throw 'Actual group empty-initialization/pure method partition changed'}
-    foreach($name in @('IsCreated','GetNumAnimations','GetGroupID','IsLoaded','GetInterface','SetIDOffset','GetAnimBlock','GetAnimation','InitEmptyAssociations')) {
+    if($provided.Count -ne 10 -or $methods.Count -ne 1){throw 'Actual group raw-copy/pure method partition changed'}
+    foreach($name in @('IsCreated','GetNumAnimations','GetGroupID','IsLoaded','GetInterface','SetIDOffset','GetAnimBlock','GetAnimation','InitEmptyAssociations','CopyAnimation')) {
         if(@($provided|Where-Object {$_ -match ('\b'+$name+'\s*\(')}).Count -ne 1){throw ('Missing inherited actual group method: '+$name)}
     }
     $lines=@('#pragma once','#include <cstdlib>','#pragma warning(push)','#pragma warning(disable : 4100)',
@@ -27,10 +27,11 @@ function Write-AnimationAssociationGroupFixture([string]$RepositoryRoot,[string]
     [IO.File]::WriteAllLines($OutputPath,$lines,[Text.UTF8Encoding]::new($false))
     [ordered]@{path=$OutputPath;sha256=(Get-FileHash -LiteralPath $OutputPath -Algorithm SHA256).Hash.ToLowerInvariant();
         rejectingMethods=$methods.Count;inheritedMethods=$provided;
-        inheritedReadMethods=@($provided|Where-Object {$_ -notmatch '\b(?:SetIDOffset|GetAnimBlock|GetAnimation|InitEmptyAssociations)\s*\('});
+        inheritedReadMethods=@($provided|Where-Object {$_ -notmatch '\b(?:SetIDOffset|GetAnimBlock|GetAnimation|InitEmptyAssociations|CopyAnimation)\s*\('});
         inheritedFactoryMethods=@($provided|Where-Object {$_ -match '\b(?:GetAnimBlock|GetAnimation)\s*\('});
         inheritedWriteMethods=@($provided|Where-Object {$_ -match '\bSetIDOffset\s*\('});
-        inheritedInitializationMethods=@($provided|Where-Object {$_ -match '\bInitEmptyAssociations\s*\('});source=$source;
+        inheritedInitializationMethods=@($provided|Where-Object {$_ -match '\bInitEmptyAssociations\s*\('});
+        inheritedCopyMethods=@($provided|Where-Object {$_ -match '\bCopyAnimation\s*\('});source=$source;
         sourceSha256=(Get-FileHash -LiteralPath (Join-Path $RepositoryRoot $source) -Algorithm SHA256).Hash.ToLowerInvariant();
         productionGroupConcrete=$false;nativeFactoryClaimed=$false;polymorphicBaseDeletionExecuted=$false}
 }

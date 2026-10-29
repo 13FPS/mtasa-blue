@@ -6,6 +6,7 @@
 #pragma once
 #include "NativeAnimationAssociationAccess.h"
 #include "NativeAnimationHierarchyAccess.h"
+#include "NativeAnimationAssociationGroupAccess.h"
 #include "NativeCustomAnimSequenceStorage.h"
 #include <atomic>
 #include <memory>
@@ -27,7 +28,8 @@ namespace mta::game_de
             PublicationPinned,
             NodeFreeEntered,
             NodesReleased,
-            NodeClearEntered
+            NodeClearEntered,
+            CopyEntered
         };
         NativeAnimationAssociationStorage() noexcept;
         ~NativeAnimationAssociationStorage();
@@ -55,6 +57,9 @@ namespace mta::game_de
             AnimGroup,
             Flags
         };
+        struct GroupCopyReceipt;
+        using GroupCopyFunction = std::uintptr_t (*)(std::int32_t, std::uint32_t);
+        using InvokeGroupCopy = ClockResult (*)(GroupCopyFunction, std::int32_t, std::uint32_t, std::uintptr_t&, std::uint32_t&) noexcept;
         using ConstructorFunction = std::uintptr_t (*)(std::uintptr_t, std::uintptr_t);
         using ProgressFunction = void (*)(std::uintptr_t, float);
         using InvokeProgress = ClockResult (*)(ProgressFunction, std::uintptr_t, float, std::uint32_t&) noexcept;
@@ -82,6 +87,9 @@ namespace mta::game_de
             bool           nodeFreeEntered = false, nodesReleased = false, nodeFreeVerified = false;
             bool           nodePointerClearEntered = false, nodePointerCleared = false, nodePointerClearVerified = false;
         };
+        ClockResult CopyFromGroup(std::uintptr_t, Storage&, const NativeAnimationAssociationReferenceToken&,
+                                  const NativeAnimationAssociationGroupReferenceToken&, std::uint32_t, CheckOwner, std::uintptr_t&, GroupCopyReceipt* = nullptr,
+                                  InvokeGroupCopy = nullptr) noexcept;
         ClockResult Create(std::uintptr_t, Storage&, std::uint64_t, CheckOwner, Receipt* = nullptr,
                            NativeCustomAnimSequenceStorageCalls::InvokeMalloc = nullptr) noexcept;
         ClockResult Construct(std::uintptr_t, Storage&, std::uint64_t, std::uintptr_t, CheckOwner, std::uintptr_t&, Receipt* = nullptr,

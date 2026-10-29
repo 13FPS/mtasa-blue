@@ -36,6 +36,18 @@ namespace mta::game_de
         ClockResult ReadAssociationGroupBlock(const NativeAnimationAssociationGroupReferenceToken&, NativeAnimationAssociationGroupBlock&) const noexcept;
         ClockResult ResolveAssociationGroupStaticById(const NativeAnimationAssociationGroupReferenceToken&, std::uint32_t,
                                                       NativeAnimationStaticAssociationReferenceToken&) const noexcept;
+        struct AssociationGroupCopySource
+        {
+            NativeAnimationAssociationGroupReferenceToken  group{};
+            NativeAnimationStaticAssociationReferenceToken selected{};
+            std::uintptr_t                                 groups = 0, children = 0;
+            std::uint64_t                                  groupCapacity = 0, childCapacity = 0;
+            std::int32_t                                   groupCount = 0;
+            std::uint32_t                                  rawIdOffset = 0;
+            std::array<unsigned char, 32>                  parent32{};
+        };
+        ClockResult ReadAssociationGroupCopySource(const NativeAnimationAssociationGroupReferenceToken&, std::uint32_t,
+                                                   AssociationGroupCopySource&) const noexcept;
         struct AssociationGroupInitializationLayout
         {
             NativeAnimationAssociationGroupReferenceToken group;

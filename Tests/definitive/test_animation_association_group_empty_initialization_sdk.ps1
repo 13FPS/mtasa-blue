@@ -21,7 +21,7 @@ $record = [ordered]@{
     schema='mta_animation_association_group_empty_initialization_sdk_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     results=@();failure=$null;scratchDirectory=$scratchRoot;scratchFilesRemaining=$null;scratchRemoved=$false;
-    scope='Actual InitEmptyAssociations SDK transport only: copied immutable group token and full opaque clump bits, including null, cross one owner command without SDK count/row iteration, clump validation, provider lookup, retry or cleanup. The source zero-count/all-valid routes need no clump, so only the native owner decides when to use it. Strict receiver inherits nine real operations and rejects two unresolved methods; no full group factory or native execution.';
+    scope='Actual InitEmptyAssociations SDK transport only: copied immutable group token and full opaque clump bits, including null, cross one owner command without SDK count/row iteration, clump validation, provider lookup, retry or cleanup. The source zero-count/all-valid routes need no clump, so only the native owner decides when to use it. Strict receiver inherits ten real operations and rejects one unresolved method; no full group factory or native execution.';
     ownedBuffersOnly=$true;nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;
     completeAnimationHierarchyReady=$false;fullMtaReady=$false;installationChanged=$false;
     actualAnimationAssociationGroupEmptyInitializationSdkTested=$false

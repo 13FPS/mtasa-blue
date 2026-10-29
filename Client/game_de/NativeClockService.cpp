@@ -78,6 +78,7 @@
 #include "NativeModelReferenceMap.h"
 #include "NativeAnimationAssociationAccess.h"
 #include "NativeAnimationAssociationController.h"
+#include "NativeAnimationAssociationGroupCopy.h"
 #include "NativePedVelocityMemory.h"
 #include "NativePedReferenceController.h"
 #include "NativePedVitalsMemory.h"
@@ -237,6 +238,7 @@ namespace mta::game_de
                                                                    NativeAnimationStaticAssociationReferenceToken&) noexcept override;
             ClockResult SetAnimationAssociationGroupIdOffset(const NativeAnimationAssociationGroupReferenceToken&, std::int32_t) noexcept override;
             ClockResult InitializeEmptyAnimationAssociationGroup(const NativeAnimationAssociationGroupReferenceToken&, std::uintptr_t) noexcept override;
+            ClockResult CopyAnimationAssociationGroup(const NativeAnimationAssociationGroupReferenceToken&, std::uint32_t, std::uintptr_t&) noexcept override;
             ClockResult InitializeAnimationStaticAssociationWithReceipt(const NativeAnimationStaticAssociationReferenceToken&, std::uintptr_t, std::uintptr_t,
                                                                         NativeStaticAssociationInitializeCalls::Receipt*) noexcept;
             ClockResult BeginPrivateAnimationCleanup(const NativeCustomAnimationCleanupRequest&, NativeCustomAnimationCleanupBeginReceipt&) noexcept override;
@@ -650,7 +652,10 @@ namespace mta::game_de
             // node storage and a bank-H reference. Retire this causal record
             // before dependent animation storage; CPU destruction never frees it.
             NativeAnimationAssociationController privateAssociations;
-            NativeCustomAnimSequenceController   customSequences;
+            // Last completed command facts are diagnostic only. The actual
+            // issued controller/storage record retains every native resource.
+            NativeAnimationAssociationCalls::GroupCopyReceipt animationGroupCopy;
+            NativeCustomAnimSequenceController                customSequences;
             // Empty module-owned hierarchy interfaces share this callback debt
             // group; no native publication or child-release authority is implied.
             NativePrivateAnimationHierarchyController privateHierarchies{&customSequences};
@@ -7335,6 +7340,46 @@ namespace mta::game_de
                 return Capture(expected, after);
             }
         }
+        ClockResult NativeAccess::CopyAnimationAssociationGroup(const NativeAnimationAssociationGroupReferenceToken& source, std::uint32_t requested,
+                                                                std::uintptr_t& output) noexcept
+        {
+            const auto group = source;
+            const auto id = requested;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            const auto retained = runtime.customSequenceGeneration.load();
+            if (!group.ownerGeneration || group.ownerGeneration != generation || (retained && retained != generation))
+                return ClockResult::OwnerConflict;
+            // Reuse the same retirement epoch as all other private dynamic
+            // associations. A new Group object cannot create a second owner.
+            runtime.customSequenceGeneration.store(generation);
+            NativeAnimationAssociationCalls::GroupCopyReceipt receipt;
+            std::uintptr_t                                    next = 0;
+            result = runtime.privateAssociations.CopyFromGroup(runtime.image, generation, group, id, &CheckTimingOwner, next, &receipt);
+            runtime.animationGroupCopy = receipt;
+            if (result == ClockResult::Ok)
+            {
+                if (!receipt.entered || !receipt.returned || !receipt.verified ||
+                    (receipt.returnedNull ? next != 0 : (!next || next != receipt.returnedInterface)))
+                    result = ClockResult::BindingChanged;
+                if (result == ClockResult::Ok)
+                    result = CheckTimingOwner();
+                if (result == ClockResult::Ok && runtime.generation.load() != generation)
+                    result = ClockResult::OwnerConflict;
+            }
+            // Publish actual controller debt before revoking more SDK work.
+            // A known null return carries no outer/node/ref debt even if a
+            // later caller bookend fails; entered uncertainty stays issued.
+            FinishPrivateAnimationAssociation(generation, result, receipt.resources);
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
+        }
+
         ClockResult NativeAccess::InitializeEmptyAnimationAssociationGroup(const NativeAnimationAssociationGroupReferenceToken& source,
                                                                            std::uintptr_t                                       requestedClump) noexcept
         {

@@ -12,6 +12,7 @@
 namespace mta::game_de
 {
     struct NativeCustomAnimSequenceStorageAccess;
+    class NativeAnimationAssociationCopyReturnTicket;
     class NativeCustomAnimSequenceStorage final
     {
     public:
@@ -59,6 +60,7 @@ namespace mta::game_de
     private:
         friend struct NativeCustomAnimSequenceStorageAccess;
         friend struct NativeAnimationAssociationStorageAccess;
+        bool                            BindReturnedDynamicCopy(const NativeAnimationAssociationCopyReturnTicket&) noexcept;
         NativeModelReferenceHeap::Value origin{};
         std::uintptr_t                  base = 0, tag = 0, hierarchyAffinity = 0;
         std::size_t                     capacity = 0, bytes = 0;

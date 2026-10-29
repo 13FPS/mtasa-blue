@@ -27,6 +27,19 @@ namespace mta::game_de
         Require(native.ReadAnimationAssociationGroup(token, value), operation);
         return value;
     }
+    CAnimBlendAssociationSAInterface* CAnimBlendAssocGroupDE::CopyAnimation(unsigned int requested)
+    {
+        static_assert(sizeof(unsigned int) == sizeof(std::uint32_t));
+        const auto     token = reference;
+        const auto     id = static_cast<std::uint32_t>(requested);
+        std::uintptr_t result = 0;
+        Require(native.CopyAnimationAssociationGroup(token, id, result), "CopyAnimation");
+        // The actual SDK result is an opaque native interface, unlike
+        // GetAnimation's C++ static facade. Only the existing issued dynamic
+        // record owns this unpublished original copy; no CPU Group destructor
+        // may retire it or infer an engine publication/ownership transfer.
+        return result ? reinterpret_cast<CAnimBlendAssociationSAInterface*>(result) : nullptr;
+    }
     void CAnimBlendAssocGroupDE::InitEmptyAssociations(RpClump* requested)
     {
         const auto token = reference;

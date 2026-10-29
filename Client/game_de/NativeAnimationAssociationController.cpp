@@ -4,6 +4,7 @@
  * PURPOSE: One durable issued serial owner for private native associations
  ****************************************************************************/
 #include "NativeAnimationAssociationController.h"
+#include "NativeAnimationAssociationGroupCopy.h"
 #include <limits>
 #include <algorithm>
 #include <new>
@@ -38,7 +39,8 @@ namespace mta::game_de
             const auto state = entry->storage.GetState();
             fault |= state == NativeAnimationAssociationStorage::State::FaultDebt || state == NativeAnimationAssociationStorage::State::PublicationPinned ||
                      state == NativeAnimationAssociationStorage::State::ConstructEntered || state == NativeAnimationAssociationStorage::State::RetireEntered ||
-                     state == NativeAnimationAssociationStorage::State::NodeFreeEntered || state == NativeAnimationAssociationStorage::State::NodeClearEntered;
+                     state == NativeAnimationAssociationStorage::State::NodeFreeEntered ||
+                     state == NativeAnimationAssociationStorage::State::NodeClearEntered || state == NativeAnimationAssociationStorage::State::CopyEntered;
         }
         retained.store(any, std::memory_order_release);
         recovery.store(fault, std::memory_order_release);
@@ -51,6 +53,44 @@ namespace mta::game_de
             if (entry->token.ownerGeneration == generation && entry->token.serial == token.serial)
                 return entry.get();
         return nullptr;
+    }
+    ClockResult NativeAnimationAssociationController::CopyFromGroup(std::uintptr_t image, std::uint64_t generation,
+                                                                    const NativeAnimationAssociationGroupReferenceToken& group, std::uint32_t animationId,
+                                                                    CheckOwner owner, std::uintptr_t& output,
+                                                                    NativeAnimationAssociationCalls::GroupCopyReceipt* receipt) noexcept
+    {
+        const auto                                        request = group;
+        NativeAnimationAssociationCalls::GroupCopyReceipt next;
+        if (receipt)
+            *receipt = next;
+        if (!generation || request.ownerGeneration != generation)
+            return ClockResult::OwnerConflict;
+        if (!AnimationAssociationControllerDetail::Enter(busy))
+            return ClockResult::Busy;
+        AnimationAssociationControllerDetail::Guard guard{busy};
+        if (serial == (std::numeric_limits<std::uint64_t>::max)())
+            return ClockResult::OwnerConflict;
+        // The issued record and its CPU storage exist before the original
+        // allocator may run; return adoption never allocates a second record.
+        try
+        {
+            auto entry = std::make_unique<Entry>();
+            entry->token = {generation, serial + 1};
+            records.push_back(std::move(entry));
+        }
+        catch (...)
+        {
+            return ClockResult::WriteFailure;
+        }
+        auto& entry = *records.back();
+        serial = entry.token.serial;
+        const auto result = NativeAnimationAssociationCalls::CopyFromGroup(image, entry.storage, entry.token, request, animationId, owner, output, &next);
+        if (entry.storage.CanDiscard())
+            records.pop_back();
+        Publish();
+        if (receipt)
+            *receipt = next;
+        return result;
     }
     ClockResult NativeAnimationAssociationController::Create(std::uintptr_t image, std::uint64_t generation, CheckOwner owner, Token& output,
                                                              Receipt* receipt) noexcept

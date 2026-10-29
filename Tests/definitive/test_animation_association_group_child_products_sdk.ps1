@@ -21,7 +21,7 @@ $record = [ordered]@{
     schema='mta_animation_association_group_child_products_sdk_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     results=@();failure=$null;scratchDirectory=$scratchRoot;scratchFilesRemaining=$null;scratchRemoved=$false;
-    scope='Actual GetAnimBlock/GetAnimation SDK products through the same owner: null/refresh/block identity cache, physical static-row caching across ID-offset changes, real child virtual dispatch, explicit game/provider failures and CPU-only retirement. Strict CGame rejects every operation. Eight actual group methods inherited, three unresolved methods rejected. No full factory, native engine allocation/free or old matrix replay.';
+    scope='Actual GetAnimBlock/GetAnimation SDK products through the same owner: null/refresh/block identity cache, physical static-row caching across ID-offset changes, real child virtual dispatch, explicit game/provider failures and CPU-only retirement. Strict CGame rejects every operation. Nine actual group methods inherited, two unresolved methods rejected. No full factory, native engine allocation/free or old matrix replay.';
     ownedBuffersOnly=$true;nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;
     completeAnimationHierarchyReady=$false;fullMtaReady=$false;installationChanged=$false;
     actualAnimationAssociationGroupChildProductsSdkTested=$false;actualAnimationAssociationGroupChildCpuLifetimeTested=$false

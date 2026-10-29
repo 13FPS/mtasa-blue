@@ -27,6 +27,15 @@ namespace mta::game_de
         Require(native.ReadAnimationAssociationGroup(token, value), operation);
         return value;
     }
+    void CAnimBlendAssocGroupDE::InitEmptyAssociations(RpClump* requested)
+    {
+        const auto token = reference;
+        const auto clump = reinterpret_cast<std::uintptr_t>(requested);
+        // Source zero-count and already-valid paths do not use the clump.
+        // Native row qualification, the exact reverse itinerary and partial
+        // original-call receipts belong to this group's existing owner.
+        Require(native.InitializeEmptyAnimationAssociationGroup(token, clump), "InitEmptyAssociations");
+    }
     CAnimBlock* CAnimBlendAssocGroupDE::GetAnimBlock()
     {
         const auto                           token = reference;

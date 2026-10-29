@@ -3484,7 +3484,14 @@ namespace ClockStaticAssociationInitializationInvokeTest
 // Include the real original-entry boundary once. Only its final typed native
 // call is substituted by owned effects; all profile, membership and gate checks
 // remain production. Other selected scopes never execute this new fixture.
-#define MTA_DE_STATIC_ASSOCIATION_INITIALIZE_NATIVE_INVOKE ClockStaticAssociationInitializationInvokeTest::Invoke
+namespace ClockGroupEmptyInitializationInvokeTest
+{
+    mta::game_de::ClockResult Invoke(mta::game_de::NativeStaticAssociationInitializeCalls::NativeFunction, std::uintptr_t, std::uintptr_t, std::uintptr_t,
+                                     std::uint32_t&) noexcept;
+}
+// Historical scopes delegate unchanged. Only the new group-loop fixture
+// substitutes the same final original-entry seam with per-physical-row effects.
+#define MTA_DE_STATIC_ASSOCIATION_INITIALIZE_NATIVE_INVOKE ClockGroupEmptyInitializationInvokeTest::Invoke
 #include "../../Client/game_de/NativeStaticAssociationInitializeCalls.cpp"
 #undef MTA_DE_STATIC_ASSOCIATION_INITIALIZE_NATIVE_INVOKE
 namespace ClockAnimationStaticAssociationWriteTest
@@ -8585,6 +8592,7 @@ namespace
 #include "AnimationStaticAssociationFixture.generated.h"
 #include "NativeAnimationStaticAssociationOwnerTests.inl"
 #include "NativeStaticAssociationInitializationOwnerTests.inl"
+#include "NativeAnimationAssociationGroupEmptyInitializationOwnerTests.inl"
 #include "NativeAnimationAssociationGroupChildProductsOwnerTests.inl"
 #include "NativeAnimationStaticAssociationWritesOwnerTests.inl"
 #include "PrivateAnimationAssociationFixture.generated.h"
@@ -8742,6 +8750,9 @@ int main(int argc, char** argv)
         staticAssociationInitializationUnknown || (argc == 3 && std::strcmp(argv[2], "--static-association-initialization-success") == 0);
     const bool animationStaticAssociationReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-static-association-reads") == 0;
     const bool animationAssociationGroupReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-association-group-reads") == 0;
+    const bool groupEmptyInitializationUnknown = argc == 3 && std::strcmp(argv[2], "--group-empty-initialization-unknown") == 0;
+    const bool groupEmptyInitializationOnly =
+        groupEmptyInitializationUnknown || (argc == 3 && std::strcmp(argv[2], "--group-empty-initialization-success") == 0);
     const bool animationAssociationGroupChildProductsOnly = argc == 3 && std::strcmp(argv[2], "--animation-association-group-child-products") == 0;
     const bool animationAssociationGroupOffsetLostAck = argc == 3 && std::strcmp(argv[2], "--animation-association-group-offset-lost-ack") == 0;
     const bool animationAssociationGroupOffsetConflict = argc == 3 && std::strcmp(argv[2], "--animation-association-group-offset-conflict") == 0;
@@ -8871,9 +8882,9 @@ int main(int argc, char** argv)
            freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly || customAnimationCleanupOnly ||
            standaloneSequenceOperationsOnly || animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly ||
            animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly || animationGroupValidityOnly ||
-           animationIdValidityOnly || animationAssociationGroupReadsOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
-           animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
-           privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
+           animationIdValidityOnly || animationAssociationGroupReadsOnly || groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly ||
+           animationAssociationGroupOffsetOnly || animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly ||
+           pedRenderOnly || privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
     if (presentTransitionClockOnly)
@@ -9051,6 +9062,16 @@ int main(int argc, char** argv)
         fixture.Create(argv[1]);
         // One real module-pinned lifetime needs one pristine host process.
         NativeAnimationBlocksOwnedSdk(fixture, &AnimationAssociationGroupChildProductsOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (groupEmptyInitializationOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        // Actual sticky module-pin and unknown-entry lifetimes stay isolated.
+        AnimationAssociationGroupEmptyInitializationOwnerFixture::scenario = groupEmptyInitializationUnknown ? 1u : 0u;
+        NativeAnimationBlocksOwnedSdk(fixture, &AnimationAssociationGroupEmptyInitializationOwnerFixture::RunPrepared);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

@@ -18,6 +18,7 @@ namespace mta::game_de
     class CAnimBlendAssocGroupDE : public CAnimBlendAssocGroup
     {
     public:
+        void                             InitEmptyAssociations(RpClump*) override;
         CAnimBlock*                      GetAnimBlock() override;
         CAnimBlendStaticAssociation*     GetAnimation(unsigned int) override;
         bool                             IsCreated() override;
@@ -61,7 +62,7 @@ namespace mta::game_de
         // with the group. Every operation still re-admits the native row.
         std::vector<StaticProduct> staticFacades;
     };
-    // Genuine CopyAnimation/CreateAssociations/InitEmptyAssociations remain
+    // Genuine CopyAnimation/CreateAssociations remain
     // pure. Child CPU products do not publish a complete group factory or
     // justify deletion through the still-unmodified common group base.
     static_assert(std::is_abstract_v<CAnimBlendAssocGroupDE> && std::is_base_of_v<CAnimBlendAssocGroup, CAnimBlendAssocGroupDE>);

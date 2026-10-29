@@ -21,7 +21,7 @@ $record = [ordered]@{
     schema='mta_animation_association_group_offset_sdk_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     results=@();failure=$null;scratchDirectory=$scratchRoot;scratchFilesRemaining=$null;scratchRemoved=$false;
-    scope='Actual ID-offset setter only: exact signed32 values and one copied same-owner token, status propagation without SDK read/resolve/retry/clamp or other field mutation. Strict stack-only receiver inherits eight real methods and rejects three unresolved methods. Native field ownership and entered-write receipts are separate owner checks; no full factory or SDK-base deletion.';
+    scope='Actual ID-offset setter only: exact signed32 values and one copied same-owner token, status propagation without SDK read/resolve/retry/clamp or other field mutation. Strict stack-only receiver inherits nine real methods and rejects two unresolved methods. Native field ownership and entered-write receipts are separate owner checks; no full factory or SDK-base deletion.';
     ownedBuffersOnly=$true;nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;
     completeAnimationHierarchyReady=$false;fullMtaReady=$false;installationChanged=$false;
     actualAnimationAssociationGroupOffsetSdkTested=$false

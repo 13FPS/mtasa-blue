@@ -20,7 +20,7 @@ $record = [ordered]@{
     schema='mta_animation_association_group_sdk_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     results=@();failure=$null;scratchDirectory=$scratchRoot;scratchFilesRemaining=$null;scratchRemoved=$false;
-    scope='Actual abstract group5read virtual dispatch with immutable copied same-provider token. Scalar/fullsigned32 and opaque tag semantics are independent from owner-qualified Loaded. Stack-only strict receiver inherits the ID-offset/child-product operations without exercising them here and rejects three remaining SDK methods; no full factory, SDK-base deletion, native engine or Has45B130 claim.';
+    scope='Actual abstract group5read virtual dispatch with immutable copied same-provider token. Scalar/fullsigned32 and opaque tag semantics are independent from owner-qualified Loaded. Stack-only strict receiver inherits the ID-offset/child-product/empty-initialization operations without exercising them here and rejects two remaining SDK methods; no full factory, SDK-base deletion, native engine or Has45B130 claim.';
     ownedBuffersOnly=$true;nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;
     completeAnimationHierarchyReady=$false;fullMtaReady=$false;installationChanged=$false;
     actualAnimationAssociationGroupSdkTested=$false

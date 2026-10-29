@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','PresentTransitionClock','StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
+    [ValidateSet('GroupEmptyInitialization','AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','PresentTransitionClock','StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -23,6 +23,10 @@ $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;a
 # Historical markers start false and are set only by the branch that actually
 # executed. Focus mode must never inherit the cumulative suite's claims.
 $record['runScope'] = $Scope
+$record['nativeGroupEmptyInitializationOwnerTested']=$false
+$record['actualGroupEmptyInitializationSdkOwnerTested']=$false
+$record['nativeGroupEmptyInitializationPhaseAndPrefixTested']=$false
+$record['nativeGroupEmptyInitializationEnteredDebtRetained']=$false
 $record['nativeAnimationAssociationGroupChildProductsOwnerTested']=$false
 $record['actualAnimationAssociationGroupStaticChildSdkOwnerTested']=$false
 $record['nativeAnimationAssociationGroupChildProductsCoupledRefusalsTested']=$false
@@ -597,6 +601,7 @@ try {
     $sourceNames += @('Tests/definitive/NativeAnimationStaticAssociationOwnerTests.inl','Tests/definitive/Write-AnimationStaticAssociationFixture.ps1','Client/game_de/NativeAnimationStaticAssociationAccess.h','Client/game_de/CAnimBlendStaticAssociationDE.h','Client/game_de/CAnimBlendStaticAssociationDE.cpp','Client/sdk/game/CAnimBlendStaticAssociation.h')
     $sourceNames += @('Tests/definitive/NativeAnimationAssociationGroupOffsetOwnerTests.inl')
     $sourceNames += @('Tests/definitive/NativeAnimationAssociationGroupChildProductsOwnerTests.inl')
+    $sourceNames += @('Tests/definitive/NativeAnimationAssociationGroupEmptyInitializationOwnerTests.inl','Client/game_de/NativeAnimationAssociationGroupInitialization.h')
     $sourceNames += @('Tests/definitive/NativeAnimationAssociationGroupOwnerTests.inl','Tests/definitive/Write-AnimationAssociationGroupFixture.ps1','Client/game_de/NativeAnimationAssociationGroupAccess.h','Client/game_de/CAnimBlendAssocGroupDE.h','Client/game_de/CAnimBlendAssocGroupDE.cpp','Client/sdk/game/CAnimBlendAssocGroup.h')
     $sourceNames += @('Tests/definitive/NativeAnimationIdValidityOwnerTests.inl','Client/game_de/NativeAnimationStaticAssociationProfile.h','Client/sdk/game/CAnimValidityPolicy.h')
     $sourceNames += @('Tests/definitive/NativeAnimationGroupValidityOwnerTests.inl','Client/game_de/NativeAnimationGroupArrayProfile.h','Client/sdk/game/CAnimGroupValidationPolicy.h')
@@ -1399,6 +1404,28 @@ namespace ClockPrivateHierarchyParentWriteFixture {
             $record.checks+=[int]$Matches[1];$texts+=$part
         }
         $record.testRun=$record.testRuns[-1];$text=$texts -join [Environment]::NewLine
+    } elseif($Scope -eq 'GroupEmptyInitialization'){
+        # Compile once; each real module-pinned lifetime keeps pristine host
+        # admission. Unknown native effects are never reset for another case.
+        $record['testRuns']=@();$record['testScenarioExecutables']=@();$texts=@()
+        $compiledHash=Sha $executable
+        foreach($scenario in @('success','unknown')){
+            $scenarioRoot=Join-Path $scratchRoot ('group-empty-initialization-'+$scenario)
+            [IO.Directory]::CreateDirectory($scenarioRoot)|Out-Null
+            $scenarioExecutable=Join-Path $scenarioRoot ([IO.Path]::GetFileName($executable))
+            if(Test-Path -LiteralPath $scenarioExecutable){throw 'Group empty initializer scenario copy already exists'}
+            Copy-Item -LiteralPath $executable -Destination $scenarioExecutable
+            $scenarioHash=Sha $scenarioExecutable
+            if($scenarioHash -cne $compiledHash){throw 'Group empty initializer scenario differs from once-compiled exact binary'}
+            $record.testScenarioExecutables+=@([ordered]@{scenario=$scenario;path=$scenarioExecutable;sha256=$scenarioHash;removedWithOwnedScratch=$true})
+            $run=RunBounded $scenarioExecutable @($scenarioRoot,('--group-empty-initialization-'+$scenario)) ('test-group-empty-initialization-'+$scenario) 60000
+            $record.testRuns+=$run
+            $part=[IO.File]::ReadAllText($run.stdout)+[IO.File]::ReadAllText($run.stderr)
+            if($run.exitCode -ne 0 -or $run.timedOut -or $part -notmatch 'Passed (\d+) production clock service checks'){throw ('Group empty initializer '+$scenario+' failed')}
+            if((Sha $scenarioExecutable) -cne $compiledHash){throw 'Group empty initializer execution copy changed while running'}
+            $record.checks+=[int]$Matches[1];$texts+=$part
+        }
+        $record.testRun=$record.testRuns[-1];$text=$texts -join [Environment]::NewLine
     } elseif($Scope -eq 'StaticAssociationInitialization'){
         # Compile once, then isolate accepted retirement and entered-unknown
         # lifetimes. Do not reset sticky module pins or actual native debt to
@@ -1938,6 +1965,13 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         $record.actualAnimationAssociationGroupStaticChildSdkOwnerTested=$text.Contains('Production actual animation association group static child SDK fixture completed')
         $record.nativeAnimationAssociationGroupChildProductsCoupledRefusalsTested=$text.Contains('Production animation association group child products coupled refusal fixture completed')
         if(-not($record.nativeAnimationAssociationGroupChildProductsOwnerTested -and $record.actualAnimationAssociationGroupStaticChildSdkOwnerTested -and $record.nativeAnimationAssociationGroupChildProductsCoupledRefusalsTested)){throw 'Actual association group child products scope incomplete'}
+        $record.productionNativeCallbackTested=$true
+    } elseif($Scope -eq 'GroupEmptyInitialization'){
+        $record.nativeGroupEmptyInitializationOwnerTested=$text.Contains('Production group empty initialization actual owner and SDK fixture completed')
+        $record.actualGroupEmptyInitializationSdkOwnerTested=$text.Contains('Production group empty initialization actual owner and SDK fixture completed')
+        $record.nativeGroupEmptyInitializationPhaseAndPrefixTested=$text.Contains('Production group empty initialization phase and verified prefix fixture completed')
+        $record.nativeGroupEmptyInitializationEnteredDebtRetained=$text.Contains('Production group empty initialization entered debt retained without replay')
+        if(-not($record.nativeGroupEmptyInitializationOwnerTested -and $record.actualGroupEmptyInitializationSdkOwnerTested -and $record.nativeGroupEmptyInitializationPhaseAndPrefixTested -and $record.nativeGroupEmptyInitializationEnteredDebtRetained)){throw 'Actual group empty initialization selected scope incomplete'}
         $record.productionNativeCallbackTested=$true
     } elseif($Scope -eq 'AnimationAssociationGroupReads'){
         $record.nativeAnimationAssociationGroupOwnerTested=$text.Contains('Production animation association group owner fixture completed')

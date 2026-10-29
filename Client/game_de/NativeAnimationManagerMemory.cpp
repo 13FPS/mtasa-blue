@@ -1339,6 +1339,144 @@ namespace mta::game_de
         return ClockResult::Ok;
     }
 
+    namespace AnimationAssociationGroupInitializationDetail
+    {
+        namespace Group = AnimationGroupCreatedDetail;
+        namespace P = NativeAnimationGroupArrayProfile;
+        namespace Static = NativeAnimationStaticAssociationProfile;
+        namespace Memory = NativeModelReferenceMap;
+        using Layout = NativeAnimationManagerMemory::AssociationGroupInitializationLayout;
+        using Binding = NativeAnimationManagerMemory::Binding;
+        using CheckOwner = NativeAnimationManagerMemory::CheckOwner;
+        bool Same(const Layout& a, const Layout& b) noexcept
+        {
+            return a.group.ownerGeneration == b.group.ownerGeneration && a.group.index == b.group.index && a.group.locator == b.group.locator &&
+                   a.groups == b.groups && a.children == b.children && a.groupCapacity == b.groupCapacity && a.childCapacity == b.childCapacity &&
+                   a.groupCount == b.groupCount && a.count == b.count && a.parent == b.parent;
+        }
+        ClockResult Capture(Binding binding, CheckOwner owner, const NativeAnimationAssociationGroupReferenceToken& group, Layout& output) noexcept
+        {
+            if (!group.locator)
+                return ClockResult::InvalidArgument;
+            Group::Snapshot parent, after;
+            auto            result = Group::Capture(binding, owner, group.index, parent);
+            if (result != ClockResult::Ok)
+                return result;
+            const auto row = parent.rows + static_cast<std::uintptr_t>(group.index) * P::RowBytes;
+            if (row != group.locator)
+                return ClockResult::BindingChanged;
+            Layout next;
+            next.group = group;
+            next.groups = parent.rows;
+            next.groupCapacity = parent.capacity;
+            next.groupCount = parent.count;
+            next.count = parent.value;
+            if (next.count)
+            {
+                if (!Memory::Copy(row, next.parent.data(), next.parent.size()))
+                    return ClockResult::ReadFailure;
+                std::uint32_t count = 0;
+                std::memcpy(&count, next.parent.data() + P::CreatedOffset, sizeof(count));
+                std::memcpy(&next.children, next.parent.data() + 8, sizeof(next.children));
+                if (count != next.count)
+                    return ClockResult::BindingChanged;
+                if (!next.children)
+                    return ClockResult::NotInitialized;
+                if (next.children < Static::CookieBytes || next.children % alignof(std::uint64_t))
+                    return ClockResult::BindingChanged;
+                const auto childBase = next.children - Static::CookieBytes;
+                if (!Group::HeapSpan(childBase, Static::CookieBytes) || !Memory::Copy(childBase, &next.childCapacity, sizeof(next.childCapacity)))
+                    return ClockResult::ReadFailure;
+                if (next.childCapacity > static_cast<std::uint64_t>((std::numeric_limits<std::int32_t>::max)()) ||
+                    next.childCapacity > ((std::numeric_limits<std::size_t>::max)() - Static::CookieBytes) / Static::RowBytes ||
+                    next.count > next.childCapacity)
+                    return ClockResult::BindingChanged;
+                const auto childBytes = Static::CookieBytes + static_cast<std::size_t>(next.childCapacity) * Static::RowBytes;
+                const auto parentBase = parent.rows - P::CookieBytes;
+                const auto parentBytes = P::CookieBytes + static_cast<std::size_t>(parent.capacity) * P::RowBytes;
+                if (!Group::HeapSpan(childBase, childBytes) || !Memory::Disjoint(childBase, childBytes, parentBase, parentBytes))
+                    return ClockResult::BindingChanged;
+                std::array<unsigned char, P::RowBytes> current{};
+                std::uint64_t                          capacity = 0;
+                if (!Memory::Copy(row, current.data(), current.size()) || !Memory::Copy(childBase, &capacity, sizeof(capacity)))
+                    return ClockResult::ReadFailure;
+                if (current != next.parent || capacity != next.childCapacity)
+                    return ClockResult::BindingChanged;
+            }
+            // No child pointer, cookie, node target, hierarchy or block is
+            // read at all when the source's captured uint32 count is zero.
+            if ((result = Group::Capture(binding, owner, group.index, after)) != ClockResult::Ok)
+                return result;
+            if (parent.rows != after.rows || parent.capacity != after.capacity || parent.count != after.count || parent.value != after.value)
+                return ClockResult::BindingChanged;
+            if ((result = Group::Begin(binding, owner)) != ClockResult::Ok)
+                return result;
+            output = next;
+            return ClockResult::Ok;
+        }
+    }
+    ClockResult NativeAnimationManagerMemory::ReadAssociationGroupInitializationLayout(const NativeAnimationAssociationGroupReferenceToken& source,
+                                                                                       AssociationGroupInitializationLayout& output) const noexcept
+    {
+        namespace D = AnimationAssociationGroupInitializationDetail;
+        const auto                           token = source;
+        AssociationGroupInitializationLayout first, second;
+        auto                                 result = D::Capture(binding, owner, token, first);
+        if (result != ClockResult::Ok || (result = D::Capture(binding, owner, token, second)) != ClockResult::Ok)
+            return result;
+        if (!D::Same(first, second))
+            return ClockResult::BindingChanged;
+        if ((result = D::Group::Begin(binding, owner)) != ClockResult::Ok)
+            return result;
+        output = second;
+        return ClockResult::Ok;
+    }
+    ClockResult NativeAnimationManagerMemory::RecheckAssociationGroupInitializationLayout(const AssociationGroupInitializationLayout& source) const noexcept
+    {
+        const auto                           expected = source;
+        AssociationGroupInitializationLayout current;
+        const auto                           result = ReadAssociationGroupInitializationLayout(expected.group, current);
+        if (result != ClockResult::Ok)
+            return result;
+        return AnimationAssociationGroupInitializationDetail::Same(expected, current) ? ClockResult::Ok : ClockResult::BindingChanged;
+    }
+    ClockResult NativeAnimationManagerMemory::ReadAssociationGroupInitializationRow(const AssociationGroupInitializationLayout& source, std::uint32_t requested,
+                                                                                    AssociationGroupInitializationRow& output) const noexcept
+    {
+        namespace D = AnimationAssociationGroupInitializationDetail;
+        const auto expected = source;
+        const auto index = requested;
+        if (index >= expected.count)
+            return ClockResult::InvalidArgument;
+        auto result = RecheckAssociationGroupInitializationLayout(expected);
+        if (result != ClockResult::Ok)
+            return result;
+        if ((result = AnimationStaticAssociationReadDetail::Begin(binding, owner)) != ClockResult::Ok)
+            return result;
+        AssociationGroupInitializationRow next;
+        next.reference.groupIndex = expected.group.index;
+        next.reference.index = index;
+        next.reference.locator = expected.children + static_cast<std::uintptr_t>(index) * D::Static::RowBytes;
+        if (!D::Memory::Copy(next.reference.locator + D::Static::NodesOffset, &next.nodes, sizeof(next.nodes)))
+            return ClockResult::ReadFailure;
+        // Exact IsValid is pointer-nonzero, not NumBlendNodes or a pointed
+        // target admission. Already-valid rows never consume a hierarchy.
+        if (!next.nodes && !D::Memory::Copy(next.reference.locator + D::Static::HierarchyOffset, &next.hierarchy, sizeof(next.hierarchy)))
+            return ClockResult::ReadFailure;
+        if ((result = RecheckAssociationGroupInitializationLayout(expected)) != ClockResult::Ok)
+            return result;
+        std::uintptr_t nodes = 0, hierarchy = 0;
+        if (!D::Memory::Copy(next.reference.locator + D::Static::NodesOffset, &nodes, sizeof(nodes)) ||
+            (!next.nodes && !D::Memory::Copy(next.reference.locator + D::Static::HierarchyOffset, &hierarchy, sizeof(hierarchy))))
+            return ClockResult::ReadFailure;
+        if (nodes != next.nodes || (!next.nodes && hierarchy != next.hierarchy))
+            return ClockResult::BindingChanged;
+        if ((result = AnimationStaticAssociationReadDetail::Begin(binding, owner)) != ClockResult::Ok)
+            return result;
+        output = next;
+        return ClockResult::Ok;
+    }
+
     namespace AnimationStaticAssociationWriteDetail
     {
         namespace Read = AnimationStaticAssociationReadDetail;

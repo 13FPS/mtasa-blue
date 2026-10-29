@@ -7,6 +7,7 @@
 #include "NativeAnimationManagerAccess.h"
 #include "NativeAnimationAssociationGroupAccess.h"
 #include "NativeAnimationStaticAssociationAccess.h"
+#include <array>
 namespace mta::game_de
 {
     class NativeAnimationManagerMemory
@@ -35,6 +36,27 @@ namespace mta::game_de
         ClockResult ReadAssociationGroupBlock(const NativeAnimationAssociationGroupReferenceToken&, NativeAnimationAssociationGroupBlock&) const noexcept;
         ClockResult ResolveAssociationGroupStaticById(const NativeAnimationAssociationGroupReferenceToken&, std::uint32_t,
                                                       NativeAnimationStaticAssociationReferenceToken&) const noexcept;
+        struct AssociationGroupInitializationLayout
+        {
+            NativeAnimationAssociationGroupReferenceToken group;
+            std::uintptr_t                                groups = 0, children = 0;
+            std::uint64_t                                 groupCapacity = 0, childCapacity = 0;
+            std::int32_t                                  groupCount = 0;
+            std::uint32_t                                 count = 0;
+            std::array<unsigned char, 32>                 parent{};
+        };
+        struct AssociationGroupInitializationRow
+        {
+            NativeAnimationStaticAssociationReferenceToken reference;
+            std::uintptr_t                                 nodes = 0, hierarchy = 0;
+        };
+        // These immediate snapshots grant no retained pointer lease. A zero
+        // source count deliberately requires neither a child cookie nor clump.
+        ClockResult ReadAssociationGroupInitializationLayout(const NativeAnimationAssociationGroupReferenceToken&,
+                                                             AssociationGroupInitializationLayout&) const noexcept;
+        ClockResult RecheckAssociationGroupInitializationLayout(const AssociationGroupInitializationLayout&) const noexcept;
+        ClockResult ReadAssociationGroupInitializationRow(const AssociationGroupInitializationLayout&, std::uint32_t,
+                                                          AssociationGroupInitializationRow&) const noexcept;
         struct AssociationGroupOffsetWriteReceipt
         {
             std::uintptr_t address = 0;

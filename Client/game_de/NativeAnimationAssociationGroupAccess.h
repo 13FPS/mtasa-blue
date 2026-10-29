@@ -58,6 +58,13 @@ namespace mta::game_de
         {
             return ClockResult::NotInitialized;
         }
+        // Source4CDFB0 walks existing physical rows backwards and calls the
+        // genuine static initializer only when their node pointer is zero.
+        // Empty/all-valid groups never consume the supplied clump at all.
+        virtual ClockResult InitializeEmptyAnimationAssociationGroup(const NativeAnimationAssociationGroupReferenceToken&, std::uintptr_t) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
         // MTA's inline setter stores the full signed32 ID offset on the
         // current group. This is persistent scalar intent, not child-array
         // creation, ID reselection or a retained group allocation lease.

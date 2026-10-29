@@ -3491,10 +3491,16 @@ namespace ClockAnimationStaticAssociationWriteTest
 {
     mta::game_de::ClockResult Exchange(std::uintptr_t, std::uint16_t, std::uint16_t, std::uint16_t&, bool&, std::uint32_t&) noexcept;
 }
+namespace ClockAnimationAssociationGroupOffsetTest
+{
+    mta::game_de::ClockResult Exchange(std::uintptr_t, std::uint32_t, std::uint32_t, std::uint32_t&, bool&, std::uint32_t&) noexcept;
+}
+#define MTA_DE_ANIMATION_GROUP_OFFSET_EXCHANGE       ::ClockAnimationAssociationGroupOffsetTest::Exchange
 #define ReadImage                                    AnimationManagerOwnerFixtureReadImage
 #define MTA_DE_ANIMATION_STATIC_ASSOCIATION_EXCHANGE ::ClockAnimationStaticAssociationWriteTest::Exchange
 #include "../../Client/game_de/NativeAnimationManagerMemory.cpp"
 #undef MTA_DE_ANIMATION_STATIC_ASSOCIATION_EXCHANGE
+#undef MTA_DE_ANIMATION_GROUP_OFFSET_EXCHANGE
 #undef ReadImage
 #define ReadImage AnimationBlockOwnerFixtureReadImage
 #include "../../Client/game_de/NativeAnimationBlockFactoryMemory.cpp"
@@ -8575,6 +8581,7 @@ namespace
 #include "NativeAnimationIdValidityOwnerTests.inl"
 #include "AnimationAssociationGroupFixture.generated.h"
 #include "NativeAnimationAssociationGroupOwnerTests.inl"
+#include "NativeAnimationAssociationGroupOffsetOwnerTests.inl"
 #include "AnimationStaticAssociationFixture.generated.h"
 #include "NativeAnimationStaticAssociationOwnerTests.inl"
 #include "NativeStaticAssociationInitializationOwnerTests.inl"
@@ -8732,8 +8739,12 @@ int main(int argc, char** argv)
     const bool     staticAssociationInitializationUnknown = argc == 3 && std::strcmp(argv[2], "--static-association-initialization-unknown") == 0;
     const bool     staticAssociationInitializationOnly =
         staticAssociationInitializationUnknown || (argc == 3 && std::strcmp(argv[2], "--static-association-initialization-success") == 0);
-    const bool     animationStaticAssociationReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-static-association-reads") == 0;
-    const bool     animationAssociationGroupReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-association-group-reads") == 0;
+    const bool animationStaticAssociationReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-static-association-reads") == 0;
+    const bool animationAssociationGroupReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-association-group-reads") == 0;
+    const bool animationAssociationGroupOffsetLostAck = argc == 3 && std::strcmp(argv[2], "--animation-association-group-offset-lost-ack") == 0;
+    const bool animationAssociationGroupOffsetConflict = argc == 3 && std::strcmp(argv[2], "--animation-association-group-offset-conflict") == 0;
+    const bool animationAssociationGroupOffsetOnly = animationAssociationGroupOffsetLostAck || animationAssociationGroupOffsetConflict ||
+                                                     (argc == 3 && std::strcmp(argv[2], "--animation-association-group-offset-success") == 0);
     const bool     animationIdValidityOnly = argc == 3 && std::strcmp(argv[2], "--animation-id-validity") == 0;
     const bool     animationGroupValidityOnly = argc == 3 && std::strcmp(argv[2], "--animation-group-validity") == 0;
     const bool     animationDefinitionBlockNamesOnly = argc == 3 && std::strcmp(argv[2], "--animation-definition-block-names") == 0;
@@ -8858,9 +8869,9 @@ int main(int argc, char** argv)
            freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly || customAnimationCleanupOnly ||
            standaloneSequenceOperationsOnly || animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly ||
            animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly || animationGroupValidityOnly ||
-           animationIdValidityOnly || animationAssociationGroupReadsOnly || animationStaticAssociationReadsOnly || staticAssociationWritesOnly ||
-           staticAssociationInitializationOnly || pedRenderOnly || privateAssociationsOnly || associationBonesOnly || associationFloatOnly ||
-           associationProgressOnly || associationNodeArrayOnly) &&
+           animationIdValidityOnly || animationAssociationGroupReadsOnly || animationAssociationGroupOffsetOnly || animationStaticAssociationReadsOnly ||
+           staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly || privateAssociationsOnly || associationBonesOnly ||
+           associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
     if (presentTransitionClockOnly)
@@ -9017,6 +9028,18 @@ int main(int argc, char** argv)
         ClockImageFixture fixture;
         fixture.Create(argv[1]);
         NativeAnimationBlocksOwnedSdk(fixture, &AnimationStaticAssociationOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (animationAssociationGroupOffsetOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        // Each module-pinned owner lifetime keeps BeginOwned's pristine
+        // admission checks. Independent scenarios run in fresh processes;
+        // neither native owner fields nor public rejection guards are reset.
+        AnimationAssociationGroupOffsetOwnerFixture::scenario = animationAssociationGroupOffsetLostAck ? 1u : animationAssociationGroupOffsetConflict ? 2u : 0u;
+        NativeAnimationBlocksOwnedSdk(fixture, &AnimationAssociationGroupOffsetOwnerFixture::RunPrepared);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

@@ -230,6 +230,7 @@ namespace mta::game_de
             ClockResult ReadAnimationAssociationGroup(const NativeAnimationAssociationGroupReferenceToken&,
                                                       NativeAnimationAssociationGroupValues&) noexcept override;
             ClockResult ReadAnimationAssociationGroupLoaded(const NativeAnimationAssociationGroupReferenceToken&, bool&) noexcept override;
+            ClockResult SetAnimationAssociationGroupIdOffset(const NativeAnimationAssociationGroupReferenceToken&, std::int32_t) noexcept override;
             ClockResult BeginPrivateAnimationCleanup(const NativeCustomAnimationCleanupRequest&, NativeCustomAnimationCleanupBeginReceipt&) noexcept override;
             ClockResult ResumePrivateAnimationCleanup(const NativeCustomAnimationCleanupToken&, SCustomAnimationCleanupResult&) noexcept override;
             bool        HasPendingPrivateAnimationCleanup() const noexcept override;
@@ -7070,6 +7071,32 @@ namespace mta::game_de
                 return ClockResult::OwnerConflict;
             output = next;
             return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::SetAnimationAssociationGroupIdOffset(const NativeAnimationAssociationGroupReferenceToken& source,
+                                                                       std::int32_t                                         requested) noexcept
+        {
+            const auto token = source;
+            const auto value = requested;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            if (!token.ownerGeneration || token.ownerGeneration != generation)
+                return ClockResult::OwnerConflict;
+            NativeAnimationManagerMemory::AssociationGroupOffsetWriteReceipt receipt;
+            result = NativeAnimationManagerMemory({runtime.image}, &CheckTimingOwner).WriteAssociationGroupIdOffset(token, value, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = CheckTimingOwner();
+                if (result == ClockResult::Ok && runtime.generation.load() != generation)
+                    result = ClockResult::OwnerConflict;
+            }
+            // Scalar intent owns no new native allocation or cleanup debt.
+            // Stop further dispatch after entered uncertainty; ordinary hook
+            // retirement may proceed without replaying or undoing that store.
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            return result;
         }
         ClockResult NativeAccess::ResolveAnimationStaticAssociation(std::uint64_t requestedGeneration, std::uint32_t requestedGroup, std::size_t requestedIndex,
                                                                     NativeAnimationStaticAssociationReferenceToken& output) noexcept

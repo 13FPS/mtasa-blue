@@ -10,7 +10,7 @@
 namespace mta::game_de::NativeAnimationGroupArrayProfile
 {
     inline constexpr std::uintptr_t GlobalRva = 0x572a450, CountRva = 0x51afc64;
-    inline constexpr std::size_t    RowBytes = 32, CookieBytes = 8, CreatedOffset = 0x10, MaximumPinBytes = 422;
+    inline constexpr std::size_t    RowBytes = 32, CookieBytes = 8, CreatedOffset = 0x10, IdOffset = 0x14, MaximumPinBytes = 422;
     struct Pin
     {
         std::uintptr_t       rva;

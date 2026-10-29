@@ -50,6 +50,15 @@ namespace mta::game_de
         Require(native.ReadAnimationAssociationGroupLoaded(token, value), "IsLoaded");
         return value;
     }
+    void CAnimBlendAssocGroupDE::SetIDOffset(int requested)
+    {
+        static_assert(sizeof(int) == sizeof(std::int32_t));
+        const auto token = reference;
+        const auto value = static_cast<std::int32_t>(requested);
+        // The classic inline implementation stores every signed32 bit. A
+        // group-count or enum check here would change MTA's actual contract.
+        Require(native.SetAnimationAssociationGroupIdOffset(token, value), "SetIDOffset");
+    }
     CAnimBlendAssocGroupSAInterface* CAnimBlendAssocGroupDE::GetInterface()
     {
         // Common MTA consumers compare or round-trip this backend tag; they

@@ -32,6 +32,17 @@ namespace mta::game_de
         ClockResult ResolveAssociationGroup(std::uint32_t, NativeAnimationAssociationGroupReferenceToken&) const noexcept;
         ClockResult ReadAssociationGroup(const NativeAnimationAssociationGroupReferenceToken&, NativeAnimationAssociationGroupValues&) const noexcept;
         ClockResult ReadAssociationGroupLoaded(const NativeAnimationAssociationGroupReferenceToken&, bool&) const noexcept;
+        struct AssociationGroupOffsetWriteReceipt
+        {
+            std::uintptr_t address = 0;
+            std::uint32_t  before = 0, target = 0, observed = 0, exceptionCode = 0;
+            bool           entered = false, accepted = false, verified = false;
+        };
+        using AssociationGroupOffsetExchange = ClockResult (*)(std::uintptr_t, std::uint32_t, std::uint32_t, std::uint32_t&, bool&, std::uint32_t&) noexcept;
+        // One source DWORD store on an existing native group. A failed
+        // post-entry acknowledgement cannot authorize replay or rollback.
+        ClockResult WriteAssociationGroupIdOffset(const NativeAnimationAssociationGroupReferenceToken&, std::int32_t,
+                                                  AssociationGroupOffsetWriteReceipt* = nullptr, AssociationGroupOffsetExchange = nullptr) const noexcept;
         ClockResult ResolveStaticAssociation(std::uint32_t, std::size_t, NativeAnimationStaticAssociationReferenceToken&) const noexcept;
         ClockResult ReadStaticAssociation(const NativeAnimationStaticAssociationReferenceToken&, NativeAnimationStaticAssociationValues&) const noexcept;
         enum class StaticAssociationScalar : std::uint8_t

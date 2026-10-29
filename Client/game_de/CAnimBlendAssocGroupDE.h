@@ -16,6 +16,7 @@ namespace mta::game_de
         int                              GetNumAnimations() override;
         eAnimGroup                       GetGroupID() override;
         bool                             IsLoaded() override;
+        void                             SetIDOffset(int) override;
         CAnimBlendAssocGroupSAInterface* GetInterface() override;
 
     protected:
@@ -29,8 +30,8 @@ namespace mta::game_de
         NativeAnimationAssociationGroupAccess&              native;
         const NativeAnimationAssociationGroupReferenceToken reference;
     };
-    // The remaining genuine copy/create/initialization/static-association and
-    // mutation operations stay pure. No group factory or SDK-base deletion is
+    // The remaining genuine copy/create/initialization/static-association
+    // operations stay pure. No group factory or SDK-base deletion is
     // introduced by these immediate reads of a borrowed current owner.
     static_assert(std::is_abstract_v<CAnimBlendAssocGroupDE> && std::is_base_of_v<CAnimBlendAssocGroup, CAnimBlendAssocGroupDE>);
     static_assert(!std::is_default_constructible_v<CAnimBlendAssocGroupDE>);

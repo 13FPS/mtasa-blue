@@ -36,6 +36,13 @@ namespace mta::game_de
         {
             return ClockResult::NotInitialized;
         }
+        // MTA's inline setter stores the full signed32 ID offset on the
+        // current group. This is persistent scalar intent, not child-array
+        // creation, ID reselection or a retained group allocation lease.
+        virtual ClockResult SetAnimationAssociationGroupIdOffset(const NativeAnimationAssociationGroupReferenceToken&, std::int32_t) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
         // Actual MTA Group::IsLoaded is block?block.loaded:false. Only this
         // channel qualifies a nonnull current block; it is not Has45B130.
         virtual ClockResult ReadAnimationAssociationGroupLoaded(const NativeAnimationAssociationGroupReferenceToken&, bool&) noexcept

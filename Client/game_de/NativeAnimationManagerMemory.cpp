@@ -1008,6 +1008,127 @@ namespace mta::game_de
         return ClockResult::Ok;
     }
 
+    namespace AnimationAssociationGroupWriteDetail
+    {
+        namespace Read = AnimationAssociationGroupReadDetail;
+        namespace Group = AnimationGroupCreatedDetail;
+        namespace P = NativeAnimationGroupArrayProfile;
+        namespace Memory = NativeModelReferenceMap;
+        using Binding = NativeAnimationManagerMemory::Binding;
+        using CheckOwner = NativeAnimationManagerMemory::CheckOwner;
+        thread_local bool writing = false;
+        struct WriteScope
+        {
+            WriteScope() noexcept { writing = true; }
+            ~WriteScope() { writing = false; }
+        };
+        struct Snapshot
+        {
+            Read::Snapshot                         identity{};
+            std::array<unsigned char, P::RowBytes> row{};
+        };
+        ClockResult Capture(Binding binding, CheckOwner owner, const NativeAnimationAssociationGroupReferenceToken& token, Snapshot& output) noexcept
+        {
+            Snapshot   next;
+            const auto result = Read::Read(binding, owner, token, false, next.identity);
+            if (result != ClockResult::Ok)
+                return result;
+            if (!Memory::Copy(token.locator, next.row.data(), next.row.size()))
+                return ClockResult::ReadFailure;
+            if (std::memcmp(next.row.data() + P::CreatedOffset, &next.identity.parent.value, sizeof(next.identity.parent.value)) ||
+                std::memcmp(next.row.data() + 0x18, &next.identity.groupId, sizeof(next.identity.groupId)))
+                return ClockResult::BindingChanged;
+            output = next;
+            return ClockResult::Ok;
+        }
+        bool Same(const Snapshot& a, const Snapshot& b) noexcept
+        {
+            return Read::Same(a.identity, b.identity) && a.row == b.row;
+        }
+        ClockResult ExchangeDword(std::uintptr_t address, std::uint32_t expected, std::uint32_t target, std::uint32_t& observed, bool& accepted,
+                                  std::uint32_t& exception) noexcept
+        {
+            static_assert(sizeof(LONG) == sizeof(std::uint32_t));
+            LONG before = 0, desired = 0;
+            std::memcpy(&before, &expected, sizeof(before));
+            std::memcpy(&desired, &target, sizeof(desired));
+            accepted = false;
+            __try
+            {
+                const auto previous = InterlockedCompareExchange(reinterpret_cast<volatile LONG*>(address), desired, before);
+                std::memcpy(&observed, &previous, sizeof(observed));
+                accepted = observed == expected;
+                return ClockResult::Ok;
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                exception = GetExceptionCode();
+                return ClockResult::OriginalException;
+            }
+        }
+    }
+    ClockResult NativeAnimationManagerMemory::WriteAssociationGroupIdOffset(const NativeAnimationAssociationGroupReferenceToken& source, std::int32_t requested,
+                                                                            AssociationGroupOffsetWriteReceipt* output,
+                                                                            AssociationGroupOffsetExchange      exchange) const noexcept
+    {
+        namespace D = AnimationAssociationGroupWriteDetail;
+        const auto                         token = source;
+        const auto                         value = requested;
+        AssociationGroupOffsetWriteReceipt receipt;
+        std::memcpy(&receipt.target, &value, sizeof(receipt.target));
+        const auto finish = [&](ClockResult result)
+        {
+            if (output)
+                *output = receipt;
+            return result;
+        };
+        if (!token.locator)
+            return finish(ClockResult::InvalidArgument);
+        if (D::writing)
+            return finish(ClockResult::Busy);
+        D::WriteScope scope;
+        D::Snapshot   first, second;
+        auto          result = D::Capture(binding, owner, token, first);
+        if (result != ClockResult::Ok || (result = D::Capture(binding, owner, token, second)) != ClockResult::Ok)
+            return finish(result);
+        if (!D::Same(first, second))
+            return finish(ClockResult::BindingChanged);
+        // Native FF2660 and the existing ID selector agree on DWORD+14.
+        // No child, loaded bank or enum membership is needed by MTA's
+        // explicit group setter; only this genuine current parent row is lent.
+        receipt.address = token.locator + D::P::IdOffset;
+        std::memcpy(&receipt.before, second.row.data() + D::P::IdOffset, sizeof(receipt.before));
+        if (receipt.address % alignof(std::uint32_t) || !D::Group::HeapSpan(receipt.address, sizeof(receipt.target)))
+            return finish(ClockResult::WriteFailure);
+        if ((result = D::Group::Begin(binding, owner)) != ClockResult::Ok)
+            return finish(result);
+#if defined(MTA_DE_ANIMATION_GROUP_OFFSET_EXCHANGE)
+        const auto entry = exchange ? exchange : &MTA_DE_ANIMATION_GROUP_OFFSET_EXCHANGE;
+#else
+        const auto entry = exchange ? exchange : &D::ExchangeDword;
+#endif
+        // This intent persists in the engine, just like the classic inline
+        // store. Once entered, a lost owner acknowledgement permits neither a
+        // second store nor an inverse write to possibly recycled group bytes.
+        receipt.entered = true;
+        result = entry(receipt.address, receipt.before, receipt.target, receipt.observed, receipt.accepted, receipt.exceptionCode);
+        if (result != ClockResult::Ok)
+            return finish(result);
+        if (!receipt.accepted || receipt.observed != receipt.before)
+            return finish(ClockResult::OwnerConflict);
+        D::Snapshot after;
+        if ((result = D::Capture(binding, owner, token, after)) != ClockResult::Ok)
+            return finish(result);
+        auto expected = second;
+        std::memcpy(expected.row.data() + D::P::IdOffset, &receipt.target, sizeof(receipt.target));
+        if (!D::Same(expected, after))
+            return finish(ClockResult::BindingChanged);
+        if ((result = D::Group::Begin(binding, owner)) != ClockResult::Ok)
+            return finish(result);
+        receipt.verified = true;
+        return finish(ClockResult::Ok);
+    }
+
     namespace AnimationStaticAssociationReadDetail
     {
         namespace Group = AnimationGroupCreatedDetail;

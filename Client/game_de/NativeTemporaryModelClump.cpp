@@ -214,8 +214,47 @@ namespace mta::game_de
             }
         }
     }
+    struct NativeTemporaryModelClumpBorrow::Context
+    {
+        const TemporaryClumpDetail::Model* model = nullptr;
+        const TemporaryClumpDetail::Actor* actor = nullptr;
+    };
     struct NativeTemporaryModelClumpAccess
     {
+        static ClockResult RecheckBorrow(const NativeTemporaryModelClumpBorrow& borrow) noexcept
+        {
+            namespace T = TemporaryClumpDetail;
+            namespace D = NativeStreamingCompletionContext;
+            if (!borrow.image || !borrow.generation || !borrow.owner || !borrow.record || !borrow.origin || !borrow.origin->model || !borrow.origin->actor)
+                return ClockResult::NotInitialized;
+            // Admit the actual native thread/scope before reading the mutable
+            // record. A copied observation does not create an actor/GC lease.
+            auto result = D::Owner(borrow.image, borrow.owner);
+            if (result != ClockResult::Ok)
+                return result;
+            const auto active = [&]() noexcept
+            {
+                const auto& record = *borrow.record;
+                return record.generation == borrow.generation && record.activeBorrow == &borrow &&
+                       record.GetState() == NativeTemporaryModelClump::State::RowEntered && record.outstanding.load(std::memory_order_acquire) &&
+                       record.model.nativeModelInfo && record.clump && record.container && record.container == borrow.origin->actor->container;
+            };
+            if (!active())
+                return ClockResult::OwnerConflict;
+            if (borrow.world != &borrow.origin->actor->world || borrow.modelContext != &borrow.origin->model->context)
+                return ClockResult::BindingChanged;
+            const auto& record = *borrow.record;
+            if ((result = T::RecheckModel(borrow.image, record.model, borrow.owner, *borrow.origin->model)) != ClockResult::Ok)
+                return result;
+            T::Actor observed;
+            if ((result = T::CaptureActor(borrow.image, record.clump, *borrow.origin->model, borrow.owner, true, observed)) != ClockResult::Ok)
+                return result;
+            if (!T::Same(*borrow.origin->actor, observed, true) || !D::Fence(borrow.image, borrow.origin->actor->world))
+                return ClockResult::BindingChanged;
+            if ((result = D::Owner(borrow.image, borrow.owner)) != ClockResult::Ok)
+                return result;
+            return active() ? ClockResult::Ok : ClockResult::OwnerConflict;
+        }
         static ClockResult Run(std::uintptr_t image, NativeTemporaryModelClump& record, std::uint64_t generation, const NativeModelBankReader::Value& source,
                                NativeTemporaryModelClumpCalls::CheckOwner owner, NativeTemporaryModelClumpCalls::RowInitializer initialize, void* context,
                                NativeTemporaryModelClumpCalls::Receipt* output, const NativeTemporaryModelClumpCalls::Invocations* injected) noexcept
@@ -361,7 +400,9 @@ namespace mta::game_de
             receipt.frameCount = static_cast<std::uint16_t>(actor.count);
             receipt.containerObserved = true;
             phase(State::Prepared);
-            NativeTemporaryModelClumpBorrow borrow;
+            const NativeTemporaryModelClumpBorrow::Context origin{&before, &actor};
+            NativeTemporaryModelClumpBorrow                borrow;
+            borrow.origin = &origin;
             borrow.record = &record;
             borrow.image = image;
             borrow.generation = generation;
@@ -405,6 +446,23 @@ namespace mta::game_de
             return finish(result);
         }
     };
+    ClockResult NativeTemporaryModelClumpBorrow::RecheckOrigin() const noexcept
+    {
+        return NativeTemporaryModelClumpAccess::RecheckBorrow(*this);
+    }
+    ClockResult NativeTemporaryModelClumpBorrow::ClaimInitialization() const noexcept
+    {
+        const auto result = RecheckOrigin();
+        if (result != ClockResult::Ok)
+            return result;
+        // Only this admitted current native owner can mutate the claim. A
+        // second journal or nested call cannot replay the original initializer;
+        // ordinary later origin rechecks remain valid after the claim.
+        if (initializationClaimed)
+            return ClockResult::Busy;
+        initializationClaimed = true;
+        return ClockResult::Ok;
+    }
     namespace NativeTemporaryModelClumpCalls
     {
         ClockResult WithTemporary(std::uintptr_t image, NativeTemporaryModelClump& record, std::uint64_t generation, const NativeModelBankReader::Value& model,

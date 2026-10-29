@@ -3794,6 +3794,8 @@ namespace ClockAnimationAssociationNodeArrayTest
 #define MTA_DE_ANIMATION_ASSOCIATION_EXCHANGE           ::ClockPrivateAnimationAssociationTest::Exchange
 #define MTA_DE_ANIMATION_ASSOCIATION_GROUP_COPY_INVOKE  ::ClockGroupCopyAnimationInvokeTest::Invoke
 #include "../../Client/game_de/NativeAnimationAssociationGroupReplacement.cpp"
+#include "../../Client/game_de/NativeTemporaryModelClump.cpp"
+#include "../../Client/game_de/NativeTemporaryStaticAssociationInitializeCalls.cpp"
 #include "../../Client/game_de/NativeAnimationAssociationStorage.cpp"
 #undef MTA_DE_ANIMATION_ASSOCIATION_GROUP_COPY_INVOKE
 #undef MTA_DE_ANIMATION_ASSOCIATION_NODE_FREE_INVOKE
@@ -8607,6 +8609,7 @@ namespace
 #include "NativePrivateAnimationAssociationOwnerTests.inl"
 #include "NativeAnimationAssociationGroupCopyOwnerTests.inl"
 #include "NativeAnimationAssociationGroupReplacementOwnerTests.inl"
+#include "NativeJointTemporaryStaticInitializerOwnerTests.inl"
 #include "NativeAnimationAssociationBonesOwnerTests.inl"
 #include "NativeAnimationAssociationFloatOwnerTests.inl"
 #include "NativeAnimationAssociationProgressOwnerTests.inl"
@@ -8760,6 +8763,15 @@ int main(int argc, char** argv)
         staticAssociationInitializationUnknown || (argc == 3 && std::strcmp(argv[2], "--static-association-initialization-success") == 0);
     const bool animationStaticAssociationReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-static-association-reads") == 0;
     const bool animationAssociationGroupReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-association-group-reads") == 0;
+    const bool jointTemporaryStaticOnly = argc == 3 && std::strncmp(argv[2], "--joint-temporary-static-", 25) == 0;
+    unsigned   jointTemporaryStaticScenario = 0;
+    if (jointTemporaryStaticOnly)
+    {
+        const char* names[] = {"success", "entered-unknown", "owner-loss", "group-drift", "public-ped-regression"};
+        for (unsigned n = 0; n != 5; ++n)
+            if (std::strcmp(argv[2] + 25, names[n]) == 0)
+                jointTemporaryStaticScenario = n;
+    }
     const bool groupReplacementOnly = argc == 3 && std::strncmp(argv[2], "--group-replacement-", 20) == 0;
     unsigned   groupReplacementScenario = 0;
     if (groupReplacementOnly)
@@ -8910,10 +8922,10 @@ int main(int argc, char** argv)
            freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly || customAnimationCleanupOnly ||
            standaloneSequenceOperationsOnly || animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly ||
            animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly || animationGroupValidityOnly ||
-           animationIdValidityOnly || animationAssociationGroupReadsOnly || groupReplacementOnly || groupCopyAnimationOnly || groupEmptyInitializationOnly ||
-           animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly || animationStaticAssociationReadsOnly ||
-           staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly || privateAssociationsOnly || associationBonesOnly ||
-           associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
+           animationIdValidityOnly || animationAssociationGroupReadsOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
+           groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
+           animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
+           privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
     if (presentTransitionClockOnly)
@@ -9091,6 +9103,24 @@ int main(int argc, char** argv)
         fixture.Create(argv[1]);
         // One real module-pinned lifetime needs one pristine host process.
         NativeAnimationBlocksOwnedSdk(fixture, &AnimationAssociationGroupChildProductsOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (jointTemporaryStaticOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        if (jointTemporaryStaticScenario == 4)
+        {
+            StaticAssociationInitializationOwnerFixture::scenario = 0;
+            NativeAnimationBlocksOwnedSdk(fixture, &StaticAssociationInitializationOwnerFixture::RunPrepared);
+            std::puts("Production joint initializer public registered ped regression completed");
+        }
+        else
+        {
+            JointTemporaryStaticInitializerOwnerFixture::scenario = jointTemporaryStaticScenario;
+            NativeAnimationBlocksOwnedSdk(fixture, &JointTemporaryStaticInitializerOwnerFixture::RunPrepared);
+        }
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

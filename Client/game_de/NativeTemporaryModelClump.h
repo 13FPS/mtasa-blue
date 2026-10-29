@@ -73,6 +73,13 @@ namespace mta::game_de
         friend struct NativeTemporaryModelClumpAccess;
         friend struct NativeStaticAssociationInitializeOwnershipAccess;
         NativeTemporaryModelClumpBorrow() noexcept = default;
+        // The joint initializer borrows the original synchronous snapshots;
+        // it cannot replace them with a raw actor or extend their lifetime.
+        struct Context;
+        ClockResult                                    RecheckOrigin() const noexcept;
+        ClockResult                                    ClaimInitialization() const noexcept;
+        const Context*                                 origin = nullptr;
+        mutable bool                                   initializationClaimed = false;
         NativeTemporaryModelClump*                     record = nullptr;
         std::uintptr_t                                 image = 0;
         std::uint64_t                                  generation = 0;

@@ -7,6 +7,7 @@
 #include "NativeAnimationStaticAssociationProfile.h"
 #include "NativeStaticAssociationArrayProfile.h"
 #include "NativeAnimationBlockMemory.h"
+#include "NativeAnimationBlockFactoryMemory.h"
 #include "NativeAnimationBlockProfile.h"
 #include "NativeStreamingCompletionContext.h"
 #include <algorithm>
@@ -552,6 +553,36 @@ namespace mta::game_de
         if ((result = NativeStreamingCompletionContext::Owner(image, owner)) != ClockResult::Ok)
             return result;
         output = next;
+        return ClockResult::Ok;
+    }
+    ClockResult NativeAnimationAssociationGroupReplacement::ResolvePublishedInitializationOrigin(
+        std::uintptr_t image, std::uint64_t generation, const NativeCustomAnimSequenceStorage& storage, std::uint32_t index,
+        const NativeAnimationHierarchyReferenceToken& hierarchy, NativeAnimationManagerMemory::CheckOwner owner,
+        NativeAnimationStaticAssociationReferenceToken& output) const noexcept
+    {
+        if (hierarchy.ownerGeneration != generation || !hierarchy.locator)
+            return ClockResult::OwnerConflict;
+        NativeAnimationStaticAssociationReferenceToken row, confirmed;
+        auto                                           result = ResolvePublishedRowForInitialization(image, generation, storage, index, owner, row);
+        if (result != ClockResult::Ok)
+            return result;
+        // The source loop selects H from this exact block/index. A valid raw
+        // hierarchy elsewhere in the bank is not this row's initialization.
+        // The existing helper's loaded-block domain is an explicit refusal
+        // here, never a claim that generic Create skips an unloaded block.
+        std::uintptr_t                    selected = 0, after = 0;
+        NativeAnimationBlockFactoryMemory block({image}, owner);
+        if ((result = block.ReadHierarchy(data->blockIdentity, index, selected)) != ClockResult::Ok)
+            return result;
+        if (!selected || selected != hierarchy.locator)
+            return ClockResult::BindingChanged;
+        if ((result = ResolvePublishedRowForInitialization(image, generation, storage, index, owner, confirmed)) != ClockResult::Ok ||
+            (result = block.ReadHierarchy(data->blockIdentity, index, after)) != ClockResult::Ok)
+            return result;
+        if (row.ownerGeneration != confirmed.ownerGeneration || row.groupIndex != confirmed.groupIndex || row.index != confirmed.index ||
+            row.locator != confirmed.locator || after != selected)
+            return ClockResult::BindingChanged;
+        output = row;
         return ClockResult::Ok;
     }
     namespace NativeAnimationAssociationGroupReplacementCalls

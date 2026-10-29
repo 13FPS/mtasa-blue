@@ -5,6 +5,7 @@
  ****************************************************************************/
 #pragma once
 #include "NativeAnimationManagerMemory.h"
+#include "NativeAnimationHierarchyAccess.h"
 #include "NativeAnimationAssociationGroupChildBorrow.h"
 #include "NativeStaticAssociationArrayStorageCalls.h"
 #include <atomic>
@@ -46,6 +47,9 @@ namespace mta::game_de
         // under its caller's already-held native scope. No raw lookup exists.
         ClockResult ResolvePublishedRowForInitialization(std::uintptr_t, std::uint64_t, const NativeCustomAnimSequenceStorage&, std::uint32_t,
                                                          NativeAnimationManagerMemory::CheckOwner,
+                                                         NativeAnimationStaticAssociationReferenceToken&) const noexcept;
+        ClockResult ResolvePublishedInitializationOrigin(std::uintptr_t, std::uint64_t, const NativeCustomAnimSequenceStorage&, std::uint32_t,
+                                                         const NativeAnimationHierarchyReferenceToken&, NativeAnimationManagerMemory::CheckOwner,
                                                          NativeAnimationStaticAssociationReferenceToken&) const noexcept;
         struct Data;
         std::unique_ptr<Data> data;

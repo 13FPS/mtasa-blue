@@ -4,6 +4,7 @@
  * PURPOSE: Borrow actual clump storage for one original static-association Init
  ****************************************************************************/
 #include "NativeStaticAssociationInitializeCalls.h"
+#include "NativeStaticAssociationInitializeCore.h"
 #include "NativeStaticAssociationInitializeProfile.h"
 #include "NativeAnimationHierarchyMemory.h"
 #include "NativeAnimationManagerProfile.h"
@@ -177,6 +178,7 @@ namespace mta::game_de::NativeStaticAssociationInitializeCalls
             output = std::move(value);
             return ClockResult::Ok;
         }
+        using TemporaryOrigin = NativeStaticAssociationTemporaryOrigin;
         struct Value
         {
             D::Value                       world;
@@ -224,7 +226,8 @@ namespace mta::game_de::NativeStaticAssociationInitializeCalls
                    a.sequenceCapacity == b.sequenceCapacity && a.sequenceAllocationBytes == b.sequenceAllocationBytes && a.sequenceRows == b.sequenceRows &&
                    Same(a.map, b.map) && H::Same(a.heap, b.heap) && D::Same(a.world, b.world, true);
         }
-        ClockResult Capture(std::uintptr_t image, const Arguments& input, CheckOwner owner, Value& output)
+        ClockResult Capture(std::uintptr_t image, const Arguments& input, CheckOwner owner, Value& output, const TemporaryOrigin* origin = nullptr,
+                            bool after = false)
         {
             Value value;
             auto  result = D::Owner(image, owner);
@@ -234,25 +237,37 @@ namespace mta::game_de::NativeStaticAssociationInitializeCalls
                 return ClockResult::BindingChanged;
             if ((result = D::Capture(image, value.world)) != ClockResult::Ok)
                 return result;
-            if ((result = NativePedPoolReader({image}, owner).Recheck(input.ped)) != ClockResult::Ok ||
-                (result = NativePedMetadataMemory({image}, owner).Read(input.ped, value.metadata)) != ClockResult::Ok)
-                return result;
-            if (value.metadata.entityType != 3)
-                return ClockResult::UnsupportedBuild;
-            if ((result = NativeModelBankReader({image}, owner).Read(value.metadata.modelIndex, value.model)) != ClockResult::Ok ||
-                (result = NativeModelLoadedReader({image}, owner).Read(value.metadata.modelIndex, value.loaded)) != ClockResult::Ok)
-                return result;
-            if (!value.model.nativeModelInfo || !value.loaded.streamedIn)
-                return ClockResult::NotInitialized;
-            if ((result = C::Capture(image, value.model, value.modelContext)) != ClockResult::Ok)
-                return result;
-            if (!NativeModelTypeLeaf::Read(image, value.modelContext.typeMethod, value.typeBytes, value.modelType) || value.modelType != 5)
-                return ClockResult::BindingChanged;
             std::uintptr_t render = 0;
-            if ((result = NativePedRenderMemory({image}, owner).Read(input.ped, render)) != ClockResult::Ok)
-                return result;
+            if (origin)
+            {
+                if ((result = origin->Recheck()) != ClockResult::Ok)
+                    return result;
+                value.model = origin->Model();
+                if ((result = C::Capture(image, value.model, value.modelContext)) != ClockResult::Ok)
+                    return result;
+                render = input.clump;
+            }
+            else
+            {
+                if ((result = NativePedPoolReader({image}, owner).Recheck(input.ped)) != ClockResult::Ok ||
+                    (result = NativePedMetadataMemory({image}, owner).Read(input.ped, value.metadata)) != ClockResult::Ok)
+                    return result;
+                if (value.metadata.entityType != 3)
+                    return ClockResult::UnsupportedBuild;
+                if ((result = NativeModelBankReader({image}, owner).Read(value.metadata.modelIndex, value.model)) != ClockResult::Ok ||
+                    (result = NativeModelLoadedReader({image}, owner).Read(value.metadata.modelIndex, value.loaded)) != ClockResult::Ok)
+                    return result;
+                if (!value.model.nativeModelInfo || !value.loaded.streamedIn)
+                    return ClockResult::NotInitialized;
+                if ((result = C::Capture(image, value.model, value.modelContext)) != ClockResult::Ok)
+                    return result;
+                if (!NativeModelTypeLeaf::Read(image, value.modelContext.typeMethod, value.typeBytes, value.modelType) || value.modelType != 5)
+                    return ClockResult::BindingChanged;
+                if ((result = NativePedRenderMemory({image}, owner).Read(input.ped, render)) != ClockResult::Ok)
+                    return result;
+            }
             if (!render || render != input.clump || render % 8 || !M::PrivateWritable(render, 0x310) ||
-                !M::Disjoint(render, 0x310, input.ped.nativePed, NativePedPoolProfile::ObjectStride) || !D::Add(image, render, value.world) ||
+                (!origin && !M::Disjoint(render, 0x310, input.ped.nativePed, NativePedPoolProfile::ObjectStride)) || !D::Add(image, render, value.world) ||
                 !D::At(render, 0, value.renderVtable) || !D::At(render, 0x10, value.renderClass) || !H::ReadOnlyImage(image, value.renderVtable, 0x6d0) ||
                 !I::ReadImage(image, value.renderVtable + 0x218, &value.eventMethod, sizeof(value.eventMethod)) ||
                 !I::ReadImage(image, value.renderVtable + 0x698, &value.nameMethod, sizeof(value.nameMethod)) ||
@@ -274,14 +289,14 @@ namespace mta::game_de::NativeStaticAssociationInitializeCalls
                 (value.skeleton && !D::Add(image, value.skeleton, value.world)) || !D::At(render, 0x300, value.container) ||
                 !D::At(render, 0x308, value.cleanup) || value.cleanup != image + P::CleanupRva || !value.container || value.container % 8 ||
                 !M::PrivateWritable(value.container, P::ContainerBytes) || !M::Disjoint(value.container, P::ContainerBytes, render, 0x310) ||
-                !M::Disjoint(value.container, P::ContainerBytes, input.ped.nativePed, NativePedPoolProfile::ObjectStride))
+                (!origin && !M::Disjoint(value.container, P::ContainerBytes, input.ped.nativePed, NativePedPoolProfile::ObjectStride)))
                 return ClockResult::BindingChanged;
             std::uintptr_t backpointer = 0, containerOwner = 0;
             std::int32_t   count = 0, frameArrayCount = 0, frameCapacity = 0;
             if (!D::At(value.container, 0x18, backpointer) || backpointer != render || !D::At(value.container, 0x20, containerOwner) ||
-                containerOwner != input.ped.nativePed + 0x6e4 || !D::At(value.container, 0x10, count) || count <= 0 ||
-                count > static_cast<std::int32_t>(P::FrameCapacity) || !D::At(value.container, 0x988, frameArrayCount) || frameArrayCount != count ||
-                !D::At(value.container, 0x98c, frameCapacity) || frameCapacity != static_cast<std::int32_t>(P::FrameCapacity))
+                containerOwner != (origin ? std::uintptr_t{0} : input.ped.nativePed + 0x6e4) || !D::At(value.container, 0x10, count) ||
+                (origin ? count < 0 : count <= 0) || count > static_cast<std::int32_t>(P::FrameCapacity) || !D::At(value.container, 0x988, frameArrayCount) ||
+                frameArrayCount != count || !D::At(value.container, 0x98c, frameCapacity) || frameCapacity != static_cast<std::int32_t>(P::FrameCapacity))
                 return ClockResult::BindingChanged;
             value.frameCount = static_cast<std::uint16_t>(count);
             for (std::size_t index = 0; index != value.frameCount; ++index)
@@ -328,8 +343,8 @@ namespace mta::game_de::NativeStaticAssociationInitializeCalls
                         return ClockResult::BindingChanged;
             }
             if (!M::Copy(input.association, value.row.data(), value.row.size()) || Field<std::uintptr_t>(value.row, 0) != image + P::StaticVtableRva ||
-                Field<std::uintptr_t>(value.row, 0x18) != input.hierarchy || !M::Disjoint(input.association, 32, value.container, P::ContainerBytes) ||
-                !M::Disjoint(input.association, 32, render, 0x310))
+                Field<std::uintptr_t>(value.row, 0x18) != (origin && !after ? std::uintptr_t{0} : input.hierarchy) ||
+                !M::Disjoint(input.association, 32, value.container, P::ContainerBytes) || !M::Disjoint(input.association, 32, render, 0x310))
                 return ClockResult::BindingChanged;
             // Readable actor/type bytes are insufficient once an item enters
             // retirement or its slot is reused. Extend the existing current
@@ -338,7 +353,12 @@ namespace mta::game_de::NativeStaticAssociationInitializeCalls
             for (std::size_t index = 0; index != value.world.count; ++index)
                 if (!D::Add(image, value.world.members[index].classAddress, value.world))
                     return ClockResult::BindingChanged;
-            if ((result = NativePedPoolReader({image}, owner).Recheck(input.ped)) != ClockResult::Ok)
+            if (origin)
+            {
+                if ((result = origin->Recheck()) != ClockResult::Ok)
+                    return result;
+            }
+            else if ((result = NativePedPoolReader({image}, owner).Recheck(input.ped)) != ClockResult::Ok)
                 return result;
             if (!D::Fence(image, value.world) || !Profile(image))
                 return ClockResult::BindingChanged;
@@ -352,10 +372,20 @@ namespace mta::game_de::NativeStaticAssociationInitializeCalls
             return std::memcmp(before.data(), after.data(), 8) == 0 && std::memcmp(before.data() + 0x0a, after.data() + 0x0a, 6) == 0 &&
                    std::memcmp(before.data() + 0x18, after.data() + 0x18, 8) == 0;
         }
-        ClockResult ObserveNodes(const Arguments& input, const Value& state, std::vector<std::uintptr_t>& output)
+        ClockResult ObserveNodes(const Arguments& input, const Value& state, std::vector<std::uintptr_t>& output, bool allowEmpty = false)
         {
             const auto nodes = Field<std::uintptr_t>(state.row, 0x10);
             const auto bytes = static_cast<std::size_t>(state.frameCount) * sizeof(std::uintptr_t);
+            if (allowEmpty && !state.frameCount)
+            {
+                // Original malloc(0) may return null or its own opaque tag.
+                // Preserve that observed tag without a zero-extent read or a
+                // fabricated allocation/free claim; the group owns the row.
+                if (Field<std::uint16_t>(state.row, 8) != 0)
+                    return ClockResult::BindingChanged;
+                output.clear();
+                return ClockResult::Ok;
+            }
             if (Field<std::uint16_t>(state.row, 8) != state.frameCount || !nodes || nodes % 8 || !M::PrivateWritable(nodes, bytes) ||
                 !M::Disjoint(nodes, bytes, input.association, 32) || !M::Disjoint(nodes, bytes, input.clump, 0x310) ||
                 !M::Disjoint(nodes, bytes, state.container, P::ContainerBytes) ||
@@ -409,8 +439,8 @@ namespace mta::game_de::NativeStaticAssociationInitializeCalls
         }
 #endif
     }
-    ClockResult Initialize(std::uintptr_t image, const Arguments& source, CheckOwner owner, RecheckArguments recheck, void* context, Receipt* output,
-                           Invoke invoke) noexcept
+    static ClockResult InitializeCore(std::uintptr_t image, const Arguments& source, CheckOwner owner, RecheckArguments recheck, void* context, Receipt* output,
+                                      Invoke invoke, const TemporaryOrigin* origin) noexcept
     {
         const Arguments input = source;
         Receipt         receipt;
@@ -440,14 +470,11 @@ namespace mta::game_de::NativeStaticAssociationInitializeCalls
             return finish(ClockResult::NotInitialized);
         if (!input.clump || !input.association || !input.hierarchy || input.association % 8 || input.hierarchy % 8)
             return finish(ClockResult::InvalidArgument);
-        if (!D::TryEnter())
-            return finish(ClockResult::Busy);
-        D::Scope scope;
         try
         {
             Value before, confirmed;
             auto  result = recheck(input, false, context);
-            if (result != ClockResult::Ok || (result = Capture(image, input, owner, before)) != ClockResult::Ok)
+            if (result != ClockResult::Ok || (result = Capture(image, input, owner, before, origin, false)) != ClockResult::Ok)
                 return finish(result);
             receipt.container = before.container;
             receipt.heap = before.heap.current;
@@ -457,7 +484,8 @@ namespace mta::game_de::NativeStaticAssociationInitializeCalls
             // without allocating nodes; only the real pointer0 phase is fresh.
             if (receipt.beforeNodes)
                 return finish(ClockResult::InvalidArgument);
-            if ((result = recheck(input, false, context)) != ClockResult::Ok || (result = Capture(image, input, owner, confirmed)) != ClockResult::Ok)
+            if ((result = recheck(input, false, context)) != ClockResult::Ok ||
+                (result = Capture(image, input, owner, confirmed, origin, false)) != ClockResult::Ok)
                 return finish(result);
             if (!Same(before, confirmed) || before.row != confirmed.row)
                 return finish(ClockResult::BindingChanged);
@@ -468,21 +496,32 @@ namespace mta::game_de::NativeStaticAssociationInitializeCalls
 #else
             const auto entry = invoke ? invoke : &NativeCall;
 #endif
+            if (origin)
+            {
+                if ((result = origin->Claim()) != ClockResult::Ok)
+                    return finish(result);
+                origin->Entered();
+            }
             receipt.entered = true;
             result = entry(reinterpret_cast<NativeFunction>(image + P::EntryRva), input.association, input.clump, input.hierarchy, receipt.exceptionCode);
             if (result != ClockResult::Ok)
                 return finish(result);
             receipt.returned = true;
             ObserveReceipt(input, receipt);
-            if ((result = Capture(image, input, owner, confirmed)) != ClockResult::Ok)
+            if ((result = Capture(image, input, owner, confirmed, origin, true)) != ClockResult::Ok)
                 return finish(result);
-            if (!Same(before, confirmed) || !DefinedRowPreserved(before.row, confirmed.row))
+            const bool rowPreserved = origin ? std::memcmp(before.row.data(), confirmed.row.data(), 8) == 0 &&
+                                                   std::memcmp(before.row.data() + 0x0a, confirmed.row.data() + 0x0a, 6) == 0 &&
+                                                   Field<std::uintptr_t>(before.row, 0x18) == 0 && Field<std::uintptr_t>(confirmed.row, 0x18) == input.hierarchy
+                                             : DefinedRowPreserved(before.row, confirmed.row);
+            if (!Same(before, confirmed) || !rowPreserved)
                 return finish(ClockResult::BindingChanged);
             std::vector<std::uintptr_t> nodes, finalNodes;
-            if ((result = ObserveNodes(input, confirmed, nodes)) != ClockResult::Ok || (result = recheck(input, true, context)) != ClockResult::Ok ||
-                (result = Capture(image, input, owner, before)) != ClockResult::Ok)
+            if ((result = ObserveNodes(input, confirmed, nodes, origin != nullptr)) != ClockResult::Ok ||
+                (result = recheck(input, true, context)) != ClockResult::Ok || (result = Capture(image, input, owner, before, origin, true)) != ClockResult::Ok)
                 return finish(result);
-            if (!Same(confirmed, before) || before.row != confirmed.row || (result = ObserveNodes(input, before, finalNodes)) != ClockResult::Ok)
+            if (!Same(confirmed, before) || before.row != confirmed.row ||
+                (result = ObserveNodes(input, before, finalNodes, origin != nullptr)) != ClockResult::Ok)
                 return finish(result == ClockResult::Ok ? ClockResult::BindingChanged : result);
             if (nodes != finalNodes)
                 return finish(ClockResult::BindingChanged);
@@ -496,5 +535,43 @@ namespace mta::game_de::NativeStaticAssociationInitializeCalls
         {
             return finish(ClockResult::ReadFailure);
         }
+    }
+    ClockResult Initialize(std::uintptr_t image, const Arguments& source, CheckOwner owner, RecheckArguments recheck, void* context, Receipt* output,
+                           Invoke invoke) noexcept
+    {
+        const Arguments input = source;
+        Receipt         receipt;
+        receipt.entryRva = P::EntryRva;
+        receipt.nativePed = input.ped.nativePed;
+        receipt.clump = input.clump;
+        receipt.association = input.association;
+        receipt.hierarchy = input.hierarchy;
+        const auto refused = [&](ClockResult result)
+        {
+            if (output)
+                *output = receipt;
+            return result;
+        };
+        if (!owner || !recheck)
+            return refused(ClockResult::NotInitialized);
+        if (!input.clump || !input.association || !input.hierarchy || input.association % 8 || input.hierarchy % 8)
+            return refused(ClockResult::InvalidArgument);
+        if (!D::TryEnter())
+            return refused(ClockResult::Busy);
+        D::Scope scope;
+        // Registered-ped callers retain their original public gate, Arguments,
+        // admission predicates and before/after H-preservation semantics.
+        return InitializeCore(image, input, owner, recheck, context, output, invoke, nullptr);
+    }
+}
+
+namespace mta::game_de
+{
+    ClockResult NativeStaticAssociationInitializeCoreAccess::Initialize(const NativeStaticAssociationTemporaryOrigin&    origin,
+                                                                        NativeStaticAssociationInitializeCalls::Receipt* output,
+                                                                        NativeStaticAssociationInitializeCalls::Invoke   invoke) noexcept
+    {
+        return NativeStaticAssociationInitializeCalls::InitializeCore(origin.image, origin.input, origin.owner, origin.recheckArguments,
+                                                                      const_cast<void*>(origin.context), output, invoke, &origin);
     }
 }

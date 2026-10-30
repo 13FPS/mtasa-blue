@@ -1,7 +1,7 @@
 /*****************************************************************************
  * PROJECT: Multi Theft Auto
  * LICENSE: See LICENSE in the repository root
- * PURPOSE: Preserve the actual const camera sphere method on the common SDK
+ * PURPOSE: Preserve the bounded actual camera operations on the common SDK
  *****************************************************************************/
 #pragma once
 #include "NativeCameraSphereVisibleAccess.h"
@@ -24,6 +24,8 @@ namespace mta::game_de
     {
     public:
         bool IsSphereVisible(CVector* center, float radius) const override;
+        BYTE GetActiveCam() override;
+        void Restore() override;
 
     protected:
         explicit CCameraSphereVisibleDE(NativeCameraSphereVisibleAccess& owner) noexcept : cameraOwner(owner) {}
@@ -31,7 +33,7 @@ namespace mta::game_de
     private:
         NativeCameraSphereVisibleAccess& cameraOwner;
     };
-    // One native observation supplies neither a full camera nor Reset/Fade,
+    // These bounded operations supply neither a full camera nor Reset/Fade,
     // target or transform ownership. All remaining actual SDK methods stay pure.
     static_assert(std::is_abstract_v<CCameraSphereVisibleDE> && std::is_base_of_v<CCamera, CCameraSphereVisibleDE>);
 }

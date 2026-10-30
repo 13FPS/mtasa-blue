@@ -1,11 +1,12 @@
 /*****************************************************************************
  * PROJECT: Multi Theft Auto
  * LICENSE: See LICENSE in the repository root
- * PURPOSE: Borrow the existing native owner for a camera sphere observation
+ * PURPOSE: Keep current camera observations and Restore on the existing owner
  *****************************************************************************/
 #pragma once
 #include <game/CGameClockService.h>
 #include <windows.h>
+#include <cstdint>
 #include <SharedUtil.Defines.h>
 #include <CVector.h>
 
@@ -18,6 +19,14 @@ namespace mta::game_de
         // native operation. An older owner cannot synthesize a visible or
         // invisible result from unsupported camera or ped state.
         virtual ClockResult ReadCameraSphereVisible(const CVector&, float, bool&) noexcept { return ClockResult::NotInitialized; }
+
+        // Current scalar reads stay with this same owner. A missing provider
+        // is not an absent camera, a clamped selector or the SDK's FOV default.
+        virtual ClockResult ReadCameraActiveIndex(std::uint8_t&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult ReadCameraFov(std::uint32_t, std::uint32_t&) noexcept { return ClockResult::NotInitialized; }
+        // Ordinary Restore is one distinct native effect. Older owners must
+        // refuse rather than substitute JumpCut, a field repair or a retry.
+        virtual ClockResult RestoreCamera() noexcept { return ClockResult::NotInitialized; }
 
     protected:
         ~NativeCameraSphereVisibleAccess() = default;

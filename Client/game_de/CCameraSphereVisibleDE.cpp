@@ -1,7 +1,7 @@
 /*****************************************************************************
  * PROJECT: Multi Theft Auto
  * LICENSE: See LICENSE in the repository root
- * PURPOSE: Fix caller sphere input before the current native camera owner runs
+ * PURPOSE: Route actual camera operations through the current native owner
  *****************************************************************************/
 #include "CCameraSphereVisibleDE.h"
 #include <stdexcept>
@@ -9,6 +9,25 @@
 
 namespace mta::game_de
 {
+    BYTE CCameraSphereVisibleDE::GetActiveCam()
+    {
+        std::uint8_t value = 0;
+        const auto   result = cameraOwner.ReadCameraActiveIndex(value);
+        if (result != ClockResult::Ok)
+            throw std::runtime_error("DE camera owner refused GetActiveCam: " + std::to_string(static_cast<unsigned>(result)));
+        // The actual MTA getter returns the raw selector BYTE. It does not
+        // clamp the observation to the three separately constructed Cam rows.
+        return value;
+    }
+    void CCameraSphereVisibleDE::Restore()
+    {
+        // Ordinary MTA Restore calls its original once and has no SDK extras.
+        // The retained owner holds any entered uncertainty; this method must
+        // propagate refusal without jumping, repairing fields or retrying.
+        const auto result = cameraOwner.RestoreCamera();
+        if (result != ClockResult::Ok)
+            throw std::runtime_error("DE camera owner refused Restore: " + std::to_string(static_cast<unsigned>(result)));
+    }
     bool CCameraSphereVisibleDE::IsSphereVisible(CVector* center, float radius) const
     {
         if (!center)

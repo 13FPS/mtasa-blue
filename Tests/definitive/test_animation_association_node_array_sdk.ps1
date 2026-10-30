@@ -20,7 +20,7 @@ $record = [ordered]@{
     schema='mta_animation_association_node_array_sdk_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     results=@();failure=$null;scratchDirectory=$scratchRoot;scratchFilesRemaining=$null;scratchRemoved=$false;
-    scope='Actual FreeAnimBlendNodeArray SDK dispatch only: one copied full generation/serial request, exact Require errors/default refusal, no observer read, pointer/count clearing, retirement alias or retry. Strict19real/3pure receiver. Shared unchanged; native known-release state and separate retirement pointer-clear ACK remain mandatory promotion prerequisites, not provided by this spy.';
+    scope='Actual FreeAnimBlendNodeArray SDK dispatch only: one copied full generation/serial request, exact Require errors/default refusal, no observer read, pointer/count clearing, retirement alias or retry. Strict22real/0pure receiver. Shared unchanged; native known-release state and separate retirement pointer-clear ACK remain mandatory promotion prerequisites, not provided by this spy.';
     ownedBuffersOnly=$true;nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;
     completeAnimationHierarchyReady=$false;fullMtaReady=$false;installationChanged=$false;
     actualAnimationAssociationNodeArraySdkTested=$false
@@ -102,7 +102,7 @@ try {
     . (Join-Path $PSScriptRoot 'Write-PrivateAnimationAssociationFixture.ps1')
     $generated=Join-Path $scratchRoot 'PrivateAnimationAssociationFixture.generated.h'
     $record['generatedFixture']=Write-PrivateAnimationAssociationFixture $taskRoot $generated
-    if($record.generatedFixture.rejectingMethods -ne 3 -or @($record.generatedFixture.inheritedProductionMethods).Count -ne 19){throw 'Actual association19/3fixture partition changed'}
+    if($record.generatedFixture.rejectingMethods -ne 0 -or @($record.generatedFixture.inheritedProductionMethods).Count -ne 22){throw 'Actual association22/0fixture partition changed'}
     $durableGenerated=Join-Path $outputRoot 'PrivateAnimationAssociationFixture.generated.h'
     Copy-Item -LiteralPath $generated -Destination $durableGenerated
     if((Sha $durableGenerated) -ne $record.generatedFixture.sha256){throw 'Generated group SDK fixture changed'}

@@ -80,6 +80,7 @@
 #include "NativeAnimationAssociationController.h"
 #include "NativeAnimationAssociationGroupCreationController.h"
 #include "NativeAnimationAssociationGroupCopy.h"
+#include "NativeAnimationAssociationClumpOrigin.h"
 #include "NativePedVelocityMemory.h"
 #include "NativePedReferenceController.h"
 #include "NativePedVitalsMemory.h"
@@ -194,6 +195,8 @@ namespace mta::game_de
         {
         public:
             ClockResult CreatePrivateAnimationAssociation(std::uint64_t, NativeAnimationAssociationReferenceToken&) noexcept override;
+            ClockResult ApplyPrivateAnimationAssociationClump(const NativeAnimationAssociationReferenceToken&, NativeAnimationAssociationClumpOperation,
+                                                              std::uintptr_t, std::uintptr_t, std::uintptr_t&) noexcept override;
             ClockResult ConstructPrivateAnimationAssociationFromStatic(const NativeAnimationAssociationReferenceToken&, std::uintptr_t,
                                                                        std::uintptr_t&) noexcept override;
             ClockResult ReadPrivateAnimationAssociation(const NativeAnimationAssociationReferenceToken&, NativeAnimationAssociationValues&) noexcept override;
@@ -666,6 +669,7 @@ namespace mta::game_de
             // Last completed command facts are diagnostic only. The actual
             // issued controller/storage record retains every native resource.
             NativeAnimationAssociationCalls::GroupCopyReceipt animationGroupCopy;
+            NativeAnimationAssociationCalls::ClumpReceipt     animationAssociationClump;
             NativeCustomAnimSequenceController                customSequences;
             // Empty module-owned hierarchy interfaces share this callback debt
             // group; no native publication or child-release authority is implied.
@@ -3188,6 +3192,52 @@ namespace mta::game_de
             if (result == ClockResult::Ok)
                 result = CheckPrivateAnimationAssociationRequest(next);
             FinishPrivateAnimationAssociation(requestedGeneration, result, receipt);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
+        }
+
+        ClockResult NativeAccess::ApplyPrivateAnimationAssociationClump(const NativeAnimationAssociationReferenceToken& source,
+                                                                        NativeAnimationAssociationClumpOperation operation, std::uintptr_t clump,
+                                                                        std::uintptr_t hierarchy, std::uintptr_t& output) noexcept
+        {
+            const auto request = source;
+            const auto requestedOperation = operation;
+            const auto requestedClump = clump, requestedHierarchy = hierarchy;
+            auto       result = CheckPrivateAnimationAssociationRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            const auto retained = runtime.customSequenceGeneration.load();
+            if (retained && retained != generation)
+                return ClockResult::OwnerConflict;
+            runtime.customSequenceGeneration.store(generation);
+            NativeAnimationAssociationCalls::ClumpReceipt            receipt;
+            std::uintptr_t                                           next = 0;
+            const auto                                               memory = PedReferenceMemory();
+            const NativeAnimationAssociationCalls::ClumpInvocations* invocations = nullptr;
+#ifdef MTA_DE_ANIMATION_ASSOCIATION_CLUMP_INVOCATIONS
+            // Tests replace only the final admitted typed entry, never its
+            // clump/provider/map/storage/owner qualification. Shipping has none.
+            invocations = MTA_DE_ANIMATION_ASSOCIATION_CLUMP_INVOCATIONS();
+#endif
+            result = NativeAnimationAssociationClumpOwnershipAccess::ApplyRegistered(
+                runtime.image, runtime.privateAssociations, runtime.privateHierarchies, runtime.pedReferences, memory, generation, request, requestedOperation,
+                requestedClump, requestedHierarchy, &CheckTimingOwner, next, &receipt, invocations);
+            // Preserve this call's fixed observations before a caller bookend
+            // can revoke admission. Only storage owns node/H release authority.
+            runtime.animationAssociationClump = receipt;
+            if (result == ClockResult::Ok)
+            {
+                if (!receipt.originalEntered || !receipt.originalReturned || !receipt.verified ||
+                    (requestedOperation != NativeAnimationAssociationClumpOperation::Initialize && next != receipt.receiver))
+                    result = ClockResult::BindingChanged;
+                if (result == ClockResult::Ok)
+                    result = CheckPrivateAnimationAssociationRequest(request);
+            }
+            PublishCustomAnimationSequenceDebt(generation);
+            if ((receipt.hadEffects && result != ClockResult::Ok) || runtime.privateAssociations.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
             if (result == ClockResult::Ok)
                 output = next;
             return result;

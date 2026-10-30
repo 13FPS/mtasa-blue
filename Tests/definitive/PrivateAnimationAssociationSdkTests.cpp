@@ -25,7 +25,7 @@ static_assert(std::is_same_v<decltype(static_cast<StaticConstructor>(&PrivateAni
 static_assert(std::is_same_v<decltype(&PrivateAnimationAssociationReceiver::GetInterface), decltype(&CAnimBlendAssociationDE::GetInterface)>);
 static_assert(std::is_same_v<decltype(&PrivateAnimationAssociationReceiver::IsPartial), decltype(&CAnimBlendAssociationDE::IsPartial)>);
 static_assert(std::is_same_v<decltype(&PrivateAnimationAssociationReceiver::SetCurrentSpeed), decltype(&CAnimBlendAssociationDE::SetCurrentSpeed)>);
-static_assert(std::is_abstract_v<CAnimBlendAssociationDE> && !std::is_abstract_v<PrivateAnimationAssociationReceiver>);
+static_assert(!std::is_abstract_v<CAnimBlendAssociationDE> && !std::is_abstract_v<PrivateAnimationAssociationReceiver>);
 namespace
 {
     unsigned checks = 0;

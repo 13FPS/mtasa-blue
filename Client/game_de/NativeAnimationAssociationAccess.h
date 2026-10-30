@@ -6,6 +6,7 @@
 #pragma once
 #include <game/CGameClockService.h>
 #include "NativeAnimationHierarchyAccess.h"
+#include "NativeAnimationAssociationClumpTypes.h"
 #include <cstdint>
 namespace mta::game_de
 {
@@ -23,6 +24,14 @@ namespace mta::game_de
     class NativeAnimationAssociationAccess
     {
     public:
+        // Raw clump/H tags request one jointly admitted operation on this
+        // actual issued receiver. Only the same native owner resolves their
+        // origins, resource phases and accepted default/native-call prefix.
+        virtual ClockResult ApplyPrivateAnimationAssociationClump(const NativeAnimationAssociationReferenceToken&, NativeAnimationAssociationClumpOperation,
+                                                                  std::uintptr_t, std::uintptr_t, std::uintptr_t&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
         // Creation issues unconstructed native104 storage. Only the private
         // owner may transition it after a genuine constructor ACK; a raw tag
         // or a buffer of the same size is never adopted as that authority.

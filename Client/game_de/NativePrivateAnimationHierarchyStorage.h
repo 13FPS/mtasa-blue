@@ -39,6 +39,12 @@ namespace mta::game_de
 
     private:
         friend struct NativePrivateAnimationHierarchyStorageAccess;
+        friend class NativePrivateAnimationHierarchyController;
+        // Only that actual controller's held dependent can reach this reader.
+        // It reuses the real snapshot/definedness rules without a second gate.
+        ClockResult ReadForAssociationHeld(std::uintptr_t, std::uint64_t, ClockResult (*)() noexcept, NativeAnimationHierarchyValues&,
+                                           std::uintptr_t&) const noexcept;
+
         alignas(std::uintptr_t) std::array<unsigned char, 40> bytes;
         std::uint64_t generation;
         // These acknowledged source-owned fields distinguish legitimate private

@@ -11,6 +11,7 @@ namespace mta::game_de
 {
     struct NativeTemporaryModelClumpAccess;
     struct NativeStaticAssociationInitializeOwnershipAccess;
+    struct NativeAnimationAssociationClumpOwnershipAccess;
     namespace NativeStreamingCompletionContext
     {
         struct Value;
@@ -54,6 +55,7 @@ namespace mta::game_de
     private:
         friend struct NativeTemporaryModelClumpAccess;
         friend struct NativeStaticAssociationInitializeOwnershipAccess;
+        friend struct NativeAnimationAssociationClumpOwnershipAccess;
         std::atomic<State>                     state{State::Empty};
         std::atomic<bool>                      outstanding{false};
         std::uint64_t                          generation = 0;
@@ -72,6 +74,7 @@ namespace mta::game_de
     private:
         friend struct NativeTemporaryModelClumpAccess;
         friend struct NativeStaticAssociationInitializeOwnershipAccess;
+        friend struct NativeAnimationAssociationClumpOwnershipAccess;
         NativeTemporaryModelClumpBorrow() noexcept = default;
         // The joint initializer borrows the original synchronous snapshots;
         // it cannot replace them with a raw actor or extend their lifetime.

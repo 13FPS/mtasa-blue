@@ -6,6 +6,7 @@
 #pragma once
 #include "NativePrivateAnimationHierarchyStorage.h"
 #include "NativeCustomAnimSequenceController.h"
+#include "NativeAnimationAssociationHierarchyDependency.h"
 #include <list>
 namespace mta::game_de
 {
@@ -51,6 +52,18 @@ namespace mta::game_de
 
     private:
         friend class NativeCustomAnimSequenceController;
+        friend struct NativeAnimationAssociationStorageAccess;
+        friend struct NativeAnimationAssociationClumpOwnershipAccess;
+        ClockResult HoldForAssociation(std::uintptr_t, const Token&, NativeAnimationAssociationHierarchyDependency&, CheckOwner,
+                                       NativeAnimationAssociationHierarchyDependencyReceipt*) noexcept;
+        ClockResult RecheckForAssociation(std::uintptr_t, const NativeAnimationAssociationHierarchyDependency&, CheckOwner,
+                                          NativeAnimationAssociationHierarchyDependencyReceipt*) noexcept;
+        ClockResult ReadForAssociation(std::uintptr_t, const NativeAnimationAssociationHierarchyDependency&, CheckOwner, Values&, std::uintptr_t&) noexcept;
+        ClockResult ReleaseForAssociation(std::uintptr_t, NativeAnimationAssociationHierarchyDependency&, const NativeAnimationAssociationHierarchyRelease&,
+                                          CheckOwner, NativeAnimationAssociationHierarchyDependencyReceipt*) noexcept;
+        static void AssociationReceipt(const NativeAnimationAssociationHierarchyDependency&, ClockResult,
+                                       NativeAnimationAssociationHierarchyDependencyReceipt*) noexcept;
+
         ClockResult ReadCleanupIssue(const Token&, std::uint64_t&) noexcept;
         ClockResult ClaimCleanupIntent(const Token&, std::uintptr_t, std::uint64_t) noexcept;
         ClockResult VerifyCleanupHeld(const NativeAnimationSequenceDependencyCalls::Epoch&, const Token&, std::uint64_t, CheckOwner) noexcept;
@@ -77,18 +90,28 @@ namespace mta::game_de
             SequenceOwner::PrivateDependencyReceipt dependency{};
             bool                                    active = false;
         };
+        struct AssociationDependent
+        {
+            const NativeAnimationAssociationHierarchyDependency* identity;
+            const NativeAnimationAssociationStorage*             target;
+            NativeAnimationAssociationReferenceToken             receiver;
+            std::uint64_t                                        command;
+        };
         struct Entry
         {
             explicit Entry(std::uint64_t generation) noexcept : storage(generation) {}
-            Storage           storage;
-            std::uint64_t     issue = 0;
-            Link              link;
-            bool              issued = false;
-            std::uint64_t     cleanupCommand = 0;
-            bool              cleanupHadLink = false;
-            std::atomic<bool> cleanupReleased{false};
+            Storage                         storage;
+            std::list<AssociationDependent> associations;
+            std::uint64_t                   issue = 0;
+            Link                            link;
+            bool                            issued = false;
+            std::uint64_t                   cleanupCommand = 0;
+            bool                            cleanupHadLink = false;
+            std::atomic<bool>               cleanupReleased{false};
         };
         using Entries = std::list<Entry>;
+        static bool       HasAssociationDependents(const Entry&) noexcept;
+        bool              AssociationBinding(const Entry&, const NativeAnimationAssociationHierarchyDependency&) const noexcept;
         Entries::iterator Find(const Token&) noexcept;
         ClockResult       SetScalar(std::uintptr_t, const Token&, NativePrivateAnimationHierarchyCalls::ScalarOperation, std::uint32_t, CheckOwner,
                                     Receipt*) noexcept;

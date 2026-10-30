@@ -50,16 +50,255 @@ namespace mta::game_de
         if (entries.empty())
             stopping = false;
         retained.store(!entries.empty(), std::memory_order_release);
-        const bool fault = std::any_of(entries.begin(), entries.end(),
-                                       [](const Entry& entry)
-                                       {
-                                           const auto state = entry.storage.GetState();
-                                           return state == Storage::State::Failed || state == Storage::State::PublicationPinned ||
-                                                  state == Storage::State::Entered ||
-                                                  (entry.link.active && (entry.link.phase != LinkPhase::AttachedAccepted || entry.link.dependency.uncertain));
-                                       });
+        const bool fault =
+            std::any_of(entries.begin(), entries.end(),
+                        [](const Entry& entry)
+                        {
+                            const auto state = entry.storage.GetState();
+                            return state == Storage::State::Failed || state == Storage::State::PublicationPinned || state == Storage::State::Entered ||
+                                   std::any_of(entry.associations.begin(), entry.associations.end(),
+                                               [](const AssociationDependent& dependent)
+                                               {
+                                                   return !dependent.identity ||
+                                                          dependent.identity->GetState() == NativeAnimationAssociationHierarchyDependency::State::Uncertain;
+                                               }) ||
+                                   (entry.link.active && (entry.link.phase != LinkPhase::AttachedAccepted || entry.link.dependency.uncertain));
+                        });
         recovery.store(!entries.empty() && (stopping || fault), std::memory_order_release);
     }
+    void NativePrivateAnimationHierarchyController::AssociationReceipt(const NativeAnimationAssociationHierarchyDependency& dependency, ClockResult result,
+                                                                       NativeAnimationAssociationHierarchyDependencyReceipt* output) noexcept
+    {
+        if (!output)
+            return;
+        NativeAnimationAssociationHierarchyDependencyReceipt next;
+        next.receiverGeneration = dependency.receiver.ownerGeneration;
+        next.receiverSerial = dependency.receiver.serial;
+        next.command = dependency.command;
+        next.hierarchyIssue = dependency.hierarchyIssue;
+        next.hierarchy = dependency.hierarchy.locator;
+        next.sequences = dependency.sequences;
+        const auto state = dependency.GetState();
+        next.planned = dependency.command && dependency.receiver.ownerGeneration && dependency.receiver.serial;
+        next.held = state == NativeAnimationAssociationHierarchyDependency::State::Held;
+        next.releaseEntered = state == NativeAnimationAssociationHierarchyDependency::State::ReleaseEntered ||
+                              state == NativeAnimationAssociationHierarchyDependency::State::Released;
+        next.released = state == NativeAnimationAssociationHierarchyDependency::State::Released;
+        next.uncertain = state == NativeAnimationAssociationHierarchyDependency::State::Uncertain;
+        next.verified = result == ClockResult::Ok;
+        next.result = result;
+        *output = next;
+    }
+    bool NativePrivateAnimationHierarchyController::HasAssociationDependents(const Entry& entry) noexcept
+    {
+        return !entry.associations.empty();
+    }
+    bool NativePrivateAnimationHierarchyController::AssociationBinding(const Entry&                                         entry,
+                                                                       const NativeAnimationAssociationHierarchyDependency& dependency) const noexcept
+    {
+        const auto record = std::find_if(entry.associations.begin(), entry.associations.end(),
+                                         [&](const AssociationDependent& value) { return value.identity == &dependency; });
+        if (record == entry.associations.end() || dependency.controller != this || dependency.hierarchyIssue != entry.issue ||
+            dependency.hierarchy.ownerGeneration != entry.storage.OwnerGeneration() || dependency.hierarchy.locator != entry.storage.Address() ||
+            record->target != dependency.target || record->receiver.ownerGeneration != dependency.receiver.ownerGeneration ||
+            record->receiver.serial != dependency.receiver.serial || record->command != dependency.command)
+            return false;
+        return true;
+    }
+    ClockResult NativePrivateAnimationHierarchyController::HoldForAssociation(std::uintptr_t image, const Token& requested,
+                                                                              NativeAnimationAssociationHierarchyDependency& dependency, CheckOwner owner,
+                                                                              NativeAnimationAssociationHierarchyDependencyReceipt* output) noexcept
+    {
+        using State = NativeAnimationAssociationHierarchyDependency::State;
+        if (output)
+            *output = {};
+        const auto finish = [&](ClockResult value)
+        {
+            AssociationReceipt(dependency, value, output);
+            return value;
+        };
+        if (!owner)
+            return finish(ClockResult::NotInitialized);
+        auto result = owner();
+        if (result != ClockResult::Ok)
+            return finish(result);
+        if (!image || !requested.ownerGeneration || !requested.locator || !dependency.target || !dependency.receiver.serial || !dependency.command ||
+            dependency.receiver.ownerGeneration != requested.ownerGeneration || dependency.GetState() != State::Planned || dependency.controller)
+            return finish(ClockResult::OwnerConflict);
+        if (operation.test_and_set(std::memory_order_acquire))
+            return finish(ClockResult::Busy);
+        PrivateHierarchyControllerDetail::Scope held{operation};
+        if (stopping)
+            return finish(ClockResult::OwnerConflict);
+        const auto entry = Find(requested);
+        if (entry == entries.end() || !entry->issue)
+            return finish(ClockResult::BindingChanged);
+        if (entry->cleanupCommand || entry->storage.GetState() != Storage::State::Ready ||
+            (entry->link.active && (entry->link.phase != LinkPhase::AttachedAccepted || !entry->link.dependency.reserved || !entry->link.dependency.verified ||
+                                    entry->link.dependency.released || entry->link.dependency.uncertain)))
+            return finish(ClockResult::OwnerConflict);
+        if ((result = owner()) != ClockResult::Ok)
+            return finish(result);
+        // Allocate the actual hierarchy's dependent record before defaults or
+        // original entry. It owns no native ref and never acquires a gate.
+        try
+        {
+            entry->associations.push_back({&dependency, dependency.target, dependency.receiver, dependency.command});
+        }
+        catch (...)
+        {
+            return finish(ClockResult::WriteFailure);
+        }
+        dependency.controller = this;
+        dependency.image = image;
+        dependency.hierarchy = requested;
+        dependency.hierarchyIssue = entry->issue;
+        dependency.hadSequenceLink = entry->link.active;
+        dependency.sequences = entry->link.active ? entry->link.key.arrayTag : 0;
+        dependency.sequenceCommand = entry->link.active ? entry->link.key.command : 0;
+        dependency.state.store(State::Held, std::memory_order_release);
+        Publish();
+        return finish(owner());
+    }
+    ClockResult NativePrivateAnimationHierarchyController::RecheckForAssociation(std::uintptr_t                                        image,
+                                                                                 const NativeAnimationAssociationHierarchyDependency&  dependency,
+                                                                                 CheckOwner                                            owner,
+                                                                                 NativeAnimationAssociationHierarchyDependencyReceipt* output) noexcept
+    {
+        using State = NativeAnimationAssociationHierarchyDependency::State;
+        if (output)
+            *output = {};
+        const auto finish = [&](ClockResult value)
+        {
+            AssociationReceipt(dependency, value, output);
+            return value;
+        };
+        if (!owner)
+            return finish(ClockResult::NotInitialized);
+        auto result = owner();
+        if (result != ClockResult::Ok)
+            return finish(result);
+        if (image != dependency.image || dependency.controller != this || (dependency.GetState() != State::Held && dependency.GetState() != State::Uncertain))
+            return finish(ClockResult::OwnerConflict);
+        if (operation.test_and_set(std::memory_order_acquire))
+            return finish(ClockResult::Busy);
+        PrivateHierarchyControllerDetail::Scope held{operation};
+        const auto                              entry = Find(dependency.hierarchy);
+        if (entry == entries.end() || !AssociationBinding(*entry, dependency))
+            return finish(ClockResult::BindingChanged);
+        if (entry->cleanupCommand || entry->storage.GetState() != Storage::State::Ready || entry->link.active != dependency.hadSequenceLink ||
+            (entry->link.active && (entry->link.phase != LinkPhase::AttachedAccepted || entry->link.key.arrayTag != dependency.sequences ||
+                                    entry->link.key.command != dependency.sequenceCommand || !entry->link.dependency.reserved ||
+                                    !entry->link.dependency.verified || entry->link.dependency.released || entry->link.dependency.uncertain)))
+            return finish(ClockResult::OwnerConflict);
+        return finish(owner());
+    }
+    ClockResult NativePrivateAnimationHierarchyController::ReadForAssociation(std::uintptr_t                                       image,
+                                                                              const NativeAnimationAssociationHierarchyDependency& dependency, CheckOwner owner,
+                                                                              Values& output, std::uintptr_t& sequencesOutput) noexcept
+    {
+        using State = NativeAnimationAssociationHierarchyDependency::State;
+        if (!owner)
+            return ClockResult::NotInitialized;
+        auto result = owner();
+        if (result != ClockResult::Ok)
+            return result;
+        if (image != dependency.image || dependency.controller != this || (dependency.GetState() != State::Held && dependency.GetState() != State::Uncertain))
+            return ClockResult::OwnerConflict;
+        if (operation.test_and_set(std::memory_order_acquire))
+            return ClockResult::Busy;
+        PrivateHierarchyControllerDetail::Scope held{operation};
+        const auto                              entry = Find(dependency.hierarchy);
+        if (entry == entries.end() || !AssociationBinding(*entry, dependency))
+            return ClockResult::BindingChanged;
+        if (entry->cleanupCommand || entry->storage.GetState() != Storage::State::Ready || entry->link.active != dependency.hadSequenceLink ||
+            (entry->link.active && (entry->link.phase != LinkPhase::AttachedAccepted || entry->link.key.arrayTag != dependency.sequences ||
+                                    entry->link.key.command != dependency.sequenceCommand || !entry->link.dependency.reserved ||
+                                    !entry->link.dependency.verified || entry->link.dependency.released || entry->link.dependency.uncertain)))
+            return ClockResult::OwnerConflict;
+        Values         next;
+        std::uintptr_t sequencesValue = 0;
+        // Snapshot/definedness are the existing real private storage rules.
+        // The exact held record replaces neither sequence ownership nor the
+        // caller's already-held native scope with a public raw read path.
+        result = entry->storage.ReadForAssociationHeld(image, dependency.hierarchy.ownerGeneration, owner, next, sequencesValue);
+        Publish();
+        if (result != ClockResult::Ok)
+            return result;
+        if (next.interfaceAddress != dependency.hierarchy.locator || sequencesValue != dependency.sequences)
+            return ClockResult::BindingChanged;
+        if ((result = owner()) != ClockResult::Ok)
+            return result;
+        output = next;
+        sequencesOutput = sequencesValue;
+        return ClockResult::Ok;
+    }
+    ClockResult NativePrivateAnimationHierarchyController::ReleaseForAssociation(std::uintptr_t                                    image,
+                                                                                 NativeAnimationAssociationHierarchyDependency&    dependency,
+                                                                                 const NativeAnimationAssociationHierarchyRelease& proof, CheckOwner owner,
+                                                                                 NativeAnimationAssociationHierarchyDependencyReceipt* output) noexcept
+    {
+        using State = NativeAnimationAssociationHierarchyDependency::State;
+        using Reason = NativeAnimationAssociationHierarchyRelease::Reason;
+        if (output)
+            *output = {};
+        const auto finish = [&](ClockResult value)
+        {
+            AssociationReceipt(dependency, value, output);
+            return value;
+        };
+        if (!owner)
+            return finish(ClockResult::NotInitialized);
+        auto result = owner();
+        if (result != ClockResult::Ok)
+            return finish(result);
+        if (image != dependency.image || dependency.controller != this || proof.target != &dependency || !proof.command || proof.command < dependency.command ||
+            (dependency.GetState() != State::Held && dependency.GetState() != State::Uncertain))
+            return finish(ClockResult::OwnerConflict);
+        if (operation.test_and_set(std::memory_order_acquire))
+            return finish(ClockResult::Busy);
+        PrivateHierarchyControllerDetail::Scope held{operation};
+        const auto                              entry = Find(dependency.hierarchy);
+        if (entry == entries.end() || !AssociationBinding(*entry, dependency))
+            return finish(ClockResult::BindingChanged);
+        if (proof.reason == Reason::HierarchyReplaced)
+        {
+            if (!proof.replacementHierarchy || proof.replacementHierarchy == dependency.hierarchy.locator)
+                return finish(ClockResult::OwnerConflict);
+            if (proof.replacement)
+            {
+                const auto& replacement = *proof.replacement;
+                const auto  next = Find(replacement.hierarchy);
+                if (next == entries.end() || !AssociationBinding(*next, replacement) || !replacement.IsHeld() || replacement.target != dependency.target ||
+                    replacement.receiver.ownerGeneration != dependency.receiver.ownerGeneration || replacement.receiver.serial != dependency.receiver.serial ||
+                    replacement.image != image || replacement.hierarchy.locator != proof.replacementHierarchy)
+                    return finish(ClockResult::OwnerConflict);
+            }
+            // A null replacement dependency means the closed actual storage
+            // proof verified a bank origin; it never adopts a private raw H.
+        }
+        else if (proof.reason == Reason::ReceiverRetired || proof.reason == Reason::UnenteredNewHoldCancellation)
+        {
+            if (proof.replacementHierarchy || proof.replacement ||
+                (proof.reason == Reason::UnenteredNewHoldCancellation && dependency.GetState() != State::Held))
+                return finish(ClockResult::OwnerConflict);
+        }
+        else
+            return finish(ClockResult::InvalidArgument);
+        if ((result = owner()) != ClockResult::Ok)
+            return finish(result);
+        dependency.state.store(State::ReleaseEntered, std::memory_order_release);
+        const auto record = std::find_if(entry->associations.begin(), entry->associations.end(),
+                                         [&](const AssociationDependent& value) { return value.identity == &dependency; });
+        entry->associations.erase(record);
+        // The known CPU release precedes the final fallible owner bookend.
+        // NodesReleased never reaches this path without an independent closed
+        // replacement/retirement/cancellation proof from actual storage.
+        dependency.state.store(State::Released, std::memory_order_release);
+        Publish();
+        return finish(owner());
+    }
+
     ClockResult NativePrivateAnimationHierarchyController::ResolvePrivate(std::uintptr_t image, std::uint64_t generation, std::uintptr_t locator,
                                                                           CheckOwner owner, Token& output) noexcept
     {
@@ -136,6 +375,9 @@ namespace mta::game_de
         const auto entry = Find(token);
         if (entry == entries.end())
             return ClockResult::BindingChanged;
+        // A live dynamic receiver still observes H even after node release.
+        if (HasAssociationDependents(*entry))
+            return ClockResult::OwnerConflict;
         if (entry->cleanupCommand)
             return ClockResult::OwnerConflict;
         if (entry->link.active)
@@ -166,6 +408,18 @@ namespace mta::game_de
             if (entry->cleanupCommand)
                 return ClockResult::OwnerConflict;
             linked = entry->link.active;
+            if (HasAssociationDependents(*entry) && kind == NativePrivateAnimationHierarchyCalls::ScalarOperation::SequenceCount && !linked)
+            {
+                Values     current;
+                const auto observed = PrivateHierarchyControllerDetail::Calls::Read(image, entry->storage, token.ownerGeneration, owner, current);
+                if (observed != ClockResult::Ok)
+                {
+                    Publish();
+                    return observed;
+                }
+                if (current.sequenceCount != static_cast<std::uint16_t>(bits))
+                    return ClockResult::OwnerConflict;
+            }
             if (!linked)
             {
                 ClockResult result;
@@ -339,6 +593,9 @@ namespace mta::game_de
         if (entry->cleanupCommand && entry->cleanupCommand != context.cleanupCommand)
             return ClockResult::OwnerConflict;
         auto& link = entry->link;
+        if (HasAssociationDependents(*entry) && (context.action == Action::Detach || context.action == Action::Cancel ||
+                                                 (context.action == Action::Attach && link.phase != LinkPhase::AttachedAccepted)))
+            return ClockResult::OwnerConflict;
         if (!SequenceOwner::SamePrivateKey(link.key, context.key) || epoch.Generation() != context.token.ownerGeneration ||
             array.IssuedTag() != link.key.arrayTag)
             return ClockResult::OwnerConflict;
@@ -466,7 +723,18 @@ namespace mta::game_de
             return finish(Native::PostProcessHeld(epoch, entry->storage, context.postProcess, context.owner, &ValidatePayloadHeld, &context,
                                                   &context.postReceipt, context.invokePostProcess));
         if (context.action == Action::Scalar)
+        {
+            if (HasAssociationDependents(*entry) && context.scalar == NativePrivateAnimationHierarchyCalls::ScalarOperation::SequenceCount)
+            {
+                Values     current;
+                const auto observed = Native::ReadHeld(epoch, entry->storage, context.owner, current);
+                if (observed != ClockResult::Ok)
+                    return finish(observed);
+                if (current.sequenceCount != static_cast<std::uint16_t>(context.bits))
+                    return finish(ClockResult::OwnerConflict);
+            }
             return finish(Native::SetScalarHeld(epoch, entry->storage, context.scalar, context.bits, context.owner, &context.receipt));
+        }
         auto result = Native::ReadHeld(epoch, entry->storage, context.owner, context.values);
         if (result != ClockResult::Ok)
             return finish(result);
@@ -543,6 +811,12 @@ namespace mta::game_de
                 return ClockResult::BindingChanged;
             if (entry->cleanupCommand && entry->cleanupCommand != cleanupCommand)
                 return ClockResult::OwnerConflict;
+            if (HasAssociationDependents(*entry))
+            {
+                const auto current = entry->link.active ? entry->link.key.arrayTag : std::uintptr_t{0};
+                if (requested != current || (entry->link.active && entry->link.phase != LinkPhase::AttachedAccepted))
+                    return ClockResult::OwnerConflict;
+            }
             if (!entry->link.active)
             {
                 if (!requested)
@@ -733,6 +1007,8 @@ namespace mta::game_de
             const auto                              entry = Find(token);
             if (entry == entries.end())
                 return ClockResult::BindingChanged;
+            if (HasAssociationDependents(*entry))
+                return ClockResult::OwnerConflict;
             if (entry->cleanupCommand)
                 return ClockResult::OwnerConflict;
             linked = entry->link.active;
@@ -747,7 +1023,7 @@ namespace mta::game_de
             return ClockResult::Busy;
         PrivateHierarchyControllerDetail::Scope held{operation};
         const auto                              entry = Find(token);
-        if (entry == entries.end() || entry->link.active)
+        if (entry == entries.end() || entry->link.active || HasAssociationDependents(*entry))
             return ClockResult::OwnerConflict;
         Receipt receipt;
         auto    result = PrivateHierarchyControllerDetail::Calls::Retire(image, entry->storage, token.ownerGeneration, owner, &receipt);
@@ -779,6 +1055,9 @@ namespace mta::game_de
         const auto                              entry = Find(token);
         if (entry == entries.end())
             return ClockResult::BindingChanged;
+        // A live dynamic receiver still observes H even after node release.
+        if (HasAssociationDependents(*entry))
+            return ClockResult::OwnerConflict;
         if (entry->cleanupCommand)
             return ClockResult::OwnerConflict;
         const auto result = PrivateHierarchyControllerDetail::Calls::PinPublication(entry->storage, token.ownerGeneration);
@@ -818,7 +1097,7 @@ namespace mta::game_de
                     break;
                 auto entry = entries.begin();
                 ++progress.scanned;
-                if (entry->cleanupCommand)
+                if (entry->cleanupCommand || HasAssociationDependents(*entry))
                 {
                     entries.splice(entries.end(), entries, entry);
                     continue;
@@ -889,6 +1168,9 @@ namespace mta::game_de
         const auto                              entry = Find(token);
         if (entry == entries.end())
             return ClockResult::BindingChanged;
+        // A live dynamic receiver still observes H even after node release.
+        if (HasAssociationDependents(*entry))
+            return ClockResult::OwnerConflict;
         if (entry->cleanupCommand)
             return entry->cleanupCommand == command ? ClockResult::Ok : ClockResult::OwnerConflict;
         const auto state = entry->storage.GetState();
@@ -912,6 +1194,8 @@ namespace mta::game_de
         const auto                              entry = Find(token);
         if (entry == entries.end() || entry->cleanupCommand != command || !command)
             return ClockResult::BindingChanged;
+        if (HasAssociationDependents(*entry))
+            return ClockResult::OwnerConflict;
         ClockResult result;
         if (!entry->link.active)
         {
@@ -955,6 +1239,8 @@ namespace mta::game_de
             const auto                              entry = Find(token);
             if (entry == entries.end() || !command || entry->cleanupCommand != command)
                 return ClockResult::BindingChanged;
+            if (HasAssociationDependents(*entry))
+                return ClockResult::OwnerConflict;
             if (!entry->link.active)
             {
                 if (entry->cleanupHadLink && !entry->cleanupReleased)
@@ -1003,7 +1289,7 @@ namespace mta::game_de
             return ClockResult::Busy;
         PrivateHierarchyControllerDetail::Scope held{operation};
         const auto                              entry = Find(token);
-        if (entry == entries.end() || !command || entry->cleanupCommand != command || entry->link.active)
+        if (entry == entries.end() || !command || entry->cleanupCommand != command || entry->link.active || HasAssociationDependents(*entry))
             return ClockResult::BindingChanged;
         const auto result = PrivateHierarchyControllerDetail::Calls::Retire(image, entry->storage, token.ownerGeneration, owner, &output);
         // Preserve the actual CPU retirement receipt before erasure. No native

@@ -2710,7 +2710,14 @@ namespace PresentTransitionWeatherFault
 #pragma push_macro("_InterlockedCompareExchange")
 #define _InterlockedCompareExchange16 ClockTestFaults::WeatherCompareExchange16
 #define _InterlockedCompareExchange   ClockTestFaults::WeatherCompareExchange32
+#include "../../Client/game_de/NativeAnimationAssociationClumpTypes.h"
+namespace ClockDynamicClumpInvokeTest
+{
+    const mta::game_de::NativeAnimationAssociationCalls::ClumpInvocations* Supplier() noexcept;
+}
+#define MTA_DE_ANIMATION_ASSOCIATION_CLUMP_INVOCATIONS() ::ClockDynamicClumpInvokeTest::Supplier()
 #include "../../Client/game_de/NativeClockService.cpp"
+#undef MTA_DE_ANIMATION_ASSOCIATION_CLUMP_INVOCATIONS
 #pragma pop_macro("_InterlockedCompareExchange")
 #pragma pop_macro("_InterlockedCompareExchange16")
 #pragma pop_macro("_InterlockedCompareExchange8")
@@ -8625,6 +8632,8 @@ namespace
 #include "NativeAnimationAssociationFloatOwnerTests.inl"
 #include "NativeAnimationAssociationProgressOwnerTests.inl"
 #include "NativeAnimationAssociationNodeArrayOwnerTests.inl"
+// The combined fixture uses the node-release guard state defined above.
+#include "NativeDynamicClumpOwnerTests.inl"
 
 // The strict receiver must execute production typed tickets and the distinct
 // metadata-only delete route. Deleting an interface acknowledges only its own
@@ -8774,6 +8783,16 @@ int main(int argc, char** argv)
         staticAssociationInitializationUnknown || (argc == 3 && std::strcmp(argv[2], "--static-association-initialization-success") == 0);
     const bool animationStaticAssociationReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-static-association-reads") == 0;
     const bool animationAssociationGroupReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-association-group-reads") == 0;
+    const bool dynamicClumpOnly = argc == 3 && std::strncmp(argv[2], "--dynamic-clump-", 16) == 0;
+    unsigned   dynamicClumpScenario = 11;
+    if (dynamicClumpOnly)
+    {
+        const char* names[] = {"success",           "zero",      "copy-ref",      "private-h",   "original-unknown", "defaults-unknown", "owner-loss",
+                               "private-h-unknown", "temporary", "static-public", "static-joint"};
+        for (unsigned n = 0; n != 11; ++n)
+            if (std::strcmp(argv[2] + 16, names[n]) == 0)
+                dynamicClumpScenario = n;
+    }
     const bool groupFactoriesOnly = argc == 3 && std::strcmp(argv[2], "--animation-association-group-factories") == 0;
     const bool groupSourceCreationOnly = argc == 3 && std::strncmp(argv[2], "--group-source-creation-", 24) == 0;
     unsigned   groupSourceCreationScenario = 0;
@@ -8943,10 +8962,11 @@ int main(int argc, char** argv)
            freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly || customAnimationCleanupOnly ||
            standaloneSequenceOperationsOnly || animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly ||
            animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly || animationGroupValidityOnly ||
-           animationIdValidityOnly || animationAssociationGroupReadsOnly || groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly ||
-           groupReplacementOnly || groupCopyAnimationOnly || groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly ||
-           animationAssociationGroupOffsetOnly || animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly ||
-           pedRenderOnly || privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
+           animationIdValidityOnly || animationAssociationGroupReadsOnly || dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly ||
+           jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly || groupEmptyInitializationOnly ||
+           animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly || animationStaticAssociationReadsOnly ||
+           staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly || privateAssociationsOnly || associationBonesOnly ||
+           associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
     if (presentTransitionClockOnly)
@@ -9124,6 +9144,29 @@ int main(int argc, char** argv)
         fixture.Create(argv[1]);
         // One real module-pinned lifetime needs one pristine host process.
         NativeAnimationBlocksOwnedSdk(fixture, &AnimationAssociationGroupChildProductsOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (dynamicClumpOnly)
+    {
+        Check(dynamicClumpScenario < 11, "exact finite dynamic clump scenario is required");
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        if (dynamicClumpScenario == 9)
+        {
+            StaticAssociationInitializationOwnerFixture::scenario = 0;
+            NativeAnimationBlocksOwnedSdk(fixture, &StaticAssociationInitializationOwnerFixture::RunPrepared);
+        }
+        else if (dynamicClumpScenario == 10)
+        {
+            JointTemporaryStaticInitializerOwnerFixture::scenario = 0;
+            NativeAnimationBlocksOwnedSdk(fixture, &JointTemporaryStaticInitializerOwnerFixture::RunPrepared);
+        }
+        else
+        {
+            DynamicClumpOwnerFixture::scenario = dynamicClumpScenario;
+            NativeAnimationBlocksOwnedSdk(fixture, &DynamicClumpOwnerFixture::RunPrepared);
+        }
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

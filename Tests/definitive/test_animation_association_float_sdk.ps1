@@ -102,7 +102,7 @@ try {
     . (Join-Path $PSScriptRoot 'Write-PrivateAnimationAssociationFixture.ps1')
     $generated=Join-Path $scratchRoot 'PrivateAnimationAssociationFixture.generated.h'
     $record['generatedFixture']=Write-PrivateAnimationAssociationFixture $taskRoot $generated
-    if($record.generatedFixture.rejectingMethods -ne 3 -or @($record.generatedFixture.inheritedProductionMethods).Count -ne 19){throw 'Actual association19/3fixture partition changed'}
+    if($record.generatedFixture.rejectingMethods -ne 0 -or @($record.generatedFixture.inheritedProductionMethods).Count -ne 22){throw 'Actual association22/0fixture partition changed'}
     $durableGenerated=Join-Path $outputRoot 'PrivateAnimationAssociationFixture.generated.h'
     Copy-Item -LiteralPath $generated -Destination $durableGenerated
     if((Sha $durableGenerated) -ne $record.generatedFixture.sha256){throw 'Generated group SDK fixture changed'}

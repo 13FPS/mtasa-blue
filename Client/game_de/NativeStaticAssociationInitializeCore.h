@@ -10,6 +10,10 @@ namespace mta::game_de
 {
     struct NativeStaticAssociationInitializeOwnershipAccess;
     struct NativeStaticAssociationInitializeCoreAccess;
+    namespace NativeAnimationClumpInitializationPlan
+    {
+        struct Snapshot;
+    }
     // This is a noncopyable synchronous capability, not a provider or a public
     // raw-pointer/skip-gate API. Only the closed group/temp bridge creates it.
     // Keeping it separate also preserves public-ped link dependencies.
@@ -43,6 +47,11 @@ namespace mta::game_de
     };
     struct NativeStaticAssociationInitializeCoreAccess
     {
+        // Read-only reuse leaves the existing registered-ped ABI and the
+        // private temporary initializer's mutation/claim authority unchanged.
+        static ClockResult CapturePlan(std::uintptr_t, const NativeStaticAssociationInitializeCalls::Arguments&,
+                                       NativeStaticAssociationInitializeCalls::CheckOwner, const NativeStaticAssociationTemporaryOrigin*,
+                                       NativeAnimationClumpInitializationPlan::Snapshot&);
         // The argument cannot be constructed from observations or raw tags.
         // Its only constructor path already owns WithTemporary's native scope.
         static ClockResult Initialize(const NativeStaticAssociationTemporaryOrigin&, NativeStaticAssociationInitializeCalls::Receipt*,

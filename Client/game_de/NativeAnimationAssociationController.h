@@ -5,6 +5,7 @@
  ****************************************************************************/
 #pragma once
 #include "NativeAnimationAssociationStorage.h"
+#include "NativeAnimationAssociationClumpCalls.h"
 #include <list>
 #include <memory>
 namespace mta::game_de
@@ -29,6 +30,10 @@ namespace mta::game_de
                                   std::uintptr_t&, NativeAnimationAssociationCalls::GroupCopyReceipt* = nullptr) noexcept;
         ClockResult Create(std::uintptr_t, std::uint64_t, CheckOwner, Token&, Receipt* = nullptr) noexcept;
         ClockResult Construct(std::uintptr_t, std::uint64_t, const Token&, std::uintptr_t, CheckOwner, std::uintptr_t&, Receipt* = nullptr) noexcept;
+        ClockResult ApplyClump(std::uintptr_t, std::uint64_t, const Token&, NativeAnimationAssociationClumpOperation,
+                               const NativeAnimationAssociationClumpOrigin&, CheckOwner, std::uintptr_t&,
+                               NativeAnimationAssociationCalls::ClumpReceipt* = nullptr,
+                               const NativeAnimationAssociationCalls::ClumpInvocations* = nullptr) noexcept;
         ClockResult Read(std::uintptr_t, std::uint64_t, const Token&, CheckOwner, Values&) noexcept;
         ClockResult ReadLength(std::uintptr_t, std::uint64_t, const Token&, CheckOwner, std::uint32_t&) noexcept;
         ClockResult Set(std::uintptr_t, std::uint64_t, const Token&, Scalar, std::uint32_t, CheckOwner, Receipt* = nullptr) noexcept;

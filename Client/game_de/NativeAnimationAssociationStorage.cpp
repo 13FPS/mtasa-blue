@@ -4,6 +4,11 @@
  * PURPOSE: Causal ownership of genuinely constructed unpublished associations
  ****************************************************************************/
 #include "NativeAnimationAssociationStorage.h"
+#include "NativeAnimationAssociationClumpCalls.h"
+#include "NativeAnimationAssociationClumpOrigin.h"
+#include "NativeAnimationAssociationClumpStorageState.h"
+#include "NativePrivateAnimationHierarchyController.h"
+#include "NativeAnimationHierarchyMemory.h"
 #include "NativeAnimationAssociationGroupCopy.h"
 #include "NativeAnimationAssociationGroupCopyProfile.h"
 #include "NativeAnimationAssociationOuterStorageCalls.h"
@@ -516,6 +521,10 @@ namespace mta::game_de
         bool           nodeFreeEntered = false, nodeFreeReturned = false, nodeFreeVerified = false;
         bool           nodeClearEntered = false, nodePointerCleared = false, nodeClearVerified = false;
         std::uintptr_t nodeFreeEntryRva = 0;
+        std::unique_ptr<AnimationAssociationClumpStorageDetail::State<AnimationAssociationStorageDetail::Bank>> clump;
+        // A no-ref deleting-dtor ACK consumes outer/nodes independently of
+        // later CPU hierarchy-hold release. Cleanup must never replay it.
+        bool clumpRetiredAck = false;
     };
     NativeAnimationAssociationStorage::NativeAnimationAssociationStorage() noexcept = default;
     NativeAnimationAssociationStorage::~NativeAnimationAssociationStorage() = default;
@@ -528,6 +537,12 @@ namespace mta::game_de
         using C = NativeAnimationAssociationCalls::CheckOwner;
         using Receipt = NativeAnimationAssociationCalls::Receipt;
         using Scalar = NativeAnimationAssociationCalls::Scalar;
+        static bool ClumpPrivate(const Data& d) noexcept { return d.clump && d.clump->acceptedSource && d.clump->privateHierarchy; }
+        static bool ClumpNoRef(const Data& d) noexcept { return d.clump && d.clump->acceptedSource && !d.clump->copyReference; }
+        // These are members of the existing privileged storage access class,
+        // not new raw-storage adoption entry points or independent owners.
+#include "NativeAnimationAssociationClumpSnapshot.inl"
+#include "NativeAnimationAssociationClumpStorage.inl"
         static void Fill(const Data& d, Receipt& r) noexcept
         {
             r.receiver = d.receiver;
@@ -573,6 +588,8 @@ namespace mta::game_de
                                     NativeModelReferenceHeap::Value& heap, const AnimationAssociationProgressDetail::Plan* transition = nullptr) noexcept
         {
             using namespace AnimationAssociationStorageDetail;
+            if (s.data && ClumpPrivate(*s.data))
+                return ClumpSnapshot(image, s, generation, owner, bytes, heap, transition);
             const auto state = s.GetState();
             if (state == State::PublicationPinned)
                 return ClockResult::OwnerConflict;
@@ -591,12 +608,12 @@ namespace mta::game_de
                 Field<std::uintptr_t>(bytes, 0x10) || Field<std::uint32_t>(bytes, 0x48) ||
                 Field<std::uintptr_t>(bytes, 0x20) != (d.nodePointerCleared ? std::uintptr_t{0} : d.nodes) ||
                 Field<std::uintptr_t>(bytes, 0x28) != d.source.bank.hierarchy || Field<std::uint16_t>(bytes, 0x18) != d.source.count ||
-                !(Field<std::uint16_t>(bytes, 0x46) & 0x4000))
+                static_cast<bool>(Field<std::uint16_t>(bytes, 0x46) & 0x4000) != !ClumpNoRef(d))
                 return Pin(s, ClockResult::BindingChanged);
             Bank bank;
             if ((result = CaptureBank(image, owner, d.source.bank.hierarchy, bank)) != ClockResult::Ok)
                 return result;
-            if (!SameBank(d.source.bank, bank) || !bank.refs)
+            if (!SameBank(d.source.bank, bank) || (!ClumpNoRef(d) && !bank.refs))
                 return Pin(s, ClockResult::BindingChanged);
             if (d.source.sequenceCapacity && !SequenceSpan(bank, d.source.sequenceCapacity))
                 return Pin(s, ClockResult::BindingChanged);
@@ -1042,6 +1059,8 @@ namespace mta::game_de
             A::Context::Scope gate;
             if (!MetadataReadable(s.GetState()))
                 return ClockResult::NotInitialized;
+            if (s.data && ClumpPrivate(*s.data))
+                return ClumpReadLength(image, s, generation, owner, output);
             A::Bytes                        before{}, middle{}, after{};
             NativeModelReferenceHeap::Value heap, middleHeap, afterHeap;
             auto                            result = Snapshot(image, s, generation, owner, before, heap);
@@ -1307,7 +1326,7 @@ namespace mta::game_de
             if (result != ClockResult::Ok)
                 return finish(result);
             Bank bank;
-            if ((result = CaptureBank(image, owner, s.data->source.bank.hierarchy, bank)) != ClockResult::Ok ||
+            if ((!ClumpPrivate(*s.data) && (result = CaptureBank(image, owner, s.data->source.bank.hierarchy, bank)) != ClockResult::Ok) ||
                 (result = Snapshot(image, s, generation, owner, confirmed, current)) != ClockResult::Ok)
                 return finish(result);
             if (before != confirmed || !NativeModelReferenceHeap::Same(heap, current))
@@ -1343,9 +1362,10 @@ namespace mta::game_de
             if ((result = Snapshot(image, s, generation, owner, after, current)) != ClockResult::Ok)
                 return finish(result);
             Bank bankAfter;
-            if ((result = CaptureBank(image, owner, d.source.bank.hierarchy, bankAfter)) != ClockResult::Ok)
+            if (!ClumpPrivate(d) && (result = CaptureBank(image, owner, d.source.bank.hierarchy, bankAfter)) != ClockResult::Ok)
                 return finish(result);
-            if (before != after || !NativeModelReferenceHeap::Same(heap, current) || !SameBank(bank, bankAfter) || bank.refs != bankAfter.refs)
+            if (before != after || !NativeModelReferenceHeap::Same(heap, current) ||
+                (!ClumpPrivate(d) && (!SameBank(bank, bankAfter) || bank.refs != bankAfter.refs)))
                 return finish(Pin(s, ClockResult::BindingChanged));
             if ((result = Context::Owner(image, owner)) != ClockResult::Ok)
                 return finish(result);
@@ -1371,10 +1391,27 @@ namespace mta::game_de
             if (!s.data || s.data->generation != generation)
                 return finish(ClockResult::OwnerConflict);
             auto& d = *s.data;
+            if (d.clumpRetiredAck && s.GetState() != State::Released)
+            {
+                // Only CPU dependent release may resume after the original
+                // returned. Neither the freed receiver nor its nodes is read.
+                const auto result = ClumpReleaseDependencies(image, s, generation, owner);
+                if (result == ClockResult::Ok)
+                    s.state.store(State::Released);
+                r.retired = true;
+                r.verified = d.retirementVerified;
+                return finish(result);
+            }
             if (s.GetState() == State::Released)
                 return finish(ClockResult::OwnerConflict);
             if (!d.constructorEntered)
             {
+                // A source custom prefix is already an entered operation even
+                // when the later original Init was never called. Preserve its
+                // exact receiver/default/H journals instead of treating this
+                // partially changed allocation as untouched raw storage.
+                if (d.clump && d.clump->pending && (d.clump->pending->receipt.hadEffects || d.clump->pending->receipt.enteredUnknown))
+                    return finish(ClockResult::OwnerConflict);
                 NativeCustomAnimSequenceStorageCalls::Receipt native;
                 const auto result = NativeAnimationAssociationOuterStorageCalls::FreeUnconstructed(image, d.outer, generation, owner, &native, free);
                 r.entered = native.entered;
@@ -1384,6 +1421,16 @@ namespace mta::game_de
                 r.verified = native.verified;
                 r.exceptionCode = native.exceptionCode;
                 s.state.store(d.outer.CanDiscard() ? State::Released : State::FaultDebt);
+                if (native.released && d.clump)
+                {
+                    d.clumpRetiredAck = true;
+                    const auto released = ClumpReleaseDependencies(image, s, generation, owner);
+                    if (released != ClockResult::Ok)
+                    {
+                        s.state.store(State::FaultDebt);
+                        return finish(released);
+                    }
+                }
                 return finish(result);
             }
             if (!d.knownConstructed || d.destructorEntered || (d.nodeFreeEntered && !d.nodeFreeReturned) || (d.nodeClearEntered && !d.nodePointerCleared))
@@ -1445,7 +1492,7 @@ namespace mta::game_de
                 d.nodeClearVerified = true;
             }
             Bank bank;
-            if ((result = CaptureBank(image, owner, d.source.bank.hierarchy, bank)) != ClockResult::Ok)
+            if (!ClumpPrivate(d) && (result = CaptureBank(image, owner, d.source.bank.hierarchy, bank)) != ClockResult::Ok)
                 return finish(result);
 #if defined(MTA_DE_ANIMATION_ASSOCIATION_DESTRUCTOR_INVOKE)
             const auto entry = invoke ? invoke : &MTA_DE_ANIMATION_ASSOCIATION_DESTRUCTOR_INVOKE;
@@ -1471,17 +1518,36 @@ namespace mta::game_de
             // that acknowledgement must not erase debt or replay the dtor.
             // Never inspect the freed receiver or free its outer again.
             d.outer.state.store(NativeCustomAnimSequenceStorage::State::Released);
+            if (ClumpNoRef(d))
+                d.clumpRetiredAck = true;
             s.state.store(State::FaultDebt);
             r.retired = true;
             if ((result = Context::Owner(image, owner)) != ClockResult::Ok)
                 return finish(result);
             if (!QualifyAssociationProfile(image) || (result = NativeModelReferenceHeap::Recheck(image, heap)) != ClockResult::Ok)
                 return finish(result == ClockResult::Ok ? ClockResult::BindingChanged : result);
-            Bank after;
-            if ((result = CaptureBank(image, owner, d.source.bank.hierarchy, after)) != ClockResult::Ok)
-                return finish(result);
-            if (!SameBank(bank, after) || after.refs != static_cast<std::uint16_t>(bank.refs - 1))
-                return finish(ClockResult::BindingChanged);
+            if (!ClumpPrivate(d))
+            {
+                Bank after;
+                if ((result = CaptureBank(image, owner, d.source.bank.hierarchy, after)) != ClockResult::Ok)
+                    return finish(result);
+                const auto expectedRefs = ClumpNoRef(d) ? bank.refs : static_cast<std::uint16_t>(bank.refs - 1);
+                if (!SameBank(bank, after) || after.refs != expectedRefs)
+                    return finish(ClockResult::BindingChanged);
+            }
+            // A clump-origin constructor never acquired a native bank ref.
+            // Its genuine dtor therefore balances no such ref; private H uses
+            // the separate actual CPU dependency, released only after this ACK.
+            if (d.clump)
+            {
+                // Copy-backed Init also owns this clump journal. Its native
+                // retirement and reference balance are now both acknowledged;
+                // only the remaining CPU dependency release may follow.
+                d.clumpRetiredAck = true;
+                const auto released = ClumpReleaseDependencies(image, s, generation, owner);
+                if (released != ClockResult::Ok)
+                    return finish(released);
+            }
             d.retirementVerified = true;
             s.state.store(State::Released);
             r.verified = true;
@@ -1498,6 +1564,8 @@ namespace mta::game_de
             A::Context::Scope gate;
             if (!MetadataReadable(s.GetState()))
                 return ClockResult::NotInitialized;
+            if (s.data && ClumpPrivate(*s.data))
+                return ClumpResolveHierarchy(image, s, generation, owner, output);
             A::Bytes                        first{}, second{};
             NativeModelReferenceHeap::Value heap, after;
             auto                            result = Snapshot(image, s, generation, owner, first, heap);
@@ -1789,5 +1857,15 @@ namespace mta::game_de
         {
             return NativeAnimationAssociationStorageAccess::Restrict(image, storage, generation, true, 0, original, owner, receipt, invoke);
         }
+    }
+}
+
+namespace mta::game_de::NativeAnimationAssociationCalls
+{
+    ClockResult ApplyClump(std::uintptr_t image, NativeAnimationAssociationStorage& storage, std::uint64_t generation,
+                           NativeAnimationAssociationClumpOperation operation, const NativeAnimationAssociationClumpOrigin& origin,
+                           ClockResult (*owner)() noexcept, std::uintptr_t& returned, ClumpReceipt* receipt, const ClumpInvocations* invocations) noexcept
+    {
+        return NativeAnimationAssociationStorageAccess::ApplyClumpCore(image, storage, generation, operation, origin, owner, returned, receipt, invocations);
     }
 }

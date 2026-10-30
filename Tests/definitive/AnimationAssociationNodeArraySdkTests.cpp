@@ -17,7 +17,7 @@ using namespace mta::game_de;
 static_assert(
     std::is_same_v<decltype(&PrivateAnimationAssociationReceiver::FreeAnimBlendNodeArray), decltype(&CAnimBlendAssociationDE::FreeAnimBlendNodeArray)>);
 static_assert(!noexcept(std::declval<CAnimBlendAssociation&>().FreeAnimBlendNodeArray()));
-static_assert(std::is_abstract_v<CAnimBlendAssociationDE> && !std::is_abstract_v<PrivateAnimationAssociationReceiver>);
+static_assert(!std::is_abstract_v<CAnimBlendAssociationDE> && !std::is_abstract_v<PrivateAnimationAssociationReceiver>);
 
 namespace
 {

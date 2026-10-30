@@ -45,6 +45,41 @@ namespace mta::game_de
         Require(native.ConstructPrivateAnimationAssociationFromStatic(token, locator, returned), "Constructor");
         return reinterpret_cast<CAnimBlendAssociationSAInterface*>(returned);
     }
+    CAnimBlendAssociationSAInterface* CAnimBlendAssociationDE::Constructor(RpClump* clump, CAnimBlendHierarchySAInterface* hierarchy)
+    {
+        const auto     token = reference;
+        const auto     clumpTag = reinterpret_cast<std::uintptr_t>(clump);
+        const auto     hierarchyTag = reinterpret_cast<std::uintptr_t>(hierarchy);
+        std::uintptr_t returned = 0;
+        Require(native.ApplyPrivateAnimationAssociationClump(token, NativeAnimationAssociationClumpOperation::Construct, clumpTag, hierarchyTag, returned),
+                "Constructor(clump)");
+        return reinterpret_cast<CAnimBlendAssociationSAInterface*>(returned);
+    }
+    void CAnimBlendAssociationDE::Init(RpClump* clump, CAnimBlendHierarchySAInterface* hierarchy)
+    {
+        const auto     token = reference;
+        const auto     clumpTag = reinterpret_cast<std::uintptr_t>(clump);
+        const auto     hierarchyTag = reinterpret_cast<std::uintptr_t>(hierarchy);
+        std::uintptr_t returned = 0;
+        // Source Init does not free old nodes or return an interface. Preserve
+        // that one operation; the issued owner admits a known compatible phase.
+        Require(native.ApplyPrivateAnimationAssociationClump(token, NativeAnimationAssociationClumpOperation::Initialize, clumpTag, hierarchyTag, returned),
+                "Init");
+    }
+    CAnimBlendAssociationSAInterface* CAnimBlendAssociationDE::InitializeForCustomAnimation(RpClump* clump, CAnimBlendHierarchySAInterface* hierarchy)
+    {
+        const auto     token = reference;
+        const auto     clumpTag = reinterpret_cast<std::uintptr_t>(clump);
+        const auto     hierarchyTag = reinterpret_cast<std::uintptr_t>(hierarchy);
+        std::uintptr_t returned = 0;
+        // The same owner journals the13 ordered source defaults then original
+        // Init. Frontend scalar stores/free/ref/list helpers would split that
+        // admitted operation or discard a prior resource without an ACK.
+        Require(
+            native.ApplyPrivateAnimationAssociationClump(token, NativeAnimationAssociationClumpOperation::InitializeCustom, clumpTag, hierarchyTag, returned),
+            "InitializeForCustomAnimation");
+        return reinterpret_cast<CAnimBlendAssociationSAInterface*>(returned);
+    }
     void CAnimBlendAssociationDE::FreeAnimBlendNodeArray()
     {
         const auto token = reference;

@@ -432,15 +432,8 @@ namespace mta::game_de
             PrivateHierarchyStorageDetail::Context::Scope scope;
             return ReadWithin(image, storage, generation, owner, output);
         }
-        static ClockResult ReadWithin(std::uintptr_t image, const Storage& storage, std::uint64_t generation, CheckOwner owner,
-                                      NativeAnimationHierarchyValues& output) noexcept
+        static void Decode(const Storage& storage, const PrivateHierarchyStorageDetail::Bytes& bytes, NativeAnimationHierarchyValues& output) noexcept
         {
-            if (!owner)
-                return ClockResult::NotInitialized;
-            PrivateHierarchyStorageDetail::Bytes bytes;
-            auto                                 result = Snapshot(image, storage, generation, owner, bytes);
-            if (result != ClockResult::Ok)
-                return result;
             NativeAnimationHierarchyValues next;
             next.interfaceAddress = storage.Address();
             next.sequenceCount = PrivateHierarchyStorageDetail::Field<std::uint16_t>(bytes, 0x10);
@@ -453,6 +446,17 @@ namespace mta::game_de
             if (next.hashDefined)
                 next.hash = PrivateHierarchyStorageDetail::Field<std::uint32_t>(bytes, 0);
             output = next;
+        }
+        static ClockResult ReadWithin(std::uintptr_t image, const Storage& storage, std::uint64_t generation, CheckOwner owner,
+                                      NativeAnimationHierarchyValues& output) noexcept
+        {
+            if (!owner)
+                return ClockResult::NotInitialized;
+            PrivateHierarchyStorageDetail::Bytes bytes;
+            auto                                 result = Snapshot(image, storage, generation, owner, bytes);
+            if (result != ClockResult::Ok)
+                return result;
+            Decode(storage, bytes, output);
             return ClockResult::Ok;
         }
         static ClockResult SetSequencesWithin(std::uintptr_t image, Storage& storage, std::uint64_t generation, std::uintptr_t requested, CheckOwner owner,
@@ -789,6 +793,21 @@ namespace mta::game_de
                                                                                                                         : ClockResult::OwnerConflict;
         }
     };
+    ClockResult NativePrivateAnimationHierarchyStorage::ReadForAssociationHeld(std::uintptr_t image, std::uint64_t requestedGeneration,
+                                                                               ClockResult (*owner)() noexcept, NativeAnimationHierarchyValues& output,
+                                                                               std::uintptr_t& sequencesOutput) const noexcept
+    {
+        PrivateHierarchyStorageDetail::Bytes snapshot;
+        const auto result = NativePrivateAnimationHierarchyStorageAccess::Snapshot(image, *this, requestedGeneration, owner, snapshot);
+        if (result != ClockResult::Ok)
+            return result;
+        NativeAnimationHierarchyValues next;
+        NativePrivateAnimationHierarchyStorageAccess::Decode(*this, snapshot, next);
+        const auto sequencesValue = PrivateHierarchyStorageDetail::Field<std::uintptr_t>(snapshot, 8);
+        output = next;
+        sequencesOutput = sequencesValue;
+        return ClockResult::Ok;
+    }
     namespace NativePrivateAnimationHierarchyCalls
     {
         ClockResult PostProcessEmpty(std::uintptr_t image, Storage& storage, std::uint64_t generation, PostProcessOperation operation, CheckOwner owner,

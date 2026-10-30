@@ -23,7 +23,7 @@ static_assert(!noexcept(std::declval<const CAnimBlendAssociation&>().GetLength()
 static_assert(!noexcept(std::declval<const CAnimBlendAssociationDE&>().GetCurrentProgress()));
 static_assert(!noexcept(std::declval<const CAnimBlendAssociationDE&>().GetCurrentSpeed()));
 static_assert(!noexcept(std::declval<const CAnimBlendAssociationDE&>().GetLength()));
-static_assert(std::is_abstract_v<CAnimBlendAssociationDE> && !std::is_abstract_v<PrivateAnimationAssociationReceiver>);
+static_assert(!std::is_abstract_v<CAnimBlendAssociationDE> && !std::is_abstract_v<PrivateAnimationAssociationReceiver>);
 namespace
 {
     unsigned checks = 0;

@@ -5,6 +5,7 @@
  ****************************************************************************/
 #include "NativeAnimationAssociationController.h"
 #include "NativeAnimationAssociationGroupCopy.h"
+#include "NativeAnimationAssociationClumpOrigin.h"
 #include <limits>
 #include <algorithm>
 #include <new>
@@ -144,6 +145,34 @@ namespace mta::game_de
         if (!entry)
             return ClockResult::OwnerConflict;
         const auto result = NativeAnimationAssociationCalls::Construct(image, entry->storage, generation, locator, owner, output, &next);
+        Publish();
+        if (receipt)
+            *receipt = next;
+        return result;
+    }
+    ClockResult NativeAnimationAssociationController::ApplyClump(std::uintptr_t image, std::uint64_t generation, const Token& requested,
+                                                                 NativeAnimationAssociationClumpOperation     operation,
+                                                                 const NativeAnimationAssociationClumpOrigin& origin, CheckOwner owner, std::uintptr_t& output,
+                                                                 NativeAnimationAssociationCalls::ClumpReceipt*           receipt,
+                                                                 const NativeAnimationAssociationCalls::ClumpInvocations* invocations) noexcept
+    {
+        const auto                                    token = requested;
+        NativeAnimationAssociationCalls::ClumpReceipt next;
+        if (receipt)
+            *receipt = next;
+        if (!generation || origin.Image() != image || origin.Generation() != generation || origin.Receiver().ownerGeneration != token.ownerGeneration ||
+            origin.Receiver().serial != token.serial)
+            return ClockResult::OwnerConflict;
+        if (!AnimationAssociationControllerDetail::Enter(busy))
+            return ClockResult::Busy;
+        AnimationAssociationControllerDetail::Guard guard{busy};
+        auto*                                       entry = Find(generation, token);
+        if (!entry)
+            return ClockResult::OwnerConflict;
+        // Find supplies the actual issued storage. The synchronous origin
+        // never adopts a raw104 receiver or extends a clump/ped lease.
+        const auto result =
+            NativeAnimationAssociationCalls::ApplyClump(image, entry->storage, generation, operation, origin, owner, output, &next, invocations);
         Publish();
         if (receipt)
             *receipt = next;

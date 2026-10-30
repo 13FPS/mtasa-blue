@@ -16,7 +16,7 @@
 using namespace mta::game_de;
 static_assert(std::is_same_v<decltype(&PrivateAnimationAssociationReceiver::SetCurrentProgress), decltype(&CAnimBlendAssociationDE::SetCurrentProgress)>);
 static_assert(!noexcept(std::declval<CAnimBlendAssociation&>().SetCurrentProgress(0.0f)));
-static_assert(std::is_abstract_v<CAnimBlendAssociationDE> && !std::is_abstract_v<PrivateAnimationAssociationReceiver>);
+static_assert(!std::is_abstract_v<CAnimBlendAssociationDE> && !std::is_abstract_v<PrivateAnimationAssociationReceiver>);
 namespace
 {
     unsigned checks = 0;

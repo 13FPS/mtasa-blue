@@ -23,14 +23,21 @@ namespace mta::game_de
     class NativeClockService final
     {
     public:
+        // Only BeginGameTiming interprets this bit in request.reserved[0].
+        // The same access callback then runs after the genuine normal frame,
+        // keeping loader/retirement work inside the original outside its scope.
+        // Default requests retain the existing pause-safe timer owner.
+        static constexpr std::uint32_t GameTimingAfterApplicationFrameV1 = 1u;
         // A generation denotes one cleanup owner, even while End is pending.
         // Copying it would let a second object retire the first object's hooks.
         NativeClockService() = default;
         NativeClockService(const NativeClockService&) = delete;
         NativeClockService& operator=(const NativeClockService&) = delete;
         bool                Begin(const ClockServiceRequestV1& request, ClockServiceStateV1& state) noexcept;
-        // Internal CGame timing ownership also installs the pause-safe native
-        // timer hook. The existing exported V1 clock path stays clock-only.
+        // Internal CGame timing ownership defaults to the pause-safe native
+        // timer hook. The opt-in above owns only the application-frame hook;
+        // both routes keep handler/context alive until End retires all debt.
+        // The existing exported V1 clock path stays clock-only.
         bool BeginGameTiming(const ClockServiceRequestV1& request, ClockServiceStateV1& state, GameTimingHandler handler = nullptr,
                              void* context = nullptr) noexcept;
         // Reuse the native transaction/retirement owner for application-frame

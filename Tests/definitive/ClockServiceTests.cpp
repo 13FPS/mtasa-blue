@@ -8676,6 +8676,7 @@ namespace
 #include "NativeNumericAssociationOwnerTests.inl"
 #include "AnimationManagerUncompressFixture.generated.h"
 #include "NativeAnimationHierarchyUncompressOwnerTests.inl"
+#include "ApplicationTimingOwnerTests.inl"
 
 // The strict receiver must execute production typed tickets and the distinct
 // metadata-only delete route. Deleting an interface acknowledges only its own
@@ -8825,6 +8826,15 @@ int main(int argc, char** argv)
         staticAssociationInitializationUnknown || (argc == 3 && std::strcmp(argv[2], "--static-association-initialization-success") == 0);
     const bool animationStaticAssociationReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-static-association-reads") == 0;
     const bool animationAssociationGroupReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-association-group-reads") == 0;
+    const bool applicationTimingOnly = argc == 3 && std::strncmp(argv[2], "--application-timing-", 21) == 0;
+    unsigned   applicationTimingScenario = 4;
+    if (applicationTimingOnly)
+    {
+        const char* names[] = {"success", "restore-refusal", "throw", "regression"};
+        for (unsigned index = 0; index != 4; ++index)
+            if (std::strcmp(argv[2] + 21, names[index]) == 0)
+                applicationTimingScenario = index;
+    }
     const bool hierarchyUncompressOnly = argc == 3 && std::strncmp(argv[2], "--hierarchy-uncompress-", 23) == 0;
     unsigned   hierarchyUncompressScenario = 15;
     if (hierarchyUncompressOnly)
@@ -9024,8 +9034,8 @@ int main(int argc, char** argv)
            freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly || customAnimationCleanupOnly ||
            standaloneSequenceOperationsOnly || animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly ||
            animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly || animationGroupValidityOnly ||
-           animationIdValidityOnly || animationAssociationGroupReadsOnly || hierarchyUncompressOnly || numericAssociationOnly || dynamicClumpOnly ||
-           groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
+           animationIdValidityOnly || animationAssociationGroupReadsOnly || applicationTimingOnly || hierarchyUncompressOnly || numericAssociationOnly ||
+           dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
            groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
            animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
            privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
@@ -9206,6 +9216,35 @@ int main(int argc, char** argv)
         fixture.Create(argv[1]);
         // One real module-pinned lifetime needs one pristine host process.
         NativeAnimationBlocksOwnedSdk(fixture, &AnimationAssociationGroupChildProductsOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (applicationTimingOnly)
+    {
+        Check(applicationTimingScenario < 4, "exact finite application timing scenario required");
+        if (applicationTimingScenario == 3)
+        {
+            for (unsigned index = 0; index != 3; ++index)
+            {
+                const auto directory = std::filesystem::path(argv[1]) / ("legacy-regression-" + std::to_string(index));
+                Check(std::filesystem::create_directory(directory), "fresh selected legacy timing/frame regression image");
+                ClockImageFixture fixture;
+                fixture.Create(directory);
+                if (index == 0)
+                    NativeTimingWritesAndRestoration(fixture);
+                else if (index == 1)
+                    NativePauseSafeTimingOwner(fixture);
+                else
+                    NativeApplicationFrameOwner(fixture);
+            }
+            std::puts("Production application timing selected legacy regressions fixture completed");
+        }
+        else
+        {
+            ClockImageFixture fixture;
+            fixture.Create(argv[1]);
+            ApplicationTimingOwnerFixture::Run(fixture, applicationTimingScenario);
+        }
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

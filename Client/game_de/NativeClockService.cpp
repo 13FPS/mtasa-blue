@@ -805,6 +805,11 @@ namespace mta::game_de
         thread_local bool constructorWeaponScope = false;
         thread_local bool constructorWeaponReadScope = false;
 
+        bool ApplicationTimingMode() noexcept
+        {
+            return runtime.timingMode && runtime.frameMode;
+        }
+
         struct CommandPresentationScope;
         thread_local CommandPresentationScope* presentationCommand = nullptr;
         thread_local unsigned                  clockMutationDepth = 0;
@@ -1056,6 +1061,8 @@ namespace mta::game_de
             return true;
         }
 
+        bool CheckApplicationTimingBinding() noexcept;
+
         bool CheckBinding(bool entryBeforeHook = false, bool allowRecoveryPatch = false, bool uiClassMap = false) noexcept
         {
             if (runtime.frameMode)
@@ -1088,7 +1095,10 @@ namespace mta::game_de
                             std::memcmp(actual.data(), pin.bytes, pin.size) != 0)
                             return false;
                     }
-                return true;
+                // The value-only observer remains independent of clock/timer
+                // support. The opt-in writer must also qualify the native
+                // timing and pause producers before lending the same access.
+                return !ApplicationTimingMode() || CheckApplicationTimingBinding();
             }
             if (!CheckImage() || !CheckCode(Profile::hookTailRva, Profile::hookTail) || !CheckCode(Profile::clockCallRva, Profile::clockCall) ||
                 !CheckCode(Profile::frameCallRva, Profile::frameCall) || !CheckCode(Profile::getterCaseRva, Profile::getterCase) ||
@@ -1158,6 +1168,22 @@ namespace mta::game_de
                    Image::ImagePages(runtime.image, runtime.image + TimingProfile::timeScaleRva, sizeof(float), true);
         }
 
+        bool CheckApplicationTimingBinding() noexcept
+        {
+            // No timer entry is detoured in this mode. Its original producer
+            // and both callers must remain exact so pause restoration still
+            // refers to the genuine native byte and update itinerary.
+            return CheckTimingBinding() && CheckCode(PauseProfile::entryRva, PauseProfile::entry) && CheckCode(PauseProfile::tailRva, PauseProfile::tail) &&
+                   CheckCode(PauseProfile::pauseReadsRva, PauseProfile::pauseReads) && CheckCode(PauseProfile::pauseBranchRva, PauseProfile::pauseBranch) &&
+                   CheckCode(PauseProfile::frameRva, PauseProfile::frame) && CheckCode(PauseProfile::returnRva, PauseProfile::returnCode) &&
+                   CheckCode(PauseProfile::normalCallRva, PauseProfile::normalCall) && CheckCode(PauseProfile::alternateCallRva, PauseProfile::alternateCall) &&
+                   CheckCode(PauseProfile::gameplayTailRva, PauseProfile::gameplayTail) &&
+                   Image::ImagePages(runtime.image, runtime.image + PauseProfile::userPauseRva, sizeof(std::uint8_t), true) &&
+                   Image::ImagePages(runtime.image, runtime.image + minuteDurationRva, sizeof(std::uint32_t), true);
+        }
+
+        ClockResult CheckApplicationTimingOwner() noexcept;
+
         ClockResult CheckOwner() noexcept
         {
             if (runtime.frameMode || !runtime.bound.load() || !runtime.ready.load())
@@ -1173,6 +1199,8 @@ namespace mta::game_de
 
         ClockResult CheckTimingOwner() noexcept
         {
+            if (ApplicationTimingMode())
+                return CheckApplicationTimingOwner();
             const auto owner = timingTimerScope && runtime.timingMode && runtime.timerHooked.load() && runtime.timerReady.load()
                                    ? (!runtime.bound.load()                                           ? ClockResult::NotInitialized
                                       : GetCurrentThreadId() != runtime.engineThread.load()           ? ClockResult::WrongThread
@@ -1997,7 +2025,10 @@ namespace mta::game_de
         {
             // Legacy clock ownership has no callback once user pause skips the
             // weather continuation. It therefore cannot acquire pause debt.
-            if (!runtime.timingMode || !runtime.timerHooked.load() || !runtime.timerReady.load())
+            // The opt-in frame route owns its own post-original restoration;
+            // it must never fabricate timer readiness to borrow that ability.
+            if (!runtime.timingMode ||
+                (runtime.frameMode ? !runtime.frameHooked.load() || !runtime.ready.load() : !runtime.timerHooked.load() || !runtime.timerReady.load()))
                 return ClockResult::NotInitialized;
             return SetTimingValue(PauseProfile::userPauseRva, static_cast<std::uint8_t>(value), timingPauseBit, runtime.originalUserPause);
         }
@@ -8903,6 +8934,43 @@ namespace mta::game_de
                    runtime.admissionSerial.load() && Fresh();
         }
 
+        bool ApplicationTimingScope(bool recovery) noexcept
+        {
+            const auto generation = runtime.generation.load();
+            // The serial binds access to this post-original invocation, not
+            // merely another frame or timer in the same retained generation.
+            // Recovery keeps that exact scope after Stop revokes new writes.
+            return ApplicationTimingMode() && generation && runtime.bound.load() && runtime.frameHooked.load() && callbackDepth == 1 &&
+                   GetCurrentThreadId() == runtime.engineThread.load() && timingCallbackGeneration == generation && !timingTimerScope &&
+                   frameCallbackGeneration == generation && frameCallbackReceiver && frameCallbackSerial &&
+                   frameCallbackSerial == runtime.counters.qualified.load() && runtime.admissionGeneration.load() == generation &&
+                   runtime.admissionSerial.load() && !runtime.peersRetained.load() &&
+                   (recovery || (runtime.ready.load() && runtime.active.load() && !runtime.stopping.load() && Fresh())) &&
+                   FrameReceiver(frameCallbackReceiver) && CheckBinding(false, recovery) && CheckTimingBinding();
+        }
+
+        ClockResult CheckApplicationTimingOwner() noexcept
+        {
+            if (!ApplicationTimingMode() || !runtime.bound.load() || !runtime.frameHooked.load() || !runtime.ready.load())
+                return ClockResult::NotInitialized;
+            if (callbackDepth != 1 || GetCurrentThreadId() != runtime.engineThread.load())
+                return ClockResult::WrongThread;
+            const auto generation = runtime.generation.load();
+            if (!generation || timingCallbackGeneration != generation || frameCallbackGeneration != generation || !frameCallbackSerial ||
+                frameCallbackSerial != runtime.counters.qualified.load() || runtime.admissionGeneration.load() != generation || !runtime.admissionSerial.load())
+                return ClockResult::OwnerConflict;
+            if (!runtime.active.load() || runtime.stopping.load() || !Fresh())
+                return ClockResult::Expired;
+            if (runtime.patchRecovery.load())
+                return ClockResult::PatchFailure;
+            if (!ApplicationTimingScope(false))
+                return ClockResult::BindingChanged;
+            // The native borrowed-GameThread/GC zero-probe independently
+            // qualifies this frame owner; an OS thread ID is not that proof.
+            const auto thread = NativeStartGameCalls::CheckThread(runtime.image);
+            return thread != ClockResult::Ok ? thread : ApplicationTimingScope(false) ? ClockResult::Ok : ClockResult::BindingChanged;
+        }
+
         bool UiMapHeapRead(std::uintptr_t address, void* output, std::size_t bytes) noexcept
         {
             if (!address || !bytes || bytes > (std::numeric_limits<std::uintptr_t>::max)() - address)
@@ -9266,16 +9334,60 @@ namespace mta::game_de
 
         void InvokeFrameHandler(void* receiver, float delta, std::uint32_t state)
         {
+            const auto previousTimingGeneration = timingCallbackGeneration;
+            const auto previousTimerScope = timingTimerScope;
             const auto previousGeneration = frameCallbackGeneration;
             const auto previousReceiver = frameCallbackReceiver;
             const auto previousSerial = frameCallbackSerial;
             frameCallbackGeneration = runtime.generation.load();
             frameCallbackReceiver = receiver;
             frameCallbackSerial = runtime.counters.qualified.load();
+            if (ApplicationTimingMode())
+            {
+                timingCallbackGeneration = frameCallbackGeneration;
+                timingTimerScope = false;
+            }
             __try
             {
                 const NativeApplicationFrame frame{runtime.generation.load(), state, delta};
-                if (runtime.startupMode && runtime.startupHandler)
+                if (ApplicationTimingMode())
+                {
+                    if (runtime.active.load() && !runtime.stopping.load())
+                    {
+                        const auto owner = CheckApplicationTimingOwner();
+                        if (owner != ClockResult::Ok)
+                            Stop(owner);
+                        else if (runtime.timingHandler)
+                            runtime.timingHandler(runtime.access, runtime.timingContext);
+                    }
+                    // End/expiry revokes the client before its native journal
+                    // can retire. Cleanup borrows this actual post-frame owner
+                    // without replaying a handler or moving frees to a producer.
+                    const auto recoveryOwner = ApplicationTimingScope(true) ? NativeStartGameCalls::CheckThread(runtime.image) : ClockResult::BindingChanged;
+                    if (recoveryOwner != ClockResult::Ok || !ApplicationTimingScope(true))
+                    {
+                        if (runtime.active.load())
+                            Stop(recoveryOwner == ClockResult::Ok ? ClockResult::BindingChanged : recoveryOwner);
+                        return;
+                    }
+                    ProgressCustomAnimationCleanup();
+                    if (runtime.stopping.load())
+                    {
+                        if ((runtime.captured.load() && !runtime.restored.load()) || runtime.timingDirty.load() || runtime.timingRecovery.load() ||
+                            runtime.weatherRecovery.load() || runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() ||
+                            runtime.weaponVectorGeneration.load() || WeatherOverrideRetained() || NativeLifetimeRetained())
+                            RestoreOriginal();
+                        else
+                        {
+                            runtime.restored.store(true);
+                            runtime.ready.store(false);
+                        }
+                    }
+                    if (runtime.peersRetained.load() && !RetryPeerHoldsBounded())
+                        return;
+                    Publish();
+                }
+                else if (runtime.startupMode && runtime.startupHandler)
                     runtime.startupHandler(runtime.access, frame, runtime.frameContext);
                 else if (runtime.frameHandler)
                     runtime.frameHandler(frame, runtime.frameContext);
@@ -9286,6 +9398,8 @@ namespace mta::game_de
                 // outer hook separately retains the original/trampoline owner.
                 if (AbnormalTermination())
                     Stop(ClockResult::OriginalException);
+                timingCallbackGeneration = previousTimingGeneration;
+                timingTimerScope = previousTimerScope;
                 frameCallbackGeneration = previousGeneration;
                 frameCallbackReceiver = previousReceiver;
                 frameCallbackSerial = previousSerial;
@@ -9310,6 +9424,23 @@ namespace mta::game_de
                 Stop(ClockResult::Expired);
             if (!runtime.active.load() || runtime.stopping.load())
             {
+                if (ApplicationTimingMode())
+                {
+                    std::uint32_t state = 0;
+                    if (receiverQualifiedBefore && FrameReceiver(receiver) && CheckBinding(false, true) && std::isfinite(delta) &&
+                        ReadValue(FrameProfile::stateRva, state) && state <= 9 && GetCurrentThreadId() == runtime.engineThread.load())
+                    {
+                        try
+                        {
+                            InvokeFrameHandler(receiver, delta, state);
+                        }
+                        catch (...)
+                        {
+                            Stop(ClockResult::OriginalException);
+                        }
+                    }
+                    return;
+                }
                 if (runtime.startupMode && (runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load()) && receiverQualifiedBefore &&
                     FrameReceiver(receiver) && CheckBinding(false, true))
                 {
@@ -9346,7 +9477,7 @@ namespace mta::game_de
                 return;
             }
             runtime.ready.store(true);
-            if (runtime.frameHandler || (runtime.startupMode && runtime.startupHandler))
+            if (ApplicationTimingMode() || runtime.frameHandler || (runtime.startupMode && runtime.startupHandler))
             {
                 try
                 {
@@ -9354,8 +9485,8 @@ namespace mta::game_de
                 }
                 catch (...)
                 {
-                    // Client observation failures cannot unwind into the
-                    // engine's ordinary frame dispatch or grant writer scope.
+                    // Client failures cannot unwind into ordinary frame
+                    // dispatch; pending native journals keep their owner.
                     Stop(ClockResult::OriginalException);
                 }
             }
@@ -9369,6 +9500,9 @@ namespace mta::game_de
             const auto previousFrameGeneration = frameCallbackGeneration;
             const auto previousFrameReceiver = frameCallbackReceiver;
             const auto previousFrameSerial = frameCallbackSerial;
+            // Scope remains retired through the WHOLE original. A timer or
+            // loader reached inside it cannot borrow the later post-frame
+            // writer, even when it uses the same thread and generation.
             timingCallbackGeneration = 0;
             timingTimerScope = false;
             frameCallbackGeneration = 0;
@@ -9430,7 +9564,7 @@ namespace mta::game_de
                 if (ready && !runtime.frameMode)
                     ready = (install ? DetourAttach : DetourDetach)(reinterpret_cast<PVOID*>(&runtime.originalContinuation),
                                                                     reinterpret_cast<PVOID>(&HookClockContinuation)) == NO_ERROR;
-                if (ready && runtime.timingMode)
+                if (ready && runtime.timingMode && !runtime.frameMode)
                     ready = (install ? DetourAttach : DetourDetach)(reinterpret_cast<PVOID*>(&runtime.originalTimer),
                                                                     reinterpret_cast<PVOID>(&HookTimerUpdate)) == NO_ERROR;
                 if (ready && runtime.frameMode)
@@ -9446,7 +9580,7 @@ namespace mta::game_de
                     if (ready)
                     {
                         runtime.hooked.store(install && !runtime.frameMode);
-                        runtime.timerHooked.store(install && runtime.timingMode);
+                        runtime.timerHooked.store(install && runtime.timingMode && !runtime.frameMode);
                         runtime.frameHooked.store(install && runtime.frameMode);
                     }
                 }
@@ -9574,7 +9708,15 @@ namespace mta::game_de
     bool NativeClockService::BeginGameTiming(const ClockServiceRequestV1& request, ClockServiceStateV1& state, GameTimingHandler handler,
                                              void* context) noexcept
     {
-        return BeginOwner(request, state, true, handler, context);
+        // Interpret the opt-in only at this internal entry. The normalized
+        // request still passes the shared strict validator, so no other Begin
+        // route or exported V1 protocol silently accepts a reserved option.
+        if (request.reserved[0] & ~GameTimingAfterApplicationFrameV1)
+            return false;
+        const bool afterApplicationFrame = (request.reserved[0] & GameTimingAfterApplicationFrameV1) != 0;
+        auto       normalized = request;
+        normalized.reserved[0] = 0;
+        return BeginOwner(normalized, state, true, handler, context, afterApplicationFrame);
     }
 
     bool NativeClockService::BeginApplicationFrames(const ClockServiceRequestV1& request, ClockServiceStateV1& state, ApplicationFrameHandler handler,
@@ -9758,7 +9900,7 @@ namespace mta::game_de
         if (valid)
         {
             runtime.originalContinuation = frameMode ? nullptr : reinterpret_cast<ContinuationFunction>(runtime.image + Profile::hookEntryRva);
-            runtime.originalTimer = timingMode ? reinterpret_cast<ContinuationFunction>(runtime.image + PauseProfile::entryRva) : nullptr;
+            runtime.originalTimer = timingMode && !frameMode ? reinterpret_cast<ContinuationFunction>(runtime.image + PauseProfile::entryRva) : nullptr;
             runtime.originalFrame = frameMode ? reinterpret_cast<ApplicationFrameFunction>(runtime.image + FrameProfile::entryRva) : nullptr;
             ClockResult presentationRefusal = ClockResult::Ok;
             valid = ChangeHooks(true, &presentationRefusal);

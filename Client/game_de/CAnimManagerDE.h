@@ -71,6 +71,7 @@ namespace mta::game_de
         const char*                          GetAnimBlockName(AssocGroupId) override;
         AssocGroupId                         GetFirstAssocGroup(const char*) override;
         bool                                 IsValidGroup(std::uint32_t) const override;
+        bool                                 HasAnimGroupLoaded(AssocGroupId) override;
         bool                                 IsValidAnim(std::uint32_t, std::uint32_t) const override;
         int                                  GetAnimationBlockIndex(const char*) override;
         int                                  RegisterAnimBlock(const char*) override;

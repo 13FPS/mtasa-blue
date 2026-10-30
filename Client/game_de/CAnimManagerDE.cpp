@@ -750,6 +750,29 @@ namespace mta::game_de
         (void)result->GetAnimBlock();
         return result;
     }
+    bool CAnimManagerDE::HasAnimGroupLoaded(AssocGroupId requested)
+    {
+        static_assert(sizeof(AssocGroupId) == sizeof(std::uint32_t));
+        const auto index = static_cast<std::uint32_t>(requested);
+        const auto generation = ownerGeneration;
+        if (!groupAccess || !generation)
+            Require(ClockResult::NotInitialized, "HasAnimGroupLoaded");
+        NativeAnimationAssociationGroupReferenceToken token;
+        Require(groupAccess->ResolveAnimationAssociationGroup(generation, index, token), "HasAnimGroupLoaded");
+        if (token.ownerGeneration != generation)
+            Require(ClockResult::OwnerConflict, "HasAnimGroupLoaded");
+        if (token.index != index || !token.locator)
+            Require(ClockResult::BindingChanged, "HasAnimGroupLoaded");
+        const auto expected = token;
+        bool       loaded = false;
+        // The actual matched45B130 leaf returns false for a null block and
+        // otherwise its loaded byte. Reuse the qualified current native read;
+        // this query needs neither Created nor a cached game/block facade.
+        Require(groupAccess->ReadAnimationAssociationGroupLoaded(token, loaded), "HasAnimGroupLoaded");
+        if (token.ownerGeneration != expected.ownerGeneration || token.index != expected.index || token.locator != expected.locator)
+            Require(ClockResult::BindingChanged, "HasAnimGroupLoaded");
+        return loaded;
+    }
     CAnimManagerDE::AnimAssocGroup_type CAnimManagerDE::GetAnimBlendAssoc(AssocGroupId requested) const
     {
         static_assert(sizeof(AssocGroupId) == sizeof(std::uint32_t));

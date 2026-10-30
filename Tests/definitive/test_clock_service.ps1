@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('VehiclePredicates','EmptyBlockRemoval','BlockRegistration','BankPostprocess','BankEviction','BankDecompression','ApplicationTiming','AnimationHierarchyUncompress','NumericAssociationOwner','DynamicClumpOwner','AnimationAssociationGroupFactories','GroupSourceCreationOwner','JointTemporaryStaticInitializerOwner','GroupReplacementOwner','GroupCopyAnimationOwner','GroupEmptyInitialization','AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','PresentTransitionClock','StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
+    [ValidateSet('ModelTimeGetter','VehiclePredicates','EmptyBlockRemoval','BlockRegistration','BankPostprocess','BankEviction','BankDecompression','ApplicationTiming','AnimationHierarchyUncompress','NumericAssociationOwner','DynamicClumpOwner','AnimationAssociationGroupFactories','GroupSourceCreationOwner','JointTemporaryStaticInitializerOwner','GroupReplacementOwner','GroupCopyAnimationOwner','GroupEmptyInitialization','AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','PresentTransitionClock','StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -23,6 +23,9 @@ $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;a
 # Historical markers start false and are set only by the branch that actually
 # executed. Focus mode must never inherit the cumulative suite's claims.
 $record['runScope'] = $Scope
+$record['nativeModelTimeGetterActualSdkOwnerTested']=$false
+$record['nativeModelTimeGetterRefusalsTested']=$false
+$record['nativeModelTimeGetterOutputsPreserved']=$false
 $record['nativeNamedVehiclePredicatesActualSdkOwnerTested']=$false
 $record['nativeNamedVehiclePredicatesEffectsTested']=$false
 $record['nativeNamedVehiclePredicatesRefusalsTested']=$false
@@ -453,6 +456,7 @@ try {
         'Client/game_de/NativeModelReferenceHeap.h'
     )
     $sourceNames += @(
+        'Client/game_de/NativeModelTimeProfile.h','Tests/definitive/NativeModelTimeGetterOwnerTests.inl','Tests/definitive/Write-ModelTimeFixture.ps1',
         'Client/game_de/NativeModelVehicleNamedProfile.h','Tests/definitive/NativeVehicleIdePredicatesOwnerTests.inl','Tests/definitive/Write-ModelNamedPredicateFixture.ps1',
         'Client/game_de/NativeModelClassificationProfile.h',
         'Client/game_de/NativeModelClassificationCalls.h',
@@ -887,6 +891,12 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
     Copy-Item -LiteralPath $refsFixture.path -Destination $refsEvidence
     $record['animationBlockRefsSdkFixture'] = $refsFixture
     $record.animationBlockRefsSdkFixture.path = $refsEvidence
+    . (Join-Path $PSScriptRoot 'Write-ModelTimeFixture.ps1')
+    $timeFixture=Write-ModelTimeFixture $taskRoot (Join-Path $scratchRoot 'ModelTimeFixture.generated.h')
+    if($timeFixture.rejectingMethods -ne 74 -or @($timeFixture.inheritedProductionMethods).Count -ne 18){throw 'Time receiver must inherit18 actual methods and reject74 unrelated SDK methods'}
+    $timeEvidence=Join-Path $outputRoot 'ModelTimeFixture.generated.h'
+    Copy-Item -LiteralPath $timeFixture.path -Destination $timeEvidence
+    $record['modelTimeGeneratedFixture']=@{path=$timeEvidence;sha256=(Sha $timeEvidence);rejectingMethods=$timeFixture.rejectingMethods;inheritedProductionMethods=$timeFixture.inheritedProductionMethods}
     . (Join-Path $PSScriptRoot 'Write-ModelNamedPredicateFixture.ps1')
     $namedVehicleFixture=Write-ModelNamedPredicateFixture $taskRoot (Join-Path $scratchRoot 'ModelNamedPredicateFixture.generated.h')
     if($namedVehicleFixture.rejectingMethods -ne 75 -or @($namedVehicleFixture.inheritedProductionMethods).Count -ne 17){throw 'Named vehicle receiver must inherit17 actual observations and reject75 unrelated SDK methods'}
@@ -1240,6 +1250,7 @@ namespace ClockPrivateHierarchyParentWriteFixture {
     # Preserve the argument vector: an if result with one item becomes a
     # scalar string, so later += would append the switch to the path.
     $fixtureArguments = @(if ($Scope -in @('AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','StartupPreparationReadiness','StartupNumericGarages','StartupStreamingReceiver','StartupInitializationReadiness','PresentTransitionClock')) { $scratchRoot } else { $outputRoot })
+    if ($Scope -eq 'ModelTimeGetter') { $fixtureArguments += '--model-time-getter' }
     if ($Scope -eq 'VehiclePredicates') { $fixtureArguments += '--vehicle-predicates' }
     if ($Scope -eq 'PresentTransitionClock') { $fixtureArguments += '--present-transition-clock' }
     if ($Scope -eq 'StartupInitializationReadiness') { $fixtureArguments += '--startup-initialization-readiness' }
@@ -2392,6 +2403,16 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         $record.actualAnimationAssociationGroupStaticChildSdkOwnerTested=$text.Contains('Production actual animation association group static child SDK fixture completed')
         $record.nativeAnimationAssociationGroupChildProductsCoupledRefusalsTested=$text.Contains('Production animation association group child products coupled refusal fixture completed')
         if(-not($record.nativeAnimationAssociationGroupChildProductsOwnerTested -and $record.actualAnimationAssociationGroupStaticChildSdkOwnerTested -and $record.nativeAnimationAssociationGroupChildProductsCoupledRefusalsTested)){throw 'Actual association group child products scope incomplete'}
+        $record.productionNativeCallbackTested=$true
+    } elseif($Scope -eq 'ModelTimeGetter'){
+        $record.nativeModelTimeGetterActualSdkOwnerTested=$text.Contains('Production model time getter actual SDK owner fixture completed')
+        $record.nativeModelTimeGetterRefusalsTested=$text.Contains('Production model time getter source current owner refusals fixture completed')
+        $record.nativeModelTimeGetterOutputsPreserved=$text.Contains('Production model time getter raw outputs and complete bytes preserved fixture completed')
+        $record.nativeNamedVehiclePredicatesActualSdkOwnerTested=$text.Contains('Production named vehicle predicates actual SDK owner fixture completed')
+        $record.nativeNamedVehiclePredicatesEffectsTested=$text.Contains('Production named vehicle predicates raw DWORD null nonvehicle effects fixture completed')
+        $record.nativeNamedVehiclePredicatesRefusalsTested=$text.Contains('Production named vehicle predicates source owner bookend refusals fixture completed')
+        $record.existingFourNativeClassifiersPreserved=$text.Contains('Production existing four native classifier whole originals fixture completed')
+        if(-not($record.nativeModelTimeGetterActualSdkOwnerTested -and $record.nativeModelTimeGetterRefusalsTested -and $record.nativeModelTimeGetterOutputsPreserved -and $record.nativeNamedVehiclePredicatesActualSdkOwnerTested -and $record.nativeNamedVehiclePredicatesEffectsTested -and $record.nativeNamedVehiclePredicatesRefusalsTested -and $record.existingFourNativeClassifiersPreserved)){throw 'Combined time getter and prior11 classifier owner scope incomplete'}
         $record.productionNativeCallbackTested=$true
     } elseif($Scope -eq 'VehiclePredicates'){
         $record.nativeNamedVehiclePredicatesActualSdkOwnerTested=$text.Contains('Production named vehicle predicates actual SDK owner fixture completed')

@@ -38,6 +38,7 @@ namespace mta::game_de
         bool                       IsQuadBike() override;
         bool                       IsFakePlane() override;
         bool                       IsTowableBy(CModelInfo* towingModel) override;
+        bool                       GetTime(char& hourOn, char& hourOff) override;
 
     protected:
         // Request dependencies consume the native getter's EAX result. Keep

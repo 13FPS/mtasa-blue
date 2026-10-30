@@ -639,6 +639,13 @@ namespace ClockCameraSphereOwnerTest
     }
 }
 
+namespace ClockModelTimeGetterOwnerTest
+{
+    bool           active = false, copyFailure = false;
+    std::uintptr_t model = 0;
+    unsigned       tupleReads = 0;
+    void (*afterTuple)() noexcept = nullptr;
+}
 namespace ClockNamedVehiclePredicateOwnerTest
 {
     BOOL WINAPI Read(HANDLE, LPCVOID, LPVOID, SIZE_T, SIZE_T*) noexcept;
@@ -3003,6 +3010,25 @@ namespace mta::game_de::NativeImageAccess
         }
         return true;
     }
+    bool ModelTimeGetterFixtureReadImage(std::uintptr_t image, std::uintptr_t address, void* destination, std::size_t bytes, bool writable = false,
+                                         bool executable = false) noexcept
+    {
+        if (!ReadImage(image, address, destination, bytes, writable, executable))
+            return false;
+        namespace Host = ClockModelTimeGetterOwnerTest;
+        if (Host::active && address == Host::model + 0x60 && bytes == 4)
+        {
+            ++Host::tupleReads;
+            if (Host::copyFailure)
+                return false;
+            if (const auto action = Host::afterTuple)
+            {
+                Host::afterTuple = nullptr;
+                action();
+            }
+        }
+        return true;
+    }
     bool ModelBankOwnerFixtureReadImage(std::uintptr_t image, std::uintptr_t address, void* destination, std::size_t bytes, bool writable = false,
                                         bool executable = false) noexcept
     {
@@ -3466,7 +3492,9 @@ namespace ClockWorldIgnoreOwnerTest
 #undef MTA_DE_MODEL_REFERENCE_RELEASE_EXCHANGE
 #define MTA_DE_MODEL_CLASSIFICATION_NATIVE_INVOKE ClockModelClassificationOwnerTest::Invoke
 #define ReadProcessMemory                         ClockNamedVehiclePredicateOwnerTest::Read
+#define ReadImage                                 ModelTimeGetterFixtureReadImage
 #include "../../Client/game_de/NativeModelClassificationCalls.cpp"
+#undef ReadImage
 #undef ReadProcessMemory
 #undef MTA_DE_MODEL_CLASSIFICATION_NATIVE_INVOKE
 #include "../../Client/game_de/NativeStreamingResourceContext.cpp"
@@ -8728,6 +8756,8 @@ namespace
 #include "../../Client/game_de/CModelInfoDE.h"
 #include "ModelNamedPredicateFixture.generated.h"
 #include "NativeVehicleIdePredicatesOwnerTests.inl"
+#include "ModelTimeFixture.generated.h"
+#include "NativeModelTimeGetterOwnerTests.inl"
 
 // The strict receiver must execute production typed tickets and the distinct
 // metadata-only delete route. Deleting an interface acknowledges only its own
@@ -9115,6 +9145,7 @@ int main(int argc, char** argv)
     const bool constructorRecovery = argc == 3 && std::strcmp(argv[2], "--weapon-constructor-recovery") == 0;
     const bool constructorTimer = argc == 3 && std::strcmp(argv[2], "--weapon-constructor-timer") == 0;
     const bool constructorOnly = constructorSuccess || constructorPartial || constructorRecovery || constructorTimer;
+    const bool modelTimeGetterOnly = argc == 3 && std::strcmp(argv[2], "--model-time-getter") == 0;
     const bool vehiclePredicatesOnly = argc == 3 && std::strcmp(argv[2], "--vehicle-predicates") == 0;
     const bool pedOwnerOnly = argc == 3 && std::strcmp(argv[2], "--ped-owner") == 0;
     const bool currentWeaponOnly = argc == 3 && std::strcmp(argv[2], "--ped-current-weapon") == 0;
@@ -9126,23 +9157,23 @@ int main(int argc, char** argv)
     const bool poolRegistryOnly = argc == 3 && std::strcmp(argv[2], "--ped-pool-registry") == 0;
     Check((argc == 2 || presentTransitionClockOnly || startupInitializationReadinessOnly || startupStreamingReceiverOnly || startupNumericGaragesOnly ||
            startupPreparationReadinessOnly || startupMenuOnly || startupCollisionOnly || pedCreationLifecycleOnly || constructorOnly || vehiclePredicatesOnly ||
-           pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly || waterOnly || animationOnly ||
-           animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly || fireCollisionOnly || fireOnly ||
-           collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly || worldLineOnly ||
-           worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly || cameraSphereOnly ||
-           pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly || animationBlockRefsOnly ||
-           animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly || animationGatewayOnly ||
-           customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly || customAnimationSequenceNameOnly ||
-           freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly || privateHierarchyParentOnly ||
-           privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly ||
-           customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly ||
-           animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly || animationGroupValidityOnly ||
-           animationIdValidityOnly || animationAssociationGroupReadsOnly || applicationTimingOnly || emptyBlockRemovalOnly || blockRegistrationOnly ||
-           bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly || dynamicClumpOnly ||
-           groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
-           groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
-           animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
-           privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
+           modelTimeGetterOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly || waterOnly ||
+           animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly ||
+           fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly ||
+           worldLineOnly || worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly ||
+           cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly ||
+           animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly ||
+           animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly ||
+           customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly ||
+           privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly ||
+           privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly ||
+           sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly ||
+           animationDefinitionBlockNamesOnly || animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly ||
+           applicationTimingOnly || emptyBlockRemovalOnly || blockRegistrationOnly || bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly ||
+           hierarchyUncompressOnly || numericAssociationOnly || dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly ||
+           groupReplacementOnly || groupCopyAnimationOnly || groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly ||
+           animationAssociationGroupOffsetOnly || animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly ||
+           pedRenderOnly || privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
     if (presentTransitionClockOnly)
@@ -9349,6 +9380,17 @@ int main(int argc, char** argv)
             fixture.Create(argv[1]);
             ApplicationTimingOwnerFixture::Run(fixture, applicationTimingScenario);
         }
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (modelTimeGetterOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        ModelTimeGetterOwnerFixture::Run(fixture);
+        // One executable/compile also exercises the prior seven named policies
+        // and four complete original native classifiers after ABI/input changes.
+        VehicleIdePredicatesOwnerFixture::Run(fixture);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

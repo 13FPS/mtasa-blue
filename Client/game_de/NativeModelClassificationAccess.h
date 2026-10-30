@@ -15,6 +15,9 @@ namespace mta::game_de
         // result. Refusal preserves the caller's previous observation.
         virtual ClockResult ReadModelArchiveAllocated(std::uint32_t, bool&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult ReadModelType(std::uint32_t, NativeModelTypeObservation&) noexcept { return ClockResult::NotInitialized; }
+        // A missing owner cannot manufacture absent time metadata or a time
+        // tuple. This distinct current read grants no persistent native lease.
+        virtual ClockResult ReadModelTime(std::uint32_t, NativeModelTimeObservation&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult ReadModelVehiclePredicate(std::uint32_t, NativeModelVehiclePredicate, bool&) noexcept { return ClockResult::NotInitialized; }
         // Older owners must refuse this distinct raw DWORD observation. The
         // SDK owns any explicit low-byte conversion, not an inferred enum map.

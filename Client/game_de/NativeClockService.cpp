@@ -328,6 +328,7 @@ namespace mta::game_de
             ClockResult RemoveStreamingModel(std::uint32_t) noexcept override;
             ClockResult ReadModelVehiclePredicate(std::uint32_t, NativeModelVehiclePredicate, bool&) noexcept override;
             ClockResult ReadModelType(std::uint32_t, NativeModelTypeObservation&) noexcept override;
+            ClockResult ReadModelTime(std::uint32_t, NativeModelTimeObservation&) noexcept override;
             ClockResult ReadModelVehicleSubtype(std::uint32_t, std::uint32_t&) noexcept override;
             ClockResult ReadModelInterface(std::uint32_t, std::uintptr_t&) noexcept override;
             ClockResult ReadModelRender(std::uint32_t, std::uintptr_t&) noexcept override;
@@ -5697,6 +5698,13 @@ namespace mta::game_de
             if (receipt.entered && result != ClockResult::Ok)
                 Stop(result);
             return result;
+        }
+        ClockResult NativeAccess::ReadModelTime(std::uint32_t modelIndex, NativeModelTimeObservation& output) noexcept
+        {
+            // Keep the timed tuple inside this retained owner's synchronous
+            // callback. Neither the SDK nor this current read acquires a model
+            // reference, invokes GetTimeInfo, or gains restoration authority.
+            return NativeModelClassificationCalls::ReadTime(runtime.image, modelIndex, &CheckTimingOwner, output);
         }
         ClockResult NativeAccess::ReadModelType(std::uint32_t modelIndex, NativeModelTypeObservation& output) noexcept
         {

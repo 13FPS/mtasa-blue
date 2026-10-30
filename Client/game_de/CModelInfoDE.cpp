@@ -5,10 +5,27 @@
  ****************************************************************************/
 #include "CModelInfoDE.h"
 #include <stdexcept>
+#include <cstring>
 #include <exception>
 #include <string>
 namespace mta::game_de
 {
+    bool CModelInfoDE::GetTime(char& hourOn, char& hourOff)
+    {
+        NativeModelTimeObservation value;
+        const auto                 status = access.ReadModelTime(model, value);
+        if (status != ClockResult::Ok)
+            throw std::runtime_error("DE model owner refused GetTime: " + std::to_string(static_cast<unsigned>(status)));
+        if (!value.hasTime)
+            return false;
+        // MTA copies raw chars On then Off. Publish only the complete current
+        // observation, preserving both outputs on refusal and final Off when
+        // ordinary caller output references alias. No default is cached here.
+        std::memcpy(&hourOn, &value.on, sizeof(hourOn));
+        std::memcpy(&hourOff, &value.off, sizeof(hourOff));
+        return true;
+    }
+
     bool CModelInfoDE::IsTowableBy(CModelInfo* towingModel)
     {
         // Preserve MTA's portable towing policy and virtual-call order. The

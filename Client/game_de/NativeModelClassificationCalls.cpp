@@ -5,6 +5,7 @@
  ****************************************************************************/
 #include "NativeModelClassificationCalls.h"
 #include "NativeModelVehicleNamedProfile.h"
+#include "NativeModelTimeProfile.h"
 #include "NativeStreamingModelContext.h"
 #include "NativeImageAccess.h"
 #include "NativeModelBankProfile.h"
@@ -194,6 +195,137 @@ namespace mta::game_de::NativeModelClassificationCalls
         }
 #endif
     }
+
+    namespace TimeDetail
+    {
+        namespace T = NativeModelTimeProfile;
+        bool Profile(std::uintptr_t image) noexcept
+        {
+            IMAGE_DOS_HEADER   dos{};
+            IMAGE_NT_HEADERS64 nt{};
+            if (!NativeImageAccess::ReadImage(image, image, &dos, sizeof(dos)) || dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew <= 0 ||
+                static_cast<std::size_t>(dos.e_lfanew) > NativePedPoolProfile::ImageSize - sizeof(nt) ||
+                !NativeImageAccess::ReadImage(image, image + static_cast<std::uintptr_t>(dos.e_lfanew), &nt, sizeof(nt)) ||
+                nt.Signature != IMAGE_NT_SIGNATURE || nt.FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 ||
+                nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC || nt.OptionalHeader.SizeOfImage != NativePedPoolProfile::ImageSize ||
+                nt.FileHeader.SizeOfOptionalHeader < sizeof(IMAGE_OPTIONAL_HEADER64))
+                return false;
+            const auto at = static_cast<std::uintptr_t>(dos.e_lfanew) + offsetof(IMAGE_NT_HEADERS64, OptionalHeader) + nt.FileHeader.SizeOfOptionalHeader;
+            std::array<IMAGE_SECTION_HEADER, 96> sections{};
+            const auto                           bytes = static_cast<std::size_t>(nt.FileHeader.NumberOfSections) * sizeof(IMAGE_SECTION_HEADER);
+            if (!nt.FileHeader.NumberOfSections || nt.FileHeader.NumberOfSections > sections.size() || at > NativePedPoolProfile::ImageSize ||
+                bytes > NativePedPoolProfile::ImageSize - at || !NativeImageAccess::ReadImage(image, image + at, sections.data(), bytes))
+                return false;
+            const auto contains = [&](std::uintptr_t rva, std::size_t size, DWORD required, DWORD forbidden)
+            {
+                for (std::size_t i = 0; i != nt.FileHeader.NumberOfSections; ++i)
+                    if (NativeImageAccess::SectionContains(sections[i], rva, size, required, forbidden))
+                        return true;
+                return false;
+            };
+            if (!contains(T::PoolRva, T::PoolCapacity * T::RowBytes, IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE, IMAGE_SCN_MEM_EXECUTE) ||
+                !contains(T::PoolCountRva, sizeof(std::int32_t), IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE, IMAGE_SCN_MEM_EXECUTE) ||
+                !contains(T::VtableRva, sizeof(T::VtableMethods), IMAGE_SCN_MEM_READ, IMAGE_SCN_MEM_WRITE | IMAGE_SCN_MEM_EXECUTE))
+                return false;
+            for (const auto& pin : T::Pins)
+            {
+                std::array<unsigned char, T::MaximumPinBytes> actual{};
+                if (!pin.size || pin.size > actual.size() ||
+                    !contains(pin.rva, pin.size, IMAGE_SCN_MEM_READ | (pin.code ? IMAGE_SCN_MEM_EXECUTE : 0),
+                              IMAGE_SCN_MEM_WRITE | (pin.code ? 0 : IMAGE_SCN_MEM_EXECUTE)) ||
+                    !NativeImageAccess::ReadImage(image, image + pin.rva, actual.data(), pin.size, false, pin.code) ||
+                    std::memcmp(actual.data(), pin.bytes, pin.size))
+                    return false;
+            }
+            for (std::size_t i = 0; i != sizeof(T::VtableMethods) / sizeof(T::VtableMethods[0]); ++i)
+            {
+                std::uintptr_t pointer = 0;
+                if (!NativeImageAccess::ReadImage(image, image + T::VtableRva + i * sizeof(pointer), &pointer, sizeof(pointer)) ||
+                    pointer != image + T::VtableMethods[i])
+                    return false;
+            }
+            return NativeStreamingModelContext::QualifyProfile(image);
+        }
+        bool Tuple(std::uintptr_t image, std::uintptr_t model, std::int32_t& count, std::array<unsigned char, 4>& tuple) noexcept
+        {
+            const auto base = image + T::PoolRva;
+            if (model < base || model - base >= T::PoolCapacity * T::RowBytes || (model - base) % T::RowBytes ||
+                !NativeImageAccess::ReadImage(image, image + T::PoolCountRva, &count, sizeof(count), true) || count <= 0 ||
+                count > static_cast<std::int32_t>(T::PoolCapacity) || (model - base) / T::RowBytes >= static_cast<std::size_t>(count))
+                return false;
+            std::uintptr_t vtable = 0, method = 0;
+            if (!NativeImageAccess::ReadImage(image, model, &vtable, sizeof(vtable), true) || vtable != image + T::VtableRva ||
+                !NativeImageAccess::ReadImage(image, vtable + T::TimeSlot, &method, sizeof(method)) || method != image + T::TimeMethodRva)
+                return false;
+            return NativeImageAccess::ReadImage(image, model + T::TimeOffset, tuple.data(), tuple.size(), true);
+        }
+    }
+    ClockResult ReadTime(std::uintptr_t image, std::uint32_t modelIndex, CheckOwner owner, NativeModelTimeObservation& output) noexcept
+    {
+        if (modelIndex >= NativeModelBankProfile::ModelCount)
+            return ClockResult::InvalidArgument;
+        if (!owner)
+            return ClockResult::NotInitialized;
+        NativeModelBankReader        bank({image}, owner);
+        NativeModelBankReader::Value model;
+        auto                         result = bank.Read(modelIndex, model);
+        if (result != ClockResult::Ok)
+            return result;
+        if (!TimeDetail::Profile(image))
+            return ClockResult::UnsupportedBuild;
+        NativeModelTimeObservation         next;
+        NativeStreamingModelContext::Value context;
+        std::array<unsigned char, 6>       before{}, after{};
+        unsigned char                      type = 0, confirmed = 0;
+        std::array<unsigned char, 4>       tuple{}, tupleAfter{};
+        std::int32_t                       count = 0, countAfter = 0;
+        if (model.nativeModelInfo)
+        {
+            if ((result = NativeStreamingModelContext::Capture(image, model, context)) != ClockResult::Ok)
+                return result;
+            if (!NativeModelTypeLeaf::Read(image, context.typeMethod, before, type))
+                return ClockResult::UnsupportedBuild;
+            if (type == 3)
+            {
+                // A second type3 table has a different accessor. Admit only
+                // the separately named current169-row producer and pure slot38;
+                // neither type alone nor an arbitrary metadata pointer suffices.
+                if (context.modelVtable != image + NativeModelTimeProfile::VtableRva || context.typeMethod != image + NativeModelTimeProfile::TypeMethodRva ||
+                    !TimeDetail::Tuple(image, model.nativeModelInfo, count, tuple))
+                    return ClockResult::UnsupportedBuild;
+                next = {true, tuple[0], tuple[1]};
+            }
+        }
+        if ((result = bank.Recheck(model)) != ClockResult::Ok ||
+            (model.nativeModelInfo && (result = NativeStreamingModelContext::Recheck(image, model, context)) != ClockResult::Ok) ||
+            (result = owner()) != ClockResult::Ok ||
+            (model.nativeModelInfo && (result = NativeStreamingModelContext::Recheck(image, model, context)) != ClockResult::Ok))
+            return result;
+        // Finish all owner callbacks before closing code/count/tuple/bank facts.
+        // Publish no partial tuple when a current identity or paired byte moved.
+        if (!NativeModelBankReader::Revalidate({image}) || !TimeDetail::Profile(image))
+            return ClockResult::BindingChanged;
+        if (model.nativeModelInfo && (!NativeModelTypeLeaf::Read(image, context.typeMethod, after, confirmed) || before != after || type != confirmed))
+            return ClockResult::BindingChanged;
+        if (next.hasTime && (!TimeDetail::Tuple(image, model.nativeModelInfo, countAfter, tupleAfter) || count != countAfter || tuple != tupleAfter))
+            return ClockResult::BindingChanged;
+        if (model.nativeModelInfo && (result = NativeStreamingModelContext::Recheck(image, model, context)) != ClockResult::Ok)
+            return result;
+        std::uintptr_t current = 0;
+        if (!NativeImageAccess::ReadImage(image, model.slotAddress, &current, sizeof(current), true) || current != model.nativeModelInfo ||
+            (model.nativeModelInfo && !NativeStreamingModelContext::MembershipUnchanged(image, context)) || !TimeDetail::Profile(image))
+            return ClockResult::BindingChanged;
+        std::uint32_t state = 0;
+        if (!NativeGameStateMemory::Read(image, state))
+            return ClockResult::BindingChanged;
+        if (state != 9)
+            return ClockResult::NotInitialized;
+        if ((result = NativeStartGameCalls::CheckThread(image)) != ClockResult::Ok)
+            return result;
+        output = next;
+        return ClockResult::Ok;
+    }
+
     ClockResult ReadType(std::uintptr_t image, std::uint32_t modelIndex, CheckOwner owner, NativeModelTypeObservation& output) noexcept
     {
         if (modelIndex >= NativeModelBankProfile::ModelCount)

@@ -8,6 +8,11 @@
 #include "NativeModelBankReader.h"
 namespace mta::game_de
 {
+    struct NativeModelTimeObservation
+    {
+        bool          hasTime = false;
+        unsigned char on = 0, off = 0;
+    };
     struct NativeModelTypeObservation
     {
         bool          hasModel = false;
@@ -28,6 +33,10 @@ namespace mta::game_de::NativeModelClassificationCalls
         // A named producer policy performs no native classifier invocation.
         bool entered = false, returned = false, policyPort = false;
     };
+    // Read the named current timed pool tuple through its actual pure slot38.
+    // This operation owns no setter/default cache and exposes no native pointer.
+    ClockResult ReadTime(std::uintptr_t image, std::uint32_t model, CheckOwner, NativeModelTimeObservation& output) noexcept;
+
     // Observe only a complete pure constant-return built-in getter body.
     // The shared leaf reader invokes nothing; all bank/context/code facts are
     // bookended inside this same callback. Refusal preserves the old byte.

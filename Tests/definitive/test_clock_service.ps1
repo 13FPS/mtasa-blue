@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('BlockRegistration','BankPostprocess','BankEviction','BankDecompression','ApplicationTiming','AnimationHierarchyUncompress','NumericAssociationOwner','DynamicClumpOwner','AnimationAssociationGroupFactories','GroupSourceCreationOwner','JointTemporaryStaticInitializerOwner','GroupReplacementOwner','GroupCopyAnimationOwner','GroupEmptyInitialization','AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','PresentTransitionClock','StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
+    [ValidateSet('EmptyBlockRemoval','BlockRegistration','BankPostprocess','BankEviction','BankDecompression','ApplicationTiming','AnimationHierarchyUncompress','NumericAssociationOwner','DynamicClumpOwner','AnimationAssociationGroupFactories','GroupSourceCreationOwner','JointTemporaryStaticInitializerOwner','GroupReplacementOwner','GroupCopyAnimationOwner','GroupEmptyInitialization','AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','PresentTransitionClock','StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -23,6 +23,10 @@ $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;a
 # Historical markers start false and are set only by the branch that actually
 # executed. Focus mode must never inherit the cumulative suite's claims.
 $record['runScope'] = $Scope
+$record['nativeEmptyBlockRemovalActualSdkOwnerTested']=$false
+$record['nativeEmptyBlockRemovalEffectsTested']=$false
+$record['nativeEmptyBlockRemovalRefusalsTested']=$false
+$record['nativeEmptyBlockRemovalDebtTested']=$false
 $record['nativeBankPostprocessActualSdkOwnerTested']=$false
 $record['nativeBankPostprocessEffectsTested']=$false
 $record['nativeBankPostprocessRefusalsTested']=$false
@@ -661,6 +665,7 @@ try {
     $sourceNames += @('Client/game_de/NativeAnimationHierarchyCacheRemove.h','Client/game_de/NativeAnimationHierarchyCacheRemove.cpp','Client/game_de/NativeAnimationHierarchyCacheRemoveProfile.h')
     $sourceNames += @('Tests/definitive/ApplicationTimingOwnerTests.inl')
     $sourceNames += @('Tests/definitive/NativeBankDecompressionOwnerTests.inl','Client/game_de/NativeAnimationHierarchyDecompressProfile.h','Tests/definitive/NativeBankEvictionOwnerTests.inl','Client/game_de/NativeAnimationHierarchyEvictionProfile.h')
+    $sourceNames += @('Tests/definitive/NativeEmptyAnimationBlockRemovalOwnerTests.inl','Tests/definitive/Write-AnimationManagerEmptyBlockRemovalFixture.ps1','Client/game_de/NativeAnimationBlockRemoval.h','Client/game_de/NativeAnimationBlockRemoval.cpp')
     $sourceNames += @('Tests/definitive/NativeBankPostprocessOwnerTests.inl','Tests/definitive/NativeAnimationBlockRegistrationOwnerTests.inl','Tests/definitive/Write-AnimationManagerRegistrationFixture.ps1','Client/game_de/NativeAnimationBlockRegistration.h','Client/game_de/NativeAnimationBlockRegistration.cpp')
     $sourceNames += @('Client/game_de/NativeAnimationHierarchyUncompress.h','Client/game_de/NativeAnimationHierarchyUncompress.cpp','Tests/definitive/NativeAnimationHierarchyUncompressOwnerTests.inl','Tests/definitive/Write-AnimationManagerUncompressFixture.ps1')
     $sourceNames += @('Tests/definitive/NativeNumericAssociationOwnerTests.inl','Tests/definitive/Write-AnimationAssociationNumericFactoryFixture.ps1','Tests/definitive/Write-AnimationAssociationRawFactoryFixture.ps1','Client/game_de/NativeAnimationAssociationIssuedView.h')
@@ -882,6 +887,12 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
     $registrationEvidence=Join-Path $outputRoot 'AnimationManagerRegistrationFixture.generated.h'
     Copy-Item -LiteralPath $registrationFixture.path -Destination $registrationEvidence
     $record['registrationGeneratedFixture']=@{path=$registrationEvidence;sha256=(Sha $registrationEvidence);rejectingMethods=$registrationFixture.rejectingMethods;inheritedMethods=$registrationFixture.inheritedMethods}
+    . (Join-Path $PSScriptRoot 'Write-AnimationManagerEmptyBlockRemovalFixture.ps1')
+    $emptyRemovalFixture=Write-AnimationManagerEmptyBlockRemovalFixture $taskRoot (Join-Path $scratchRoot 'AnimationManagerEmptyBlockRemovalFixture.generated.h')
+    if(@($emptyRemovalFixture.inheritedMethods).Count -ne 9 -or $emptyRemovalFixture.rejectingMethods -ne 63){throw 'Empty block removal receiver must inherit exactly actual manager registration/reference observations plus RemoveAnimBlock'}
+    $emptyRemovalEvidence=Join-Path $outputRoot 'AnimationManagerEmptyBlockRemovalFixture.generated.h'
+    Copy-Item -LiteralPath $emptyRemovalFixture.path -Destination $emptyRemovalEvidence
+    $record['emptyBlockRemovalGeneratedFixture']=@{path=$emptyRemovalEvidence;sha256=(Sha $emptyRemovalEvidence);rejectingMethods=$emptyRemovalFixture.rejectingMethods;inheritedMethods=$emptyRemovalFixture.inheritedMethods}
     . (Join-Path $PSScriptRoot 'Write-AnimationManagerUncompressFixture.ps1')
     $uncompressFixture=Write-AnimationManagerUncompressFixture $taskRoot (Join-Path $scratchRoot 'AnimationManagerUncompressFixture.generated.h')
     if(@($uncompressFixture.inheritedMethods).Count -ne 5 -or $uncompressFixture.rejectingMethods -ne 64){throw 'Uncompress receiver must inherit actual manager dispatch and two bank factories'}
@@ -1141,7 +1152,7 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         (Join-Path $taskRoot 'Client/game_de/NativePresentTransitionGate.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeImageAccess.cpp')) +
         $runtimeDependencies + @(('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'fixture.pdb')),('/Fe'+$executable),'/link','bcrypt.lib','user32.lib') + $objects
-    if($Scope -in @('PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','BankPostprocess','BlockRegistration')){
+    if($Scope -in @('PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','BankPostprocess','BlockRegistration','EmptyBlockRemoval')){
         # All selected positive calls execute the real admitted saved body;
         # the same delegate schedules intentional post-return failures only.
         $postHook=Join-Path $scratchRoot 'PrivateHierarchyPostprocessHook.generated.h'
@@ -1520,11 +1531,16 @@ namespace ClockPrivateHierarchyParentWriteFixture {
             $record.checks+=[int]$Matches[1];$texts+=$part
         }
         $record.testRun=$record.testRuns[-1];$text=$texts -join [Environment]::NewLine
-    } elseif($Scope -eq 'BlockRegistration'){
+    } elseif($Scope -in @('BlockRegistration','EmptyBlockRemoval')){
         # The one compiled binary covers new actual post-frame conversions and
         # all37 component regressions and the existing private success owner, each in a fresh host.
         $record['testRuns']=@();$record['testScenarioExecutables']=@();$texts=@();$compiledHash=Sha $executable
         $cases=@()
+        if($Scope -eq 'EmptyBlockRemoval'){
+            foreach($scenario in @('success','refusals','timer-owner','entered-before','entered-after','partial','owner-loss','group-before','group-after','group-drift','effect-mismatch')){
+                $cases+=@{key=('empty-block-removal-'+$scenario);cli=('--empty-block-removal-'+$scenario)}
+            }
+        }
         foreach($scenario in @('success','refusals','timer-owner','entered-before','entered-after','partial','owner-loss','mismatch','count-change','prefix-change','group-change')){
             $cases+=@{key=('block-registration-'+$scenario);cli=('--block-registration-'+$scenario)}
         }
@@ -2371,6 +2387,17 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         $record['applicationTimingThrowCleanupTested']=$text.Contains('Production application timing throwing handler cleanup fixture completed')
         $record['applicationTimingLegacyRegressionsTested']=$text.Contains('Production application timing selected legacy regressions fixture completed')
         if(-not($record.applicationTimingActualOwnerTested -and $record.applicationTimingCleanupRetryTested -and $record.applicationTimingThrowCleanupTested -and $record.applicationTimingLegacyRegressionsTested)){throw 'Actual application timing selected scope incomplete'}
+        $record.productionNativeCallbackTested=$true
+    } elseif($Scope -eq 'EmptyBlockRemoval'){
+        $record.nativeEmptyBlockRemovalActualSdkOwnerTested=$text.Contains('Production empty block removal actual SDK owner fixture completed')
+        $record.nativeEmptyBlockRemovalEffectsTested=$text.Contains('Production empty block removal exact empty effects whole FEB580 fixture completed')
+        $record.nativeEmptyBlockRemovalRefusalsTested=$text.Contains('Production empty block removal source owner refusals fixture completed') -and $text.Contains('Production empty block removal timer phase refusal fixture completed')
+        $record.nativeEmptyBlockRemovalDebtTested=$true
+        foreach($debt in @('before','after','partial','owner','group-before','group-after','group-drift','mismatch')){
+            $record.nativeEmptyBlockRemovalDebtTested=$record.nativeEmptyBlockRemovalDebtTested -and $text.Contains('Production empty block removal '+$debt+' retained debt fixture completed')
+        }
+        $record['emptyBlockRemovalExisting61Tested']=$record.testRuns.Count -eq 72 -and $text.Contains('Production block registration actual SDK source policy fixture completed') -and $text.Contains('Production block registration group retained debt fixture completed') -and $text.Contains('Production bank postprocess quaternion actual SDK owner fixture completed') -and $text.Contains('Production bank empty time whole original fixture completed') -and $text.Contains('Production bank eviction actual SDK whole original fixture completed') -and $text.Contains('Production bank decompression actual SDK whole original fixture completed') -and $text.Contains('Production hierarchy cache removal owner loss debt fixture completed') -and $text.Contains('Production actual private hierarchy postprocess SDK owner fixture completed')
+        if(-not($record.nativeEmptyBlockRemovalActualSdkOwnerTested -and $record.nativeEmptyBlockRemovalEffectsTested -and $record.nativeEmptyBlockRemovalRefusalsTested -and $record.nativeEmptyBlockRemovalDebtTested -and $record.emptyBlockRemovalExisting61Tested)){throw 'Actual empty-block removal and existing61 source scopes incomplete'}
         $record.productionNativeCallbackTested=$true
     } elseif($Scope -eq 'BlockRegistration'){
         $record['nativeBlockRegistrationActualSdkOwnerTested']=$text.Contains('Production block registration actual SDK source policy fixture completed')

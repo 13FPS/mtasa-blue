@@ -52,6 +52,9 @@ namespace mta::game_de
         virtual ClockResult ReadAnimationBlockCounterRefs(const NativeAnimationBlockIdentity&, std::uint16_t&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult AddAnimationBlockCounterRef(const NativeAnimationBlockIdentity&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult RemoveAnimationBlockRefWithoutDelete(const NativeAnimationBlockIdentity&) noexcept { return ClockResult::NotInitialized; }
+        // Only the source-qualified empty domain may clear loaded/ref fields;
+        // owning hierarchy or group children still requires native teardown.
+        virtual ClockResult RemoveEmptyAnimationBlock(const NativeAnimationBlockIdentity&) noexcept { return ClockResult::NotInitialized; }
         // MTA's unsigned GetAnimation argument is a full hierarchy hash, not
         // an ordinal. A qualified complete miss returns Ok/null; owner/range
         // failure preserves output and never becomes a missing animation.

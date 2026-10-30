@@ -707,6 +707,13 @@ namespace mta::game_de
         std::memcpy(&value, &bits, sizeof(value));
         return value;
     }
+    void CAnimManagerDE::RemoveAnimBlock(int index)
+    {
+        const auto identity = ReadCounterIdentity(index, "RemoveAnimBlock");
+        // Preserve the real manager operation through current raw16 identity.
+        // Native admission owns the restricted empty-block lifecycle domain.
+        Require(blockAccess->RemoveEmptyAnimationBlock(identity), "RemoveAnimBlock");
+    }
     void CAnimManagerDE::RemoveAnimBlockRef(int index)
     {
         const auto identity = ReadCounterIdentity(index, "RemoveAnimBlockRef");

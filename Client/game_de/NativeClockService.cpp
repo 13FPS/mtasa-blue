@@ -67,6 +67,7 @@
 #include "NativeAnimationHierarchyMemory.h"
 #include "NativeAnimationHierarchyUncompress.h"
 #include "NativeAnimationBlockRegistration.h"
+#include "NativeAnimationBlockRemoval.h"
 #include "NativeAnimationHierarchyCacheRemove.h"
 #include "NativeAnimationAssociationProgressProfile.h"
 #include "NativeCustomAnimSequenceController.h"
@@ -427,6 +428,7 @@ namespace mta::game_de
             ClockResult ReadAnimationBlockCounterRefs(const NativeAnimationBlockIdentity&, std::uint16_t&) noexcept override;
             ClockResult AddAnimationBlockCounterRef(const NativeAnimationBlockIdentity&) noexcept override;
             ClockResult RemoveAnimationBlockRefWithoutDelete(const NativeAnimationBlockIdentity&) noexcept override;
+            ClockResult RemoveEmptyAnimationBlock(const NativeAnimationBlockIdentity&) noexcept override;
             ClockResult ReadAnimationBlockRefs(const NativeAnimationBlockIdentity&, std::uint16_t&) noexcept override;
             ClockResult AddAnimationBlockRef(const NativeAnimationBlockIdentity&) noexcept override;
             ClockResult ReadAnimationBlockIdentity(std::uint64_t, std::uint32_t, NativeAnimationBlockIdentity&) noexcept override;
@@ -692,6 +694,8 @@ namespace mta::game_de
             NativeAnimationHierarchyUncompressCalls::Receipt  hierarchyUncompressReceipt;
             NativeAnimationBlockRegistration                  blockRegistration;
             NativeAnimationBlockRegistrationCalls::Receipt    blockRegistrationReceipt;
+            NativeAnimationBlockRemoval                       blockRemoval;
+            NativeAnimationBlockRemovalCalls::Receipt         blockRemovalReceipt;
             NativeAnimationHierarchyCacheRemove               hierarchyCacheRemove;
             NativeAnimationHierarchyCacheRemoveCalls::Receipt hierarchyCacheRemoveReceipt;
             std::atomic<std::uint64_t>                        customSequenceGeneration{0};
@@ -888,7 +892,8 @@ namespace mta::game_de
                    runtime.pedModelCreationRetained.load() || runtime.modelBackingReferences.IsRetained() || runtime.pedReferences.IsRetained() ||
                    WorldIgnoreRetained() || runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() ||
                    runtime.privateAssociations.IsRetained() || runtime.groupCreations.IsRetained() || runtime.hierarchyUncompress.IsRetained() ||
-                   runtime.hierarchyCacheRemove.IsRetained() || runtime.blockRegistration.IsRetained() || runtime.customSequences.HasPendingCleanup();
+                   runtime.hierarchyCacheRemove.IsRetained() || runtime.blockRegistration.IsRetained() || runtime.blockRemoval.IsRetained() ||
+                   runtime.customSequences.HasPendingCleanup();
         }
 
         bool WeatherOverrideRetained() noexcept
@@ -8137,6 +8142,24 @@ namespace mta::game_de
             // loaded-block sum or permission to publish hierarchy pointers.
             output = next;
             return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::RemoveEmptyAnimationBlock(const NativeAnimationBlockIdentity& identity) noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            if (!identity.ownerGeneration || identity.ownerGeneration != generation)
+                return ClockResult::OwnerConflict;
+            NativeAnimationBlockRemovalCalls::Receipt receipt;
+            // The controller checks the actual post-original frame owner and
+            // retains its input journal if any entered call loses certainty.
+            result = runtime.blockRemoval.RemoveEmpty(runtime.image, generation, identity, &CheckTimingOwner, &CheckApplicationTimingOwner, &receipt);
+            runtime.blockRemovalReceipt = receipt;
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.blockRemoval.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result;
         }
 
         ClockResult NativeAccess::RegisterAnimationBlock(std::uint64_t ownerGeneration, const NativeAnimationBlockName& query, std::int32_t& output) noexcept

@@ -3560,6 +3560,17 @@ namespace ClockBlockRegistrationOwnerTest
 #define MTA_DE_ANIMATION_BLOCK_REGISTRATION_WRITE ::ClockBlockRegistrationOwnerTest::Write
 #include "../../Client/game_de/NativeAnimationBlockRegistration.cpp"
 #undef MTA_DE_ANIMATION_BLOCK_REGISTRATION_WRITE
+#include "../../Client/game_de/NativeAnimationBlockRemoval.h"
+namespace ClockEmptyBlockRemovalOwnerTest
+{
+    mta::game_de::ClockResult Group(mta::game_de::NativeAnimationBlockRemovalCalls::GroupFunction, std::uintptr_t, std::uint32_t&) noexcept;
+    mta::game_de::ClockResult Write(const mta::game_de::NativeAnimationBlockRemovalCalls::Store*, std::size_t, std::uint32_t&) noexcept;
+}
+#define MTA_DE_ANIMATION_BLOCK_REMOVAL_GROUP ::ClockEmptyBlockRemovalOwnerTest::Group
+#define MTA_DE_ANIMATION_BLOCK_REMOVAL_WRITE ::ClockEmptyBlockRemovalOwnerTest::Write
+#include "../../Client/game_de/NativeAnimationBlockRemoval.cpp"
+#undef MTA_DE_ANIMATION_BLOCK_REMOVAL_GROUP
+#undef MTA_DE_ANIMATION_BLOCK_REMOVAL_WRITE
 
 namespace ClockHierarchyCacheRemoveOwnerTest
 {
@@ -8690,6 +8701,8 @@ namespace
 #include "NativeBankPostprocessOwnerTests.inl"
 #include "AnimationManagerRegistrationFixture.generated.h"
 #include "NativeAnimationBlockRegistrationOwnerTests.inl"
+#include "AnimationManagerEmptyBlockRemovalFixture.generated.h"
+#include "NativeEmptyAnimationBlockRemovalOwnerTests.inl"
 #include "ApplicationTimingOwnerTests.inl"
 
 // The strict receiver must execute production typed tickets and the distinct
@@ -8848,6 +8861,16 @@ int main(int argc, char** argv)
         for (unsigned index = 0; index != 4; ++index)
             if (std::strcmp(argv[2] + 21, names[index]) == 0)
                 applicationTimingScenario = index;
+    }
+    const bool emptyBlockRemovalOnly = argc == 3 && std::strncmp(argv[2], "--empty-block-removal-", 22) == 0;
+    unsigned   emptyBlockRemovalScenario = 11;
+    if (emptyBlockRemovalOnly)
+    {
+        const char* names[] = {"success",    "refusals",     "timer-owner", "entered-before", "entered-after",  "partial",
+                               "owner-loss", "group-before", "group-after", "group-drift",    "effect-mismatch"};
+        for (unsigned index = 0; index != 11; ++index)
+            if (std::strcmp(argv[2] + 22, names[index]) == 0)
+                emptyBlockRemovalScenario = index;
     }
     const bool blockRegistrationOnly = argc == 3 && std::strncmp(argv[2], "--block-registration-", 21) == 0;
     unsigned   blockRegistrationScenario = 11;
@@ -9089,12 +9112,12 @@ int main(int argc, char** argv)
            freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly || customAnimationCleanupOnly ||
            standaloneSequenceOperationsOnly || animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly ||
            animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly || animationGroupValidityOnly ||
-           animationIdValidityOnly || animationAssociationGroupReadsOnly || applicationTimingOnly || blockRegistrationOnly || bankPostprocessOnly ||
-           bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly || dynamicClumpOnly || groupFactoriesOnly ||
-           groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly || groupEmptyInitializationOnly ||
-           animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly || animationStaticAssociationReadsOnly ||
-           staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly || privateAssociationsOnly || associationBonesOnly ||
-           associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
+           animationIdValidityOnly || animationAssociationGroupReadsOnly || applicationTimingOnly || emptyBlockRemovalOnly || blockRegistrationOnly ||
+           bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly || dynamicClumpOnly ||
+           groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
+           groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
+           animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
+           privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
     if (presentTransitionClockOnly)
@@ -9301,6 +9324,16 @@ int main(int argc, char** argv)
             fixture.Create(argv[1]);
             ApplicationTimingOwnerFixture::Run(fixture, applicationTimingScenario);
         }
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (emptyBlockRemovalOnly)
+    {
+        Check(emptyBlockRemovalScenario < 11, "finite empty block removal scenario required");
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        EmptyBlockRemovalOwnerFixture::scenario = emptyBlockRemovalScenario;
+        EmptyBlockRemovalOwnerFixture::RunPrepared(fixture);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

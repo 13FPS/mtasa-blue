@@ -54,6 +54,7 @@ namespace mta::game_de
         void                                 RemoveFromUncompressedCache(CAnimBlendHierarchySAInterface*) override;
         void                                 AddAnimBlockRef(int) override;
         int                                  GetNumRefsToAnimBlock(int) override;
+        void                                 RemoveAnimBlock(int) override;
         void                                 RemoveAnimBlockRef(int) override;
         void                                 RemoveAnimBlockRefWithoutDelete(int) override;
         BYTE*                                AllocateKeyFramesMemory(std::uint32_t) override;

@@ -57,6 +57,7 @@
 #include "NativeWorldIgnoredEntityMemory.h"
 #include "NativeCameraSphereVisibleCalls.h"
 #include "NativeCameraDataMemory.h"
+#include "NativeCameraFovWrite.h"
 #include "NativeCameraRestore.h"
 #include "CWorldLineDE.h"
 #include "NativeAnimationBlockMemory.h"
@@ -327,6 +328,7 @@ namespace mta::game_de
             ClockResult ReadCameraSphereVisible(const CVector&, float, bool&) noexcept override;
             ClockResult ReadCameraActiveIndex(std::uint8_t&) noexcept override;
             ClockResult ReadCameraFov(std::uint32_t, std::uint32_t&) noexcept override;
+            ClockResult WriteCameraFov(std::uint32_t, std::uint32_t) noexcept override;
             ClockResult RestoreCamera() noexcept override;
             ClockResult RestoreCameraWithJumpCut() noexcept override;
             ClockResult ReadStreamingModelGroups(NativeStreamingModelGroupsReader::Value&) noexcept override;
@@ -697,6 +699,8 @@ namespace mta::game_de
             // A bank's timestamp conversion owns no private allocation.
             // Retain only its actual entered/unknown operation journal; do
             // not hide that debt in the custom buffer retirement generation.
+            NativeCameraFovWrite                              cameraFovWrite;
+            NativeCameraFovWriteCalls::Receipt                cameraFovWriteReceipt;
             NativeCameraRestore                               cameraRestore;
             NativeCameraRestoreCalls::Receipt                 cameraRestoreReceipt;
             NativeAnimationHierarchyUncompress                hierarchyUncompress;
@@ -901,8 +905,8 @@ namespace mta::game_de
                    runtime.pedModelCreationRetained.load() || runtime.modelBackingReferences.IsRetained() || runtime.pedReferences.IsRetained() ||
                    WorldIgnoreRetained() || runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() ||
                    runtime.privateAssociations.IsRetained() || runtime.groupCreations.IsRetained() || runtime.hierarchyUncompress.IsRetained() ||
-                   runtime.cameraRestore.IsRetained() || runtime.hierarchyCacheRemove.IsRetained() || runtime.blockRegistration.IsRetained() ||
-                   runtime.blockRemoval.IsRetained() || runtime.customSequences.HasPendingCleanup();
+                   runtime.cameraRestore.IsRetained() || runtime.cameraFovWrite.IsRetained() || runtime.hierarchyCacheRemove.IsRetained() ||
+                   runtime.blockRegistration.IsRetained() || runtime.blockRemoval.IsRetained() || runtime.customSequences.HasPendingCleanup();
         }
 
         bool WeatherOverrideRetained() noexcept
@@ -6086,6 +6090,18 @@ namespace mta::game_de
         {
             const auto selected = index;
             return NativeCameraDataMemory::ReadFov(runtime.image, selected, &CheckTimingOwner, output);
+        }
+        ClockResult NativeAccess::WriteCameraFov(std::uint32_t logicalRow, std::uint32_t bits) noexcept
+        {
+            NativeCameraFovWriteCalls::Receipt receipt;
+            const auto result = runtime.cameraFovWrite.Write(runtime.image, logicalRow, bits, &CheckTimingOwner, &CheckApplicationTimingOwner, &receipt);
+            runtime.cameraFovWriteReceipt = receipt;
+            // A known CAS mismatch stored nothing. Accepted/unknown effects
+            // that lost their bookends keep this journal through Stop/End;
+            // neither path retries, repairs or restores old engine FOV bits.
+            if (receipt.debt || runtime.cameraFovWrite.RecoveryPending())
+                Stop(result);
+            return result;
         }
         ClockResult NativeAccess::RestoreCamera() noexcept
         {

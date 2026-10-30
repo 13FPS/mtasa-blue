@@ -24,6 +24,10 @@ namespace mta::game_de
         // is not an absent camera, a clamped selector or the SDK's FOV default.
         virtual ClockResult ReadCameraActiveIndex(std::uint8_t&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult ReadCameraFov(std::uint32_t, std::uint32_t&) noexcept { return ClockResult::NotInitialized; }
+        // Invalid SDK floats are filtered before this channel. A real owner
+        // must acknowledge one bounded store or retain its uncertainty; an
+        // older provider cannot turn absence into a successful FOV setter.
+        virtual ClockResult WriteCameraFov(std::uint32_t, std::uint32_t) noexcept { return ClockResult::NotInitialized; }
         // Ordinary Restore is one distinct native effect. Older owners must
         // refuse rather than substitute JumpCut, a field repair or a retry.
         virtual ClockResult RestoreCamera() noexcept { return ClockResult::NotInitialized; }

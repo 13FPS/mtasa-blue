@@ -18,6 +18,7 @@ static_assert(std::is_same_v<decltype(&CameraBasicsObserver::RestoreWithJumpCut)
 static_assert(std::is_same_v<decltype(&CameraBasicsObserver::Restore), decltype(&CCameraSphereVisibleDE::Restore)>);
 static_assert(std::is_same_v<decltype(&CameraBasicsObserver::GetActiveCam), decltype(&CCameraSphereVisibleDE::GetActiveCam)>);
 static_assert(std::is_same_v<decltype(&CameraBasicsObserver::IsSphereVisible), decltype(&CCameraSphereVisibleDE::IsSphereVisible)>);
+static_assert(std::is_same_v<decltype(&CamFovObserver::SetFOV), decltype(&CCamFovDE::SetFOV)>);
 static_assert(std::is_same_v<decltype(&CamFovObserver::GetFOV), decltype(&CCamFovDE::GetFOV)>);
 static_assert(std::is_abstract_v<CCameraSphereVisibleDE> && std::is_abstract_v<CCamFovDE>);
 namespace
@@ -39,7 +40,8 @@ namespace
     {
         ClockResult   status = ClockResult::Ok;
         unsigned      activeCalls = 0, fovCalls = 0, restoreCalls = 0, jumpCutCalls = 0, sphereCalls = 0;
-        std::uint32_t row = 0, rawFov = 0;
+        std::uint32_t row = 0, rawFov = 0, writeRow = 0, writeBits = 0;
+        unsigned      fovWriteCalls = 0;
         std::uint8_t  active = 0;
         bool          visible = false;
         ClockResult   ReadCameraActiveIndex(std::uint8_t& value) noexcept override
@@ -53,6 +55,13 @@ namespace
             ++fovCalls;
             row = index;
             value = rawFov;
+            return status;
+        }
+        ClockResult WriteCameraFov(std::uint32_t index, std::uint32_t bits) noexcept override
+        {
+            ++fovWriteCalls;
+            writeRow = index;
+            writeBits = bits;
             return status;
         }
         ClockResult RestoreCamera() noexcept override
@@ -91,6 +100,96 @@ namespace
         }
         Check(refused, "camera SDK propagates exact current provider refusal, never a default value or native retry");
     }
+    float FromBits(std::uint32_t bits)
+    {
+        float value = 0;
+        std::memcpy(&value, &bits, sizeof(value));
+        return value;
+    }
+    std::array<unsigned, 5> OtherCalls(const Access& access)
+    {
+        return {access.activeCalls, access.fovCalls, access.restoreCalls, access.jumpCutCalls, access.sphereCalls};
+    }
+    void FovWrites()
+    {
+        // These are shared SDK policy tests, not native row admission. Full
+        // logical indices must reach the selected owner without truncation,
+        // clamping or consulting the active camera or the read-only getter.
+        constexpr std::array<std::uint32_t, 6>  rows{0, 1, 2, 3, 0x10000u, 0xffffffffu};
+        constexpr std::array<std::uint32_t, 10> valid{0x00800000u, 0x00800001u, 0x3e800000u, 0x3f000001u, 0x3f800000u,
+                                                      0x3f800001u, 0x42480000u, 0x428c0000u, 0x4333fffeu, 0x4333ffffu};
+        constexpr std::array<std::uint32_t, 18> invalid{0,           0x80000000u, 0x80000001u, 0xbf800000u, 0xc3340000u, 0x43340000u,
+                                                        0x43340001u, 0x7f7fffffu, 0xff7fffffu, 0x7f800000u, 0xff800000u, 0x7fc00001u,
+                                                        0xffc00001u, 0x7f800001u, 0xff800001u, 0x437a0000u, 0xc37a0000u, 0xc28c0000u};
+        constexpr std::array<ClockResult, 14>   refusals{ClockResult::InvalidArgument, ClockResult::NotInitialized,   ClockResult::WrongThread,
+                                                       ClockResult::BindingChanged,  ClockResult::ReadFailure,      ClockResult::WriteFailure,
+                                                       ClockResult::RestoreFailure,  ClockResult::PatchFailure,     ClockResult::Busy,
+                                                       ClockResult::Expired,         ClockResult::UnsupportedBuild, ClockResult::OwnerConflict,
+                                                       ClockResult::Stopped,         ClockResult::OriginalException};
+        Access                                  access;
+        for (const auto row : rows)
+        {
+            CamFovObserver camera(row, access);
+            CCam&          sdk = camera;
+            access.status = ClockResult::Ok;
+            for (const auto bits : valid)
+            {
+                float      value = FromBits(bits);
+                const auto calls = access.fovWriteCalls;
+                const auto other = OtherCalls(access);
+                sdk.SetFOV(value);
+                Check(access.fovWriteCalls == calls + 1 && access.writeRow == row && access.writeBits == bits && OtherCalls(access) == other &&
+                          Bits(value) == bits,
+                      "actual base CCam SetFOV forwards valid raw float bits and the immutable full row once, without a read/selector/alternate operation");
+            }
+            for (const auto status : {ClockResult::Ok, ClockResult::NotInitialized, ClockResult::OriginalException})
+            {
+                access.status = status;
+                for (const auto bits : invalid)
+                {
+                    const auto calls = access.fovWriteCalls;
+                    const auto other = OtherCalls(access);
+                    const auto priorRow = access.writeRow, priorBits = access.writeBits;
+                    const auto value = FromBits(bits);
+                    sdk.SetFOV(value);
+                    Check(access.fovWriteCalls == calls && OtherCalls(access) == other && access.writeRow == priorRow && access.writeBits == priorBits,
+                          "zero, negative, boundary180 and nonfinite SDK inputs are no-provider no-ops even when the retained provider would fail");
+                }
+            }
+            for (const auto status : refusals)
+            {
+                access.status = status;
+                for (const auto bits : {valid.front(), valid.back()})
+                {
+                    const auto calls = access.fovWriteCalls;
+                    const auto other = OtherCalls(access);
+                    Refuses([&] { sdk.SetFOV(FromBits(bits)); }, "SetFOV", status);
+                    Check(access.fovWriteCalls == calls + 1 && access.writeRow == row && access.writeBits == bits && OtherCalls(access) == other,
+                          "every valid SetFOV refusal propagates after exactly one selected owner call, without a readback, native retry or fallback");
+                }
+            }
+            Missing        missing;
+            CamFovObserver oldCamera(row, missing);
+            CCam&          oldSdk = oldCamera;
+            for (const auto bits : invalid)
+            {
+                bool completed = false;
+                try
+                {
+                    oldSdk.SetFOV(FromBits(bits));
+                    completed = true;
+                }
+                catch (const std::exception&)
+                {
+                }
+                Check(completed, "invalid SetFOV remains a no-op before the default-refusing missing provider could throw");
+            }
+            for (const auto bits : {valid.front(), valid.back()})
+                Refuses([&] { oldSdk.SetFOV(FromBits(bits)); }, "SetFOV", ClockResult::NotInitialized);
+        }
+        std::puts("Actual Cam SetFOV SDK policy fixture completed");
+    }
+
     void Cases()
     {
         Access               access;
@@ -197,6 +296,7 @@ namespace
             invalid = true;
         }
         Check(invalid && access.sphereCalls == sphere, "existing null-center refusal stays before any native provider call");
+        FovWrites();
         std::puts("Actual camera JumpCut SDK fixture completed");
         std::puts("Actual camera basics SDK fixture completed");
         std::puts("Actual Cam finite FOV SDK fixture completed");

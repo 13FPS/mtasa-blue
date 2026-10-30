@@ -1,4 +1,4 @@
-# Strict actual SDK receivers: camera4/35 and Cam1/13 inherited methods.
+# Strict actual SDK receivers: camera4/35 and Cam2/13 inherited methods.
 # Every unrelated hook aborts, so a factory/vector/setter shortcut fails.
 function Get-CameraBasicsSdkMethods([string]$Root,[string]$RelativePath) {
     $text=[IO.File]::ReadAllText((Join-Path $Root $RelativePath))
@@ -29,9 +29,9 @@ function Write-CameraBasicsFixture([string]$RepositoryRoot,[string]$OutputPath) 
 function Write-CamFovFixture([string]$RepositoryRoot,[string]$OutputPath) {
     $source='Client/sdk/game/CCam.h'
     $all=@(Get-CameraBasicsSdkMethods $RepositoryRoot $source)
-    $provided=@($all|Where-Object {$_.name -eq 'GetFOV'})
-    $rejected=@($all|Where-Object {$_.name -ne 'GetFOV'})
-    if($all.Count -ne 13 -or $provided.Count -ne 1 -or $rejected.Count -ne 12){throw 'Actual Cam13-method partition changed'}
+    $provided=@($all|Where-Object {$_.name -in @('GetFOV','SetFOV')})
+    $rejected=@($all|Where-Object {$_.name -notin @('GetFOV','SetFOV')})
+    if($all.Count -ne 13 -or $provided.Count -ne 2 -or $rejected.Count -ne 11){throw 'Actual Cam13-method partition changed'}
     $lines=@('#pragma once','#include <cstdlib>','#pragma warning(push)','#pragma warning(disable : 4100)',
         'class CamFovObserver final : public mta::game_de::CCamFovDE {public:',
         'CamFovObserver(std::uint32_t row,mta::game_de::NativeCameraSphereVisibleAccess& owner) noexcept : CCamFovDE(row,owner) {}')

@@ -66,6 +66,7 @@
 #include "NativeAnimationHierarchyAccess.h"
 #include "NativeAnimationHierarchyMemory.h"
 #include "NativeAnimationHierarchyUncompress.h"
+#include "NativeAnimationAssociationProgressProfile.h"
 #include "NativeCustomAnimSequenceController.h"
 #include "NativePrivateAnimationHierarchyController.h"
 #include "NativeCustomAnimationCleanupAccess.h"
@@ -4065,10 +4066,53 @@ namespace mta::game_de
             auto       result = CheckAnimationHierarchyRequest(request);
             if (result != ClockResult::Ok)
                 return result;
-            // The genuine bank/sequence/frame path cannot adopt an issued
-            // private H through matching bytes, including the warm no-op.
             if (runtime.privateHierarchies.Owns(request))
-                return ClockResult::OwnerConflict;
+            {
+                NativeAnimationHierarchyUncompressCalls::Receipt receipt;
+                receipt.hierarchy = request.locator;
+                receipt.generation = request.ownerGeneration;
+                NativeAnimationHierarchyValues before, after;
+                std::array<unsigned char, 2>   firstFlags{}, lastFlags{};
+                result = runtime.privateHierarchies.Read(runtime.image, request, &CheckTimingOwner, before);
+                if (result == ClockResult::Ok && before.interfaceAddress != request.locator)
+                    result = ClockResult::BindingChanged;
+                if (result == ClockResult::Ok && !NativeModelReferenceMap::Copy(request.locator + 0x12, firstFlags.data(), firstFlags.size()))
+                    result = ClockResult::ReadFailure;
+                // Private Read proves this actual issued record's cache0 and
+                // its linked child epoch. Observe both flags explicitly: the
+                // source KeepCompressed byte13 is not the SDK byte12 getter.
+                if (result == ClockResult::Ok && (firstFlags[0] || firstFlags[1]))
+                    result = ClockResult::NotInitialized;
+                namespace Profile = NativeAnimationAssociationProgressProfile;
+                std::array<unsigned char, Profile::HierarchyTimeBytes.size()> code{};
+                if (result == ClockResult::Ok &&
+                    (!NativeImageAccess::ReadImage(runtime.image, runtime.image + Profile::HierarchyTimeRva, code.data(), code.size(), false, true) ||
+                     code != Profile::HierarchyTimeBytes))
+                    result = ClockResult::BindingChanged;
+                if (result == ClockResult::Ok)
+                    result = runtime.privateHierarchies.Read(runtime.image, request, &CheckTimingOwner, after);
+                if (result == ClockResult::Ok && !NativeModelReferenceMap::Copy(request.locator + 0x12, lastFlags.data(), lastFlags.size()))
+                    result = ClockResult::ReadFailure;
+                if (result == ClockResult::Ok &&
+                    (firstFlags != lastFlags || after.interfaceAddress != request.locator || before.sequenceCount != after.sequenceCount ||
+                     before.totalTimeBits != after.totalTimeBits || before.blockId != after.blockId || before.runningCompressed != after.runningCompressed ||
+                     before.hashDefined != after.hashDefined || (before.hashDefined && before.hash != after.hash)))
+                    result = ClockResult::BindingChanged;
+                if (result == ClockResult::Ok)
+                    result = CheckAnimationHierarchyRequest(request);
+                // FF0D10's flags12/13==0 and cache0 path returns without a
+                // native store, allocation or callback. The existing private
+                // owner supplies that proof; it never becomes a bank record.
+                receipt.beforeTimeBits = before.totalTimeBits;
+                receipt.afterTimeBits = after.totalTimeBits;
+                receipt.noOp = receipt.effectsVerified = result == ClockResult::Ok;
+                receipt.result = result;
+                runtime.hierarchyUncompressReceipt = receipt;
+                PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+                if (runtime.privateHierarchies.RecoveryPending())
+                    Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+                return result;
+            }
             NativeAnimationHierarchyUncompressCalls::Receipt receipt;
             result = runtime.hierarchyUncompress.Uncompress(runtime.image, request, &CheckTimingOwner, &receipt);
             runtime.hierarchyUncompressReceipt = receipt;

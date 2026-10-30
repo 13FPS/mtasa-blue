@@ -159,6 +159,10 @@ namespace AnimationHierarchyUncompressOwnerFixture
         admit(NativeAnimationStaticAssociationProfile::ReadCode);
         admit(NativeAnimationAssociationProfile::Code);
         admit(NativeAnimationHierarchyReadProfile::Code);
+        // Real private allocation/init/read/retirement shares the existing
+        // manager and cache0 producer proof; this is not a fake H facade.
+        WorldGroundOwnerFixture::Writes::Apply(&saved, 0xfec67a, private_hierarchy_fixture::CacheProof, sizeof(private_hierarchy_fixture::CacheProof),
+                                               PAGE_EXECUTE_READ);
         admit(NativeAnimationSequenceRowProfile::Code);
         admit(NativeAnimationSequenceFrameBindProfile::Code);
         WorldGroundOwnerFixture::Writes::Apply(&saved, Profile::HierarchyTimeRva, Profile::HierarchyTimeBytes.data(), Profile::HierarchyTimeBytes.size(),
@@ -270,6 +274,43 @@ namespace AnimationHierarchyUncompressOwnerFixture
         };
         if (scenario == 0)
         {
+            action(
+                [&]
+                {
+                    auto custom = manager.CAnimManagerDE::GetCustomAnimBlendHierarchy();
+                    Check(custom != nullptr, "actual MTA custom hierarchy factory owns a genuine private record");
+                    custom->Initialize();
+                    const auto                    tag = reinterpret_cast<std::uintptr_t>(custom->GetInterface());
+                    std::array<unsigned char, 40> before{}, after{};
+                    std::memcpy(before.data(), reinterpret_cast<const void*>(tag), before.size());
+                    const auto calls = Hook::calls;
+                    sdk.UncompressAnimation(custom.get());
+                    std::memcpy(after.data(), reinterpret_cast<const void*>(tag), after.size());
+                    Check(before == after && Hook::calls == calls && runtime.hierarchyUncompressReceipt.noOp &&
+                              runtime.hierarchyUncompressReceipt.effectsVerified && !runtime.hierarchyUncompressReceipt.entered &&
+                              !runtime.hierarchyUncompressReceipt.debt && runtime.hierarchyUncompressReceipt.hierarchy == tag &&
+                              !runtime.hierarchyUncompress.IsRetained() && !runtime.stopping.load(),
+                          "real private flags12/13 and cache0 admit the actual MTA no-effect call without bank adoption or native mutation");
+                    custom->SetRunningCompressed(true);
+                    refuses([&] { sdk.UncompressAnimation(custom.get()); }, "private compressed payload phase is still an explicit refusal");
+                    custom->SetRunningCompressed(false);
+                    Bytes::Store(tag + 0x13, static_cast<unsigned char>(1));
+                    refuses([&] { sdk.UncompressAnimation(custom.get()); }, "KeepCompressed byte13 is observed separately from the SDK byte12 getter");
+                    Bytes::Store(tag + 0x13, static_cast<unsigned char>(0));
+                    const auto lastByte = Bytes::Load<unsigned char>(fixture.image + Profile::HierarchyTimeRva + Profile::HierarchyTimeBytes.size() - 1);
+                    saved.Global(Profile::HierarchyTimeRva + Profile::HierarchyTimeBytes.size() - 1, static_cast<unsigned char>(lastByte ^ 1),
+                                 PAGE_EXECUTE_READ);
+                    refuses([&] { sdk.UncompressAnimation(custom.get()); }, "private no-effect still requires the exact original source entry");
+                    saved.Global(Profile::HierarchyTimeRva + Profile::HierarchyTimeBytes.size() - 1, lastByte, PAGE_EXECUTE_READ);
+                    sdk.UncompressAnimation(custom.get());
+                    Check(Hook::calls == calls && runtime.hierarchyUncompressReceipt.noOp && runtime.hierarchyUncompressReceipt.effectsVerified,
+                          "refused private source phases leave no entered command to replay and the later valid no-op remains available");
+                    manager.CAnimManagerDE::DeleteCustomAnimHierarchyInterface(custom->GetInterface());
+                    custom.reset();
+                    Check(!runtime.privateHierarchies.IsRetained() && !runtime.hierarchyUncompress.IsRetained(),
+                          "actual owner retires the private record after CPU-only no-effect calls without leaking bank or conversion debt");
+                });
+            std::puts("Production private hierarchy Uncompress source no-effect fixture completed");
             float scale = 0;
             std::memcpy(&scale, Profile::TimeScaleBytes.data(), sizeof(scale));
             for (unsigned which = 0; which != 3; ++which)

@@ -2193,12 +2193,13 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         if(-not($record.nativeAnimationAssociationGroupChildProductsOwnerTested -and $record.actualAnimationAssociationGroupStaticChildSdkOwnerTested -and $record.nativeAnimationAssociationGroupChildProductsCoupledRefusalsTested)){throw 'Actual association group child products scope incomplete'}
         $record.productionNativeCallbackTested=$true
     } elseif($Scope -eq 'AnimationHierarchyUncompress'){
+        $record['nativePrivateHierarchyWarmUncompressTested']=$text.Contains('Production private hierarchy Uncompress source no-effect fixture completed')
         $record.nativeHierarchyUncompressActualSdkTested=$text.Contains('Production hierarchy Uncompress actual SDK original compressed conversion fixture completed')
         $record.nativeHierarchyUncompressCoupledRefusalsTested=$text.Contains('Production hierarchy Uncompress actual owner coupled refusal fixture completed')
         $record.nativeHierarchyUncompressUnknownRetained=$text.Contains('Production hierarchy Uncompress entered before acknowledgement debt fixture completed') -and $text.Contains('Production hierarchy Uncompress entered after original debt fixture completed')
         $record.nativeHierarchyUncompressPostOwnerLossTested=$text.Contains('Production hierarchy Uncompress post original owner loss fixture completed')
         $record.nativeHierarchyUncompressEffectMismatchTested=$text.Contains('Production hierarchy Uncompress post original effect mismatch fixture completed')
-        if(-not($record.nativeHierarchyUncompressActualSdkTested -and $record.nativeHierarchyUncompressCoupledRefusalsTested -and $record.nativeHierarchyUncompressUnknownRetained -and $record.nativeHierarchyUncompressPostOwnerLossTested -and $record.nativeHierarchyUncompressEffectMismatchTested)){throw 'Actual hierarchy Uncompress selected owner/original/debt scope incomplete'}
+        if(-not($record.nativePrivateHierarchyWarmUncompressTested -and $record.nativeHierarchyUncompressActualSdkTested -and $record.nativeHierarchyUncompressCoupledRefusalsTested -and $record.nativeHierarchyUncompressUnknownRetained -and $record.nativeHierarchyUncompressPostOwnerLossTested -and $record.nativeHierarchyUncompressEffectMismatchTested)){throw 'Actual hierarchy Uncompress selected owner/original/debt scope incomplete'}
         $record.productionNativeCallbackTested=$true
         $record.originalHierarchyUncompressInstructionsExecuted=$true
     } elseif($Scope -eq 'NumericAssociationOwner'){

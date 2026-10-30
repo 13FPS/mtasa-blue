@@ -328,6 +328,7 @@ namespace mta::game_de
             ClockResult ReadCameraActiveIndex(std::uint8_t&) noexcept override;
             ClockResult ReadCameraFov(std::uint32_t, std::uint32_t&) noexcept override;
             ClockResult RestoreCamera() noexcept override;
+            ClockResult RestoreCameraWithJumpCut() noexcept override;
             ClockResult ReadStreamingModelGroups(NativeStreamingModelGroupsReader::Value&) noexcept override;
             ClockResult ReadModelArchiveAllocated(std::uint32_t, bool&) noexcept override;
             ClockResult RemoveStreamingModel(std::uint32_t) noexcept override;
@@ -6103,6 +6104,24 @@ namespace mta::game_de
             // through Stop/End. No cleanup path may replay Restore, roll back
             // camera words or unregister the engine's permanent image cells.
             if ((receipt.entered && result != ClockResult::Ok) || runtime.cameraRestore.RecoveryPending())
+                Stop(result);
+            return result;
+        }
+
+        ClockResult NativeAccess::RestoreCameraWithJumpCut() noexcept
+        {
+            auto result = CheckApplicationTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if ((result = RequirePlayerInfo()) != ClockResult::Ok)
+                return result;
+            NativeCameraRestoreCalls::Receipt receipt;
+            result = runtime.cameraRestore.RestoreWithJumpCut(runtime.image, runtime.playerInfo, &CheckTimingOwner, &CheckApplicationTimingOwner, &receipt);
+            runtime.cameraRestoreReceipt = receipt;
+            // A first accepted/unknown behind-byte prefix remains real even
+            // if the later original never entered. End must retain that same
+            // journal rather than repair/replay either source operation.
+            if ((receipt.effectsEntered && result != ClockResult::Ok) || runtime.cameraRestore.RecoveryPending())
                 Stop(result);
             return result;
         }

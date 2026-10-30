@@ -26,6 +26,7 @@ namespace mta::game_de
         bool IsSphereVisible(CVector* center, float radius) const override;
         BYTE GetActiveCam() override;
         void Restore() override;
+        void RestoreWithJumpCut() override;
 
     protected:
         explicit CCameraSphereVisibleDE(NativeCameraSphereVisibleAccess& owner) noexcept : cameraOwner(owner) {}

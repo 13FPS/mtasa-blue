@@ -1,5 +1,5 @@
-# Strict actual SDK receivers: camera3/35 and Cam1/13 inherited methods.
-# Every unrelated hook aborts, so a factory/JumpCut/vector/setter shortcut fails.
+# Strict actual SDK receivers: camera4/35 and Cam1/13 inherited methods.
+# Every unrelated hook aborts, so a factory/vector/setter shortcut fails.
 function Get-CameraBasicsSdkMethods([string]$Root,[string]$RelativePath) {
     $text=[IO.File]::ReadAllText((Join-Path $Root $RelativePath))
     $text=[regex]::Replace($text,'(?s)/\*.*?\*/|//[^\r\n]*','')
@@ -13,9 +13,9 @@ function Get-CameraBasicsSdkMethods([string]$Root,[string]$RelativePath) {
 function Write-CameraBasicsFixture([string]$RepositoryRoot,[string]$OutputPath) {
     $source='Client/sdk/game/CCamera.h'
     $all=@(Get-CameraBasicsSdkMethods $RepositoryRoot $source)
-    $provided=@($all|Where-Object {$_.name -in @('IsSphereVisible','GetActiveCam','Restore')})
-    $rejected=@($all|Where-Object {$_.name -notin @('IsSphereVisible','GetActiveCam','Restore')})
-    if($all.Count -ne 35 -or $provided.Count -ne 3 -or $rejected.Count -ne 32){throw 'Actual camera35-method partition changed'}
+    $provided=@($all|Where-Object {$_.name -in @('IsSphereVisible','GetActiveCam','Restore','RestoreWithJumpCut')})
+    $rejected=@($all|Where-Object {$_.name -notin @('IsSphereVisible','GetActiveCam','Restore','RestoreWithJumpCut')})
+    if($all.Count -ne 35 -or $provided.Count -ne 4 -or $rejected.Count -ne 31){throw 'Actual camera35-method partition changed'}
     $lines=@('#pragma once','#include <cstdlib>','#pragma warning(push)','#pragma warning(disable : 4100)',
         'class CameraBasicsObserver final : public mta::game_de::CCameraSphereVisibleDE {public:',
         'explicit CameraBasicsObserver(mta::game_de::NativeCameraSphereVisibleAccess& owner) noexcept : CCameraSphereVisibleDE(owner) {}')

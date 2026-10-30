@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('CameraBasics','ModelTimeGetter','VehiclePredicates','EmptyBlockRemoval','BlockRegistration','BankPostprocess','BankEviction','BankDecompression','ApplicationTiming','AnimationHierarchyUncompress','NumericAssociationOwner','DynamicClumpOwner','AnimationAssociationGroupFactories','GroupSourceCreationOwner','JointTemporaryStaticInitializerOwner','GroupReplacementOwner','GroupCopyAnimationOwner','GroupEmptyInitialization','AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','PresentTransitionClock','StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
+    [ValidateSet('CameraJumpCut','CameraBasics','ModelTimeGetter','VehiclePredicates','EmptyBlockRemoval','BlockRegistration','BankPostprocess','BankEviction','BankDecompression','ApplicationTiming','AnimationHierarchyUncompress','NumericAssociationOwner','DynamicClumpOwner','AnimationAssociationGroupFactories','GroupSourceCreationOwner','JointTemporaryStaticInitializerOwner','GroupReplacementOwner','GroupCopyAnimationOwner','GroupEmptyInitialization','AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','PresentTransitionClock','StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -23,6 +23,11 @@ $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;a
 # Historical markers start false and are set only by the branch that actually
 # executed. Focus mode must never inherit the cumulative suite's claims.
 $record['runScope'] = $Scope
+$record['nativeCameraJumpCutActualSdkOwnerTested']=$false
+$record['nativeCameraJumpCutOriginalTested']=$false
+$record['nativeCameraJumpCutPrefixTested']=$false
+$record['nativeCameraJumpCutRefusalsTested']=$false
+$record['nativeCameraJumpCutDebtTested']=$false
 $record['nativeCameraBasicsActualSdkOwnerTested']=$false
 $record['nativeCameraRestoreOriginalTested']=$false
 $record['nativeCameraBasicsRefusalsTested']=$false
@@ -728,6 +733,7 @@ $sourceNames += @('Client/game_de/NativePedOnScreenAccess.h','Client/game_de/CPe
 $sourceNames += @('Client/game_de/NativePedWeaponGrantAccess.h','Client/game_de/CPedGiveWeaponDE.h','Client/game_de/CPedGiveWeaponDE.cpp','Client/game_de/NativePedWeaponGrantCalls.h','Client/game_de/NativePedWeaponGrantCalls.cpp','Client/game_de/NativePedWeaponGrantProfile.h','Client/sdk/game/CPedGiveWeaponPolicy.h')
 $sourceNames += @('Client/game_de/NativePedWeaponClearAccess.h','Client/game_de/CPedClearWeaponDE.h','Client/game_de/CPedClearWeaponDE.cpp','Client/game_de/NativePedWeaponClearCalls.h','Client/game_de/NativePedWeaponClearCalls.cpp','Client/game_de/NativePedWeaponClearProfile.h')
 $sourceNames += @('Client/game_de/NativeWorldIgnoreEntityAccess.h','Client/game_de/CWorldIgnoreEntityDE.h','Client/game_de/CWorldIgnoreEntityDE.cpp','Client/game_de/NativeWorldIgnoredEntityMemory.h','Client/game_de/NativeWorldIgnoredEntityMemory.cpp','Client/game_de/NativeWorldIgnoredEntityProfile.h')
+$sourceNames += @('Tests/definitive/JumpCutOwnerTests.inl')
 $sourceNames += @('Client/game_de/NativeCameraDataProfile.h','Client/game_de/NativeCameraDataMemory.h','Client/game_de/NativeCameraDataMemory.cpp','Client/game_de/NativeCameraRestore.h','Client/game_de/NativeCameraRestore.cpp','Client/game_de/NativeCameraRestoreProfile.h','Client/game_de/CCamFovDE.h','Client/game_de/CCamFovDE.cpp','Tests/definitive/NativeCameraBasicsOwnerTests.inl','Tests/definitive/Write-CameraBasicsFixture.ps1')
 $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/game_de/CCameraSphereVisibleDE.h','Client/game_de/CCameraSphereVisibleDE.cpp','Client/game_de/NativeCameraSphereVisibleCalls.h','Client/game_de/NativeCameraSphereVisibleCalls.cpp','Client/game_de/NativeCameraSphereVisibleProfile.h')
     $sourceNames += @('Tests/definitive/NativePedWeaponGrantFixture.h','Tests/definitive/NativePedWeaponGrantOwnerTests.inl','Tests/definitive/Write-PedGiveWeaponFixture.ps1')
@@ -1332,7 +1338,36 @@ namespace ClockPrivateHierarchyParentWriteFixture {
     if ($Scope -eq 'GarageNamed') { $fixtureArguments += '--garage-named' }
     if ($Scope -eq 'GaragePools') { $fixtureArguments += '--garage-pools' }
     if ($Scope -eq 'PedPoolRegistry') { $fixtureArguments += '--ped-pool-registry' }
-    if($Scope -eq 'CameraBasics'){
+    if($Scope -eq 'CameraJumpCut'){
+        # One exact compile covers new ordered effects and six previous camera
+        # lifetimes. Every native journal receives its own pristine host process.
+        $record['testRuns']=@();$record['testScenarioExecutables']=@();$texts=@();$compiledHash=Sha $executable
+        $cases=@()
+        foreach($name in @('success','cas-rejected','behind-before','behind-after','prefix-drift','jump-before','jump-after','owner-loss','effect-mismatch','provider-drift')){
+            $cases+=@{name=('jumpcut-'+$name);flag=('--camera-jumpcut-'+$name)}
+        }
+        foreach($name in @('success','entered-before','entered-after','owner-loss','effect-mismatch')){
+            $cases+=@{name=('ordinary-'+$name);flag=('--camera-basics-'+$name)}
+        }
+        $cases+=@{name='sphere-regression';flag='--camera-sphere-visible'}
+        foreach($case in $cases){
+            $scenarioRoot=Join-Path $scratchRoot ('camera-jumpcut-'+$case.name)
+            [IO.Directory]::CreateDirectory($scenarioRoot)|Out-Null
+            $copy=Join-Path $scenarioRoot ([IO.Path]::GetFileName($executable))
+            if(Test-Path -LiteralPath $copy){throw 'JumpCut execution copy already exists'}
+            Copy-Item -LiteralPath $executable -Destination $copy
+            if((Sha $copy) -cne $compiledHash){throw 'JumpCut process differs from the once-compiled executable'}
+            $record.testScenarioExecutables+=@{scenario=$case.name;path=$copy;sha256=$compiledHash;removedWithOwnedScratch=$true}
+            $run=RunBounded $copy @($scenarioRoot,$case.flag) ('test-camera-jumpcut-'+$case.name) 60000
+            $record.testRuns+=$run
+            $part=[IO.File]::ReadAllText($run.stdout)+[IO.File]::ReadAllText($run.stderr)
+            if($run.exitCode -ne 0 -or $run.timedOut -or $part -notmatch 'Passed (\d+) production clock service checks'){throw ('JumpCut '+$case.name+' failed')}
+            if((Sha $copy) -cne $compiledHash){throw 'JumpCut execution copy changed'}
+            $record.checks+=[int]$Matches[1];$texts+=$part
+        }
+        if($record.testRuns.Count -ne 16){throw 'JumpCut requires ten new and six prior independent camera lifetimes'}
+        $record.testRun=$record.testRuns[-1];$text=$texts -join [Environment]::NewLine
+    } elseif($Scope -eq 'CameraBasics'){
         # Compile once and isolate genuine entered debt in fresh processes;
         # native camera/reference journals are never reset between scenarios.
         $record['testRuns']=@();$record['testScenarioExecutables']=@();$texts=@();$compiledHash=Sha $executable
@@ -2443,6 +2478,32 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         $record.actualAnimationAssociationGroupStaticChildSdkOwnerTested=$text.Contains('Production actual animation association group static child SDK fixture completed')
         $record.nativeAnimationAssociationGroupChildProductsCoupledRefusalsTested=$text.Contains('Production animation association group child products coupled refusal fixture completed')
         if(-not($record.nativeAnimationAssociationGroupChildProductsOwnerTested -and $record.actualAnimationAssociationGroupStaticChildSdkOwnerTested -and $record.nativeAnimationAssociationGroupChildProductsCoupledRefusalsTested)){throw 'Actual association group child products scope incomplete'}
+        $record.productionNativeCallbackTested=$true
+    } elseif($Scope -eq 'CameraJumpCut'){
+        $record.nativeCameraJumpCutActualSdkOwnerTested=$text.Contains('Production camera JumpCut actual SDK owner fixture completed')
+        $record.nativeCameraJumpCutOriginalTested=$text.Contains('Production camera JumpCut whole original false provider fixture completed')
+        $record.nativeCameraJumpCutPrefixTested=$text.Contains('Production camera JumpCut ordered prefix fixture completed') -and
+            $text.Contains('Production camera JumpCut known rejected prefix fixture completed')
+        $record.nativeCameraJumpCutRefusalsTested=$text.Contains('Production camera JumpCut current owner refusals fixture completed')
+        $record.nativeCameraJumpCutDebtTested=$true
+        foreach($name in @('behind-before','behind-after','prefix-drift','jump-before','jump-after','owner-loss','effect-mismatch','provider-drift')){
+            $record.nativeCameraJumpCutDebtTested=$record.nativeCameraJumpCutDebtTested -and $text.Contains('Production camera JumpCut '+$name+' retained debt fixture completed')
+        }
+        $record.nativeCameraBasicsActualSdkOwnerTested=$text.Contains('Production camera basics actual SDK owner fixture completed')
+        $record.nativeCameraRestoreOriginalTested=$text.Contains('Production camera restore whole original reference effects fixture completed')
+        $record.nativeCameraBasicsRefusalsTested=$text.Contains('Production camera basics current owner refusals fixture completed')
+        $record.nativeCameraRestoreDebtTested=$true
+        foreach($name in @('entered-before','entered-after','owner-loss','effect-mismatch')){
+            $record.nativeCameraRestoreDebtTested=$record.nativeCameraRestoreDebtTested -and $text.Contains('Production camera restore '+$name+' retained debt fixture completed')
+        }
+        $record.nativeCameraSphereVisibleOwnerTested=$text.Contains('Production native camera sphere callback owner fixture completed')
+        $record.actualCameraSphereVisibleSdkOwnerTested=$text.Contains('Production actual CCamera sphere SDK owner fixture completed')
+        if(-not($record.nativeCameraJumpCutActualSdkOwnerTested -and $record.nativeCameraJumpCutOriginalTested -and $record.nativeCameraJumpCutPrefixTested -and
+            $record.nativeCameraJumpCutRefusalsTested -and $record.nativeCameraJumpCutDebtTested -and $record.nativeCameraBasicsActualSdkOwnerTested -and
+            $record.nativeCameraRestoreOriginalTested -and $record.nativeCameraBasicsRefusalsTested -and $record.nativeCameraRestoreDebtTested -and
+            $record.nativeCameraSphereVisibleOwnerTested -and $record.actualCameraSphereVisibleSdkOwnerTested)){
+            throw 'JumpCut ordered prefix, original, refusal/debt or six prior camera lifetimes incomplete'
+        }
         $record.productionNativeCallbackTested=$true
     } elseif($Scope -eq 'CameraBasics'){
         $record.nativeCameraBasicsActualSdkOwnerTested=$text.Contains('Production camera basics actual SDK owner fixture completed')

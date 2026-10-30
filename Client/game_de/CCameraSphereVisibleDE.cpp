@@ -28,6 +28,15 @@ namespace mta::game_de
         if (result != ClockResult::Ok)
             throw std::runtime_error("DE camera owner refused Restore: " + std::to_string(static_cast<unsigned>(result)));
     }
+    void CCameraSphereVisibleDE::RestoreWithJumpCut()
+    {
+        // Keep the actual MTA itinerary on one existing owner. DE's named
+        // behind-player operation lets its native follow-ped consumer compute
+        // yaw later; no unqualified classic cached-angle field is written.
+        const auto result = cameraOwner.RestoreCameraWithJumpCut();
+        if (result != ClockResult::Ok)
+            throw std::runtime_error("DE camera owner refused RestoreWithJumpCut: " + std::to_string(static_cast<unsigned>(result)));
+    }
     bool CCameraSphereVisibleDE::IsSphereVisible(CVector* center, float radius) const
     {
         if (!center)

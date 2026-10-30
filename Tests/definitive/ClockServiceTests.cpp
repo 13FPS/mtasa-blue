@@ -677,6 +677,45 @@ namespace ClockCameraRestoreOwnerTest
     }
 }
 
+namespace ClockCameraJumpCutOwnerTest
+{
+    std::uintptr_t            image = 0, member = 0;
+    unsigned                  calls = 0, writes = 0, events = 0, scenario = 0;
+    bool                      orderVerified = false;
+    mta::game_de::ClockResult Exchange(std::uintptr_t, std::uint8_t, std::uint8_t, std::uint8_t&, bool&, std::uint32_t&) noexcept;
+    mta::game_de::ClockResult Invoke(mta::game_de::NativeCameraRestoreCalls::Function function, std::uintptr_t camera, std::uint32_t& exception) noexcept
+    {
+        namespace C = mta::game_de::NativeCameraRestoreProfile;
+        if (reinterpret_cast<std::uintptr_t>(function) != image + C::JumpCutRva || camera != image + C::CameraRva)
+            std::abort();
+        ++calls;
+        ++events;
+        orderVerified = *reinterpret_cast<std::uint8_t*>(camera + 0x22) == 1 && events == (writes ? 2u : 1u);
+        if (!orderVerified)
+            return mta::game_de::ClockResult::BindingChanged;
+        if (scenario == 5)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return mta::game_de::ClockResult::OriginalException;
+        }
+        // This runs the complete866-byte original and the actual cached
+        // BD34A0/BD36F0/AFC130 and register/unregister bodies in the owned image.
+        function(camera);
+        if (scenario == 6)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return mta::game_de::ClockResult::OriginalException;
+        }
+        if (scenario == 7)
+            *reinterpret_cast<LONG*>(image + mta::game_de::NativeBorrowedGcProfile::markerRva) = 1;
+        if (scenario == 8)
+            *reinterpret_cast<std::uint8_t*>(camera + 0x55) ^= 1;
+        if (scenario == 9)
+            *reinterpret_cast<std::uint8_t*>(member + 0x288) = 1;
+        return mta::game_de::ClockResult::Ok;
+    }
+}
+
 namespace ClockModelTimeGetterOwnerTest
 {
     bool           active = false, copyFailure = false;
@@ -3474,9 +3513,41 @@ namespace ClockWorldIgnoreOwnerTest
 }
 
 #include "../../Client/game_de/NativeCameraDataMemory.cpp"
-#define MTA_DE_CAMERA_RESTORE_NATIVE_INVOKE ClockCameraRestoreOwnerTest::Invoke
+#define MTA_DE_CAMERA_RESTORE_NATIVE_INVOKE   ClockCameraRestoreOwnerTest::Invoke
+#define MTA_DE_CAMERA_JUMPCUT_NATIVE_INVOKE   ClockCameraJumpCutOwnerTest::Invoke
+#define MTA_DE_CAMERA_JUMPCUT_BEHIND_EXCHANGE ClockCameraJumpCutOwnerTest::Exchange
 #include "../../Client/game_de/NativeCameraRestore.cpp"
+#undef MTA_DE_CAMERA_JUMPCUT_BEHIND_EXCHANGE
+#undef MTA_DE_CAMERA_JUMPCUT_NATIVE_INVOKE
 #undef MTA_DE_CAMERA_RESTORE_NATIVE_INVOKE
+namespace ClockCameraJumpCutOwnerTest
+{
+    mta::game_de::ClockResult Exchange(std::uintptr_t address, std::uint8_t expected, std::uint8_t target, std::uint8_t& observed, bool& accepted,
+                                       std::uint32_t& exception) noexcept
+    {
+        namespace D = mta::game_de::CameraRestoreDetail;
+        ++writes;
+        ++events;
+        if (address != image + mta::game_de::NativeCameraRestoreProfile::CameraRva + 0x22 || target != 1 || events != 1)
+            std::abort();
+        if (scenario == 1)
+            *reinterpret_cast<std::uint8_t*>(address) = 0x7f;
+        if (scenario == 2)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return mta::game_de::ClockResult::WriteFailure;
+        }
+        const auto result = D::ExchangeBehind(address, expected, target, observed, accepted, exception);
+        if (scenario == 3)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return mta::game_de::ClockResult::WriteFailure;
+        }
+        if (scenario == 4)
+            *reinterpret_cast<std::uint8_t*>(member + 0x288) = 1;
+        return result;
+    }
+}
 #include "../../Client/game_de/NativeWorldAreaMemory.cpp"
 #include "../../Client/game_de/NativeWorldJetpackMemory.cpp"
 #define MTA_DE_CAMERA_SPHERE_VISIBLE_NATIVE_INVOKE ClockCameraSphereOwnerTest::Invoke
@@ -8794,6 +8865,7 @@ namespace
 #include "NativeEmptyAnimationBlockRemovalOwnerTests.inl"
 #include "ApplicationTimingOwnerTests.inl"
 #include "NativeCameraBasicsOwnerTests.inl"
+#include "JumpCutOwnerTests.inl"
 // The model fixture consumes the shared byte helpers defined by the earlier
 // private-association fixture; keep its consumer after those definitions.
 #include "../../Client/game_de/CModelInfoDE.h"
@@ -8950,6 +9022,16 @@ int main(int argc, char** argv)
         staticAssociationInitializationUnknown || (argc == 3 && std::strcmp(argv[2], "--static-association-initialization-success") == 0);
     const bool animationStaticAssociationReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-static-association-reads") == 0;
     const bool animationAssociationGroupReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-association-group-reads") == 0;
+    const bool cameraJumpCutOnly = argc == 3 && std::strncmp(argv[2], "--camera-jumpcut-", 17) == 0;
+    unsigned   cameraJumpCutScenario = 10;
+    if (cameraJumpCutOnly)
+    {
+        const char* names[] = {"success",     "cas-rejected", "behind-before", "behind-after",    "prefix-drift",
+                               "jump-before", "jump-after",   "owner-loss",    "effect-mismatch", "provider-drift"};
+        for (unsigned i = 0; i != 10; ++i)
+            if (std::strcmp(argv[2] + 17, names[i]) == 0)
+                cameraJumpCutScenario = i;
+    }
     const bool cameraBasicsOnly = argc == 3 && std::strncmp(argv[2], "--camera-basics-", 16) == 0;
     unsigned   cameraBasicsScenario = 5;
     if (cameraBasicsOnly)
@@ -9221,12 +9303,12 @@ int main(int argc, char** argv)
          privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly ||
          privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly ||
          sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly ||
-         animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly || cameraBasicsOnly || applicationTimingOnly ||
-         emptyBlockRemovalOnly || blockRegistrationOnly || bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly ||
-         numericAssociationOnly || dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly ||
-         groupCopyAnimationOnly || groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
-         animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
-         privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
+         animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly || cameraBasicsOnly || cameraJumpCutOnly ||
+         applicationTimingOnly || emptyBlockRemovalOnly || blockRegistrationOnly || bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly ||
+         hierarchyUncompressOnly || numericAssociationOnly || dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly ||
+         groupReplacementOnly || groupCopyAnimationOnly || groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly ||
+         animationAssociationGroupOffsetOnly || animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly ||
+         pedRenderOnly || privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
             std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
         "durable fixture evidence is restricted to the explicit owned executable output directory");
     if (presentTransitionClockOnly)
@@ -9404,6 +9486,15 @@ int main(int argc, char** argv)
         fixture.Create(argv[1]);
         // One real module-pinned lifetime needs one pristine host process.
         NativeAnimationBlocksOwnedSdk(fixture, &AnimationAssociationGroupChildProductsOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (cameraJumpCutOnly)
+    {
+        Check(cameraJumpCutScenario < 10, "exact finite JumpCut scenario required");
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        CameraJumpCutOwnerFixture::Run(fixture, cameraJumpCutScenario);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

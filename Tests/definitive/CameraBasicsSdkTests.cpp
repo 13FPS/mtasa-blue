@@ -14,6 +14,7 @@
 #include "CameraBasicsFixture.generated.h"
 #include "CamFovFixture.generated.h"
 using namespace mta::game_de;
+static_assert(std::is_same_v<decltype(&CameraBasicsObserver::RestoreWithJumpCut), decltype(&CCameraSphereVisibleDE::RestoreWithJumpCut)>);
 static_assert(std::is_same_v<decltype(&CameraBasicsObserver::Restore), decltype(&CCameraSphereVisibleDE::Restore)>);
 static_assert(std::is_same_v<decltype(&CameraBasicsObserver::GetActiveCam), decltype(&CCameraSphereVisibleDE::GetActiveCam)>);
 static_assert(std::is_same_v<decltype(&CameraBasicsObserver::IsSphereVisible), decltype(&CCameraSphereVisibleDE::IsSphereVisible)>);
@@ -37,7 +38,7 @@ namespace
     struct Access final : NativeCameraSphereVisibleAccess
     {
         ClockResult   status = ClockResult::Ok;
-        unsigned      activeCalls = 0, fovCalls = 0, restoreCalls = 0, sphereCalls = 0;
+        unsigned      activeCalls = 0, fovCalls = 0, restoreCalls = 0, jumpCutCalls = 0, sphereCalls = 0;
         std::uint32_t row = 0, rawFov = 0;
         std::uint8_t  active = 0;
         bool          visible = false;
@@ -57,6 +58,11 @@ namespace
         ClockResult RestoreCamera() noexcept override
         {
             ++restoreCalls;
+            return status;
+        }
+        ClockResult RestoreCameraWithJumpCut() noexcept override
+        {
+            ++jumpCutCalls;
             return status;
         }
         ClockResult ReadCameraSphereVisible(const CVector&, float, bool& value) noexcept override
@@ -105,6 +111,13 @@ namespace
             Check(access.restoreCalls == calls + 1 && access.activeCalls == active && !access.fovCalls,
                   "ordinary actual Restore dispatches once with no SDK extras, JumpCut or scalar repair");
         }
+        for (unsigned count = 0; count != 3; ++count)
+        {
+            const auto jumpCuts = access.jumpCutCalls, restores = access.restoreCalls, active = access.activeCalls, fov = access.fovCalls;
+            sdk.RestoreWithJumpCut();
+            Check(access.jumpCutCalls == jumpCuts + 1 && access.restoreCalls == restores && access.activeCalls == active && access.fovCalls == fov,
+                  "actual MTA JumpCut dispatches once to its selected owner, without ordinary Restore, SDK scalar writes or replay");
+        }
         constexpr std::array<std::uint32_t, 22> values{0,           0x80000000u, 1,           0x80000001u, 0x007fffffu, 0x807fffffu, 0x00800000u, 0x80800000u,
                                                        0x3f800000u, 0xbf800000u, 0x428c0000u, 0x43340000u, 0x437a0000u, 0xc37a0000u, 0x7f7fffffu, 0xff7fffffu,
                                                        0x7f800000u, 0xff800000u, 0x7fc00001u, 0xffc00001u, 0x7f800001u, 0xff800001u};
@@ -149,6 +162,13 @@ namespace
             Refuses([&] { sdk.Restore(); }, "Restore", status);
             Check(access.restoreCalls == restores + 1 && access.activeCalls == active && access.fovCalls == fov,
                   "failed Restore makes no replay or alternate camera operation");
+            const auto jumpCuts = access.jumpCutCalls;
+            restores = access.restoreCalls;
+            active = access.activeCalls;
+            fov = access.fovCalls;
+            Refuses([&] { sdk.RestoreWithJumpCut(); }, "RestoreWithJumpCut", status);
+            Check(access.jumpCutCalls == jumpCuts + 1 && access.restoreCalls == restores && access.activeCalls == active && access.fovCalls == fov,
+                  "failed JumpCut makes one selected call and cannot hide an accepted prefix through a second camera operation");
         }
         Missing              missing;
         CameraBasicsObserver oldCamera(missing);
@@ -156,6 +176,7 @@ namespace
         Refuses([&] { oldCamera.GetActiveCam(); }, "GetActiveCam", ClockResult::NotInitialized);
         Refuses([&] { oldCam.GetFOV(); }, "GetFOV", ClockResult::NotInitialized);
         Refuses([&] { oldCamera.Restore(); }, "Restore", ClockResult::NotInitialized);
+        Refuses([&] { oldCamera.RestoreWithJumpCut(); }, "RestoreWithJumpCut", ClockResult::NotInitialized);
         access.status = ClockResult::Ok;
         CVector center{};
         for (const bool visible : {false, true})
@@ -176,6 +197,7 @@ namespace
             invalid = true;
         }
         Check(invalid && access.sphereCalls == sphere, "existing null-center refusal stays before any native provider call");
+        std::puts("Actual camera JumpCut SDK fixture completed");
         std::puts("Actual camera basics SDK fixture completed");
         std::puts("Actual Cam finite FOV SDK fixture completed");
         std::puts("Actual camera provider refusal transport fixture completed");

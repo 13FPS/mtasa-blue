@@ -27,6 +27,9 @@ namespace mta::game_de
         // Ordinary Restore is one distinct native effect. Older owners must
         // refuse rather than substitute JumpCut, a field repair or a retry.
         virtual ClockResult RestoreCamera() noexcept { return ClockResult::NotInitialized; }
+        // This is MTA's two-step JumpCut itinerary, not ordinary Restore.
+        // Missing implementations may not synthesize its accepted prefix.
+        virtual ClockResult RestoreCameraWithJumpCut() noexcept { return ClockResult::NotInitialized; }
 
     protected:
         ~NativeCameraSphereVisibleAccess() = default;

@@ -8677,6 +8677,7 @@ namespace
 #include "AnimationManagerUncompressFixture.generated.h"
 #include "NativeAnimationHierarchyUncompressOwnerTests.inl"
 #include "NativeBankDecompressionOwnerTests.inl"
+#include "NativeBankEvictionOwnerTests.inl"
 #include "ApplicationTimingOwnerTests.inl"
 
 // The strict receiver must execute production typed tickets and the distinct
@@ -8835,6 +8836,17 @@ int main(int argc, char** argv)
         for (unsigned index = 0; index != 4; ++index)
             if (std::strcmp(argv[2] + 21, names[index]) == 0)
                 applicationTimingScenario = index;
+    }
+    const bool bankEvictionOnly = argc == 3 && std::strncmp(argv[2], "--bank-eviction-", 16) == 0;
+    unsigned   bankEvictionScenario = 13;
+    if (bankEvictionOnly)
+    {
+        const char* names[] = {"success",          "refusals",         "timer-owner",     "entered-before",  "entered-after",
+                               "late-owner",       "victim-mismatch",  "target-mismatch", "victim-fallback", "target-fallback",
+                               "victim-no-output", "target-no-output", "cache-mismatch"};
+        for (unsigned index = 0; index != 13; ++index)
+            if (std::strcmp(argv[2] + 16, names[index]) == 0)
+                bankEvictionScenario = index;
     }
     const bool bankDecompressionOnly = argc == 3 && std::strncmp(argv[2], "--bank-decompression-", 21) == 0;
     unsigned   bankDecompressionScenario = 9;
@@ -9045,11 +9057,11 @@ int main(int argc, char** argv)
            freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly || customAnimationCleanupOnly ||
            standaloneSequenceOperationsOnly || animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly ||
            animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly || animationGroupValidityOnly ||
-           animationIdValidityOnly || animationAssociationGroupReadsOnly || applicationTimingOnly || bankDecompressionOnly || hierarchyUncompressOnly ||
-           numericAssociationOnly || dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly ||
-           groupCopyAnimationOnly || groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
-           animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
-           privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
+           animationIdValidityOnly || animationAssociationGroupReadsOnly || applicationTimingOnly || bankEvictionOnly || bankDecompressionOnly ||
+           hierarchyUncompressOnly || numericAssociationOnly || dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly ||
+           groupReplacementOnly || groupCopyAnimationOnly || groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly ||
+           animationAssociationGroupOffsetOnly || animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly ||
+           pedRenderOnly || privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
     if (presentTransitionClockOnly)
@@ -9256,6 +9268,18 @@ int main(int argc, char** argv)
             fixture.Create(argv[1]);
             ApplicationTimingOwnerFixture::Run(fixture, applicationTimingScenario);
         }
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (bankEvictionOnly)
+    {
+        Check(bankEvictionScenario < 13, "exact finite bank eviction scenario required");
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        // Each uncertain two-bank operation retains its own process lifetime;
+        // neither native effects nor reused addresses are reset for replay.
+        BankEvictionOwnerFixture::scenario = bankEvictionScenario;
+        BankEvictionOwnerFixture::RunPrepared(fixture);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

@@ -27,7 +27,14 @@ namespace mta::game_de
             std::uint32_t convertedFrames = 0, encodedBytes = 0, outputBytes = 0, cacheStores = 0;
             bool          entered = false, returned = false, effectsVerified = false, noOp = false, debt = false, cachePath = false;
             bool          decompressionPath = false, sharedInput = false;
-            ClockResult   result = ClockResult::NotInitialized;
+            // The victim is independently qualified from its current bank;
+            // cache node.data is only a candidate locator, never free authority.
+            // Its output base/compressed count publish only after both banks
+            // and their shared cache/heap/completion journal verify together.
+            std::uintptr_t victimHierarchy = 0, victimOutputBase = 0;
+            std::uint32_t  victimSequences = 0, victimPreparedFrames = 0, victimCompressedFrames = 0, victimInputBytes = 0, victimOutputBytes = 0;
+            bool           evictionPath = false, victimSharedInput = false;
+            ClockResult    result = ClockResult::NotInitialized;
         };
     }
     class NativeAnimationHierarchyUncompress final

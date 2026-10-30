@@ -9,6 +9,7 @@
 #include "NativeAnimationSequenceFrameBindProfile.h"
 #include "NativeAnimationAssociationProgressProfile.h"
 #include "NativeAnimationHierarchyDecompressProfile.h"
+#include "NativeAnimationHierarchyEvictionProfile.h"
 #include "NativeCustomAnimSequenceStorageProfile.h"
 #include "NativeModelLoadedReader.h"
 #include "NativeModelReferenceHeap.h"
@@ -34,6 +35,7 @@ namespace mta::game_de
         namespace FrameProfile = NativeAnimationSequenceFrameBindProfile;
         namespace TimeProfile = NativeAnimationAssociationProgressProfile;
         namespace ConversionProfile = NativeAnimationHierarchyDecompressProfile;
+        namespace EvictionProfile = NativeAnimationHierarchyEvictionProfile;
         namespace Heap = NativeModelReferenceHeap;
         namespace StorageProfile = NativeCustomAnimSequenceStorageProfile;
         using Calls = NativeAnimationHierarchyUncompressCalls::Receipt;
@@ -126,6 +128,45 @@ namespace mta::game_de
                    literal(ConversionProfile::QuaternionScaleRva, ConversionProfile::QuaternionScaleBytes) &&
                    literal(ConversionProfile::PositionScaleRva, ConversionProfile::PositionScaleBytes) &&
                    literal(ConversionProfile::TimeScaleRva, ConversionProfile::TimeScaleBytes);
+        }
+        bool EvictionSource(std::uintptr_t image, std::uintptr_t hierarchyRva) noexcept
+        {
+            if (!Origin::Sections({image}, hierarchyRva, 0, EvictionProfile::Code.data(), EvictionProfile::Code.size()))
+                return false;
+            for (const auto& pin : EvictionProfile::Code)
+            {
+                std::array<unsigned char, EvictionProfile::MaximumPinBytes> bytes{};
+                if (!Image::ReadImage(image, image + pin.rva, bytes.data(), pin.size, false, true) || std::memcmp(bytes.data(), pin.bytes, pin.size))
+                    return false;
+            }
+            const auto literal = [&](std::uintptr_t rva, const auto& expected)
+            {
+                std::array<unsigned char, 4> bytes{};
+                return Heap::ReadOnlyImage(image, image + rva, bytes.size()) && Image::ReadImage(image, image + rva, bytes.data(), bytes.size()) &&
+                       bytes == expected;
+            };
+            return literal(EvictionProfile::QuaternionScaleRva, EvictionProfile::QuaternionScaleBytes) &&
+                   literal(EvictionProfile::TimeScaleRva, EvictionProfile::TimeScaleBytes) &&
+                   literal(EvictionProfile::PositionScaleRva, EvictionProfile::PositionScaleBytes) &&
+                   literal(EvictionProfile::HalfRva, EvictionProfile::HalfBytes);
+        }
+        bool PredictPacked(std::uint32_t bits, std::size_t word, std::uint16_t& output) noexcept
+        {
+            if (!Finite(bits))
+                return false;
+            const auto scale = word < 4    ? At<std::uint32_t>(EvictionProfile::QuaternionScaleBytes, 0)
+                               : word == 4 ? At<std::uint32_t>(EvictionProfile::TimeScaleBytes, 0)
+                                           : At<std::uint32_t>(EvictionProfile::PositionScaleBytes, 0);
+            auto       result = _mm_mul_ss(_mm_set_ss(Float(bits)), _mm_set_ss(Float(scale)));
+            if (word == 4)
+                result = _mm_add_ss(result, _mm_set_ss(Float(At<std::uint32_t>(EvictionProfile::HalfBytes, 0))));
+            const auto value = _mm_cvtss_f32(result);
+            // CVTTSS2SI's low WORD is the source encoding, not saturation.
+            // Refuse nonfinite/indefinite conversions before destructive entry.
+            if (!Finite(Bits(value)) || value < -2147483648.0f || value >= 2147483648.0f)
+                return false;
+            output = static_cast<std::uint16_t>(_mm_cvttss_si32(result));
+            return true;
         }
         ClockResult CaptureHeap(std::uintptr_t image, Heap::Value& output) noexcept
         {
@@ -277,7 +318,9 @@ namespace mta::game_de
         std::uintptr_t                                             outputBase = 0, selectedCache = 0;
         std::uint32_t                                              sseControl = 0;
         unsigned char                                              loaded = 0;
-        bool                                                       payload = false, cache = false, conversion = false, sharedInput = false;
+        bool                                                       payload = false, cache = false, conversion = false, sharedInput = false, compression = false;
+        std::unique_ptr<Data>                                      victim;
+        Data*                                                      joint = nullptr;
         NativeAnimationHierarchyUncompressCalls::CheckOwner        afterApplicationFrameOwner = nullptr;
         NativeModelReferenceHeap::Value                            heap{};
         NativeModelLoadedReader::Value                             stream{};
@@ -314,6 +357,25 @@ namespace mta::game_de
             for (const auto& node : plan.cacheNodes)
                 if (!Map::Disjoint(address, bytes, node.address, node.before.size()))
                     return false;
+            const auto otherRange = [&](const auto& other, bool oldInputs)
+            {
+                if (!Map::Disjoint(address, bytes, other.token.locator, other.expected.size()) ||
+                    (other.cookieAddress && other.sequenceBytes && !Map::Disjoint(address, bytes, other.cookieAddress, other.sequenceBytes)))
+                    return false;
+                for (const auto& node : other.cacheNodes)
+                    if (!Map::Disjoint(address, bytes, node.address, node.before.size()))
+                        return false;
+                if (oldInputs)
+                    for (const auto& frame : other.frames)
+                        if (!Map::Disjoint(address, bytes, frame.address, frame.before.size()))
+                            return false;
+                return !output || !other.outputBase || Map::Disjoint(address, bytes, other.outputBase, other.outputBytes);
+            };
+            // Victim compact allocation precedes both input frees. Target
+            // expansion follows victim input release and may reuse that base.
+            // These checks use numeric journals, never query freed old spans.
+            if ((plan.victim && !otherRange(*plan.victim, !output)) || (plan.joint && !otherRange(*plan.joint, !output || plan.compression)))
+                return false;
             // These are numeric old extents after entry. Never query or copy a
             // freed input again merely to prove that the new output is disjoint.
             if (output)
@@ -328,7 +390,8 @@ namespace mta::game_de
             auto result = ConversionOwner(image, owner, plan);
             if (result != ClockResult::Ok)
                 return result;
-            if ((_mm_getcsr() & 0xffc0u) != plan.sseControl || !ConversionSource(image, plan.location.rva))
+            if ((_mm_getcsr() & 0xffc0u) != plan.sseControl || !ConversionSource(image, plan.location.rva) ||
+                (plan.compression && !EvictionSource(image, plan.location.rva)))
                 return ClockResult::BindingChanged;
             Heap::Value heap;
             if ((result = CaptureHeap(image, heap)) != ClockResult::Ok)
@@ -402,7 +465,18 @@ namespace mta::game_de
         ClockResult Verify(std::uintptr_t image, CheckOwner owner, Plan& plan, bool after) noexcept
         {
             if (plan.conversion)
-                return VerifyConversion(image, owner, plan, after);
+            {
+                // Compression publishes its output before target expansion.
+                // Bookend both current banks around the one shared cache graph.
+                if (plan.victim)
+                {
+                    const auto victim = VerifyConversion(image, owner, *plan.victim, after);
+                    if (victim != ClockResult::Ok)
+                        return victim;
+                }
+                const auto result = VerifyConversion(image, owner, plan, after);
+                return result != ClockResult::Ok || !plan.victim ? result : VerifyConversion(image, owner, *plan.victim, after);
+            }
             auto result = Capture(image, owner, plan.location, plan.observed);
             if (result != ClockResult::Ok)
                 return result;
@@ -571,8 +645,25 @@ namespace mta::game_de
                 if (graph == 1)
                 {
                     if (current == anchors[tail])
-                        return ClockResult::NotInitialized;
-                    plan.selectedCache = current;
+                    {
+                        const auto selected = At<std::uintptr_t>(plan.cacheNodes[1].before, 8);
+                        if (selected == anchors[0])
+                            return ClockResult::NotInitialized;
+                        std::uintptr_t candidate = 0;
+                        for (const auto& node : plan.cacheNodes)
+                            if (node.address == selected)
+                                candidate = At<std::uintptr_t>(node.before, 0);
+                        if (!candidate || candidate == plan.token.locator)
+                            return ClockResult::OwnerConflict;
+                        // Cache data supplies only a candidate. PrepareVictim
+                        // must independently prove its actual current bank.
+                        plan.victim = std::make_unique<Plan>();
+                        plan.victim->token = {plan.token.ownerGeneration, candidate};
+                        plan.victim->joint = &plan;
+                        plan.selectedCache = selected;
+                    }
+                    else
+                        plan.selectedCache = current;
                 }
                 while (current != anchors[tail])
                 {
@@ -606,15 +697,35 @@ namespace mta::game_de
                     Put(plan.expected, 0x20, *written);
                     return *written;
                 }
+                if (written && plan.victim && address == plan.victim->token.locator + 0x20)
+                {
+                    Put(plan.victim->expected, 0x20, *written);
+                    return *written;
+                }
                 valid = false;
                 return 0;
             };
             const auto load = [&](std::uintptr_t address) { return word(address, nullptr); };
             const auto store = [&](std::uintptr_t address, std::uintptr_t value) { (void)word(address, &value); };
             const auto selected = plan.selectedCache;
+            if (plan.victim)
+            {
+                // FF0F30..FF0F6F removes the tail victim, makes it the first
+                // free node, clears victimH20 and node.data. The following
+                // genuine FFAEF0 body performs the same eight insert/H stores
+                // modeled below. Ordered snapshots preserve all aliases.
+                store(load(selected + 16) + 8, load(selected + 8));
+                store(load(selected + 8) + 16, load(selected + 16));
+                store(selected + 16, load(anchors[2] + 16));
+                store(load(anchors[2] + 16) + 8, selected);
+                store(selected + 8, anchors[2]);
+                store(anchors[2] + 16, selected);
+                store(plan.victim->token.locator + 0x20, 0);
+                store(selected, 0);
+            }
             // FF0ED4..FF0F08, then FF0F7D: node.data first, the exact six
-            // free-to-active link stores, then H20. No eviction or free-node
-            // allocator is entered; snapshots model source order and aliases.
+            // free-to-active link stores, then H20. The eviction case reaches
+            // the same sequence through whole FFAEF0, which is not an allocator.
             store(selected, plan.token.locator);
             store(load(selected + 16) + 8, load(selected + 8));
             store(load(selected + 8) + 16, load(selected + 16));
@@ -627,13 +738,150 @@ namespace mta::game_de
                 return ClockResult::BindingChanged;
             plan.cache = true;
             receipt.cachePath = true;
-            receipt.cacheStores = 8;
+            receipt.cacheStores = plan.victim ? 16 : 8;
             receipt.cacheNodes = static_cast<std::uint32_t>(plan.cacheNodes.size() - anchors.size());
             for (const auto& node : plan.cacheNodes)
                 for (const auto offset : {std::size_t{0}, std::size_t{8}, std::size_t{16}})
                     if (At<std::uintptr_t>(node.before, offset) != At<std::uintptr_t>(node.expected, offset))
                         ++receipt.modifiedCacheWords;
             return ClockResult::Ok;
+        }
+        template <class Plan>
+        ClockResult PrepareVictim(std::uintptr_t image, CheckOwner owner, Plan& target, Calls& receipt)
+        {
+            auto& plan = *target.victim;
+            auto  result = ConversionOwner(image, owner, target);
+            if (result != ClockResult::Ok)
+                return result;
+            plan.afterApplicationFrameOwner = target.afterApplicationFrameOwner;
+            plan.heap = target.heap;
+            plan.sseControl = target.sseControl;
+            plan.compression = true;
+            if ((result = Origin::Locate({image}, plan.token.locator, plan.location)) != ClockResult::Ok ||
+                (result = Capture(image, owner, plan.location, plan.before)) != ClockResult::Ok)
+                return result;
+            if (!EvictionSource(image, plan.location.rva) || !ConversionSource(image, plan.location.rva) || plan.before.payload[0x13] != 0 ||
+                plan.before.payload[0x12] != 0 || At<std::uintptr_t>(plan.before.payload, 0x20) != target.selectedCache ||
+                !Finite(At<std::uint32_t>(plan.before.payload, 0x18)))
+                return ClockResult::OwnerConflict;
+            plan.expected = plan.before.payload;
+            Put(plan.expected, 0x12, static_cast<unsigned char>(1));
+            Put(plan.expected, 0x20, std::uintptr_t{0});
+            const auto count = At<std::int16_t>(plan.before.payload, 0x10);
+            if (count <= 0)
+                return ClockResult::OwnerConflict;
+            plan.sequenceFirst = At<std::uintptr_t>(plan.before.payload, 8);
+            if (plan.sequenceFirst < 8 || plan.sequenceFirst % alignof(std::uint64_t))
+                return ClockResult::BindingChanged;
+            plan.cookieAddress = plan.sequenceFirst - 8;
+            if (!Map::Copy(plan.cookieAddress, &plan.capacity, sizeof(plan.capacity)))
+                return ClockResult::ReadFailure;
+            if (plan.capacity < static_cast<std::uint16_t>(count))
+                return ClockResult::BindingChanged;
+            if (plan.capacity > (MaximumPreparedBytes - 8) / ReadProfile::SequenceStride)
+                return ClockResult::Busy;
+            plan.sequenceBytes = 8 + static_cast<std::size_t>(plan.capacity) * ReadProfile::SequenceStride;
+            if (!Map::PrivateWritable(plan.cookieAddress, plan.sequenceBytes) || !AwayFromHeap(plan.cookieAddress, plan.sequenceBytes, plan) ||
+                !Map::Disjoint(plan.token.locator, plan.expected.size(), target.token.locator, target.expected.size()) ||
+                !Map::Disjoint(plan.cookieAddress, plan.sequenceBytes, target.cookieAddress, target.sequenceBytes) ||
+                !Map::Disjoint(plan.cookieAddress, plan.sequenceBytes, target.token.locator, target.expected.size()) ||
+                !Map::Disjoint(target.cookieAddress, target.sequenceBytes, plan.token.locator, plan.expected.size()))
+                return ClockResult::OwnerConflict;
+            for (const auto& node : target.cacheNodes)
+                if (!Map::Disjoint(plan.cookieAddress, plan.sequenceBytes, node.address, node.before.size()) ||
+                    !Map::Disjoint(plan.token.locator, plan.expected.size(), node.address, node.before.size()))
+                    return ClockResult::OwnerConflict;
+            for (const auto& frame : target.frames)
+                if (!FrameRange(frame.address, frame.before.size(), target, false))
+                    return ClockResult::OwnerConflict;
+            plan.blockAddress = image + NativeAnimationBlockProfile::BankRva + plan.before.origin.block * NativeAnimationBlockProfile::RowBytes;
+            if (!Image::ReadImage(image, plan.blockAddress, plan.blockHeader.data(), plan.blockHeader.size(), true))
+                return ClockResult::ReadFailure;
+            plan.loaded = plan.blockHeader[NativeAnimationBlockProfile::LoadedOffset];
+            if (plan.loaded != 1)
+                return ClockResult::NotInitialized;
+            NativeModelLoadedReader reader({image}, owner);
+            if ((result = reader.Read(NativeStreamingResourceProfile::IfpFirst + plan.before.origin.block, plan.stream)) != ClockResult::Ok)
+                return result;
+            if (plan.stream.rawLoadState != 1 || !plan.stream.streamedIn)
+                return ClockResult::NotInitialized;
+            if (!Image::ReadImage(image, plan.stream.rowAddress, plan.streamHeader.data(), plan.streamHeader.size(), true))
+                return ClockResult::ReadFailure;
+            plan.sequences.reserve(static_cast<std::size_t>(count));
+            plan.frames.reserve(static_cast<std::size_t>(count));
+            for (std::int32_t index = 0; index < count; ++index)
+            {
+                Sequence sequence;
+                sequence.address = plan.sequenceFirst + static_cast<std::size_t>(index) * ReadProfile::SequenceStride;
+                if (!Map::Copy(sequence.address, sequence.before.data(), sequence.before.size()))
+                    return ClockResult::ReadFailure;
+                sequence.expected = sequence.before;
+                const auto flags = At<std::uint16_t>(sequence.before, 0x42);
+                const auto frames = At<std::int16_t>(sequence.before, 0x44);
+                if ((flags & 4) || frames <= 0)
+                    return ClockResult::OwnerConflict;
+                if (!index)
+                    plan.sharedInput = (flags & 8) != 0;
+                else if (((flags & 8) != 0) != plan.sharedInput)
+                    return ClockResult::OwnerConflict;
+                Frame frame;
+                frame.address = At<std::uintptr_t>(sequence.before, 0x48);
+                frame.stride = (flags & 2 ? FrameProfile::RootStride : FrameProfile::ChildStride) * 2;
+                const auto inputBytes = static_cast<std::size_t>(frames) * frame.stride;
+                const auto outputBytes = inputBytes / 2;
+                if (inputBytes > MaximumPreparedBytes - target.preparedBytes - plan.preparedBytes ||
+                    outputBytes > MaximumPreparedBytes - target.outputBytes - plan.outputBytes)
+                    return ClockResult::Busy;
+                if (!FrameRange(frame.address, inputBytes, plan, false) || frame.address % 4 || ((!plan.sharedInput || !index) && frame.address % 16) ||
+                    !Map::PrivateWritable(frame.address, inputBytes))
+                    return ClockResult::BindingChanged;
+                for (const auto& previous : plan.frames)
+                    if (!Map::Disjoint(frame.address, inputBytes, previous.address, previous.before.size()))
+                        return ClockResult::OwnerConflict;
+                if (plan.sharedInput && index &&
+                    (plan.preparedBytes > (std::numeric_limits<std::uintptr_t>::max)() - plan.frames[0].address ||
+                     frame.address != plan.frames[0].address + plan.preparedBytes))
+                    return ClockResult::OwnerConflict;
+                frame.outputOffset = plan.outputBytes;
+                frame.before.resize(inputBytes);
+                frame.expected.resize(outputBytes);
+                frame.observed.resize(inputBytes);
+                if (!Map::Copy(frame.address, frame.before.data(), frame.before.size()))
+                    return ClockResult::ReadFailure;
+                const auto predictionSse = _mm_getcsr();
+                bool       valid = true;
+                for (std::int32_t key = 0; key < frames && valid; ++key)
+                    for (std::size_t word = 0; word != frame.stride / 4; ++word)
+                    {
+                        std::uint16_t packed = 0;
+                        if (!PredictPacked(At<std::uint32_t>(frame.before, static_cast<std::size_t>(key) * frame.stride + word * 4), word, packed))
+                        {
+                            valid = false;
+                            break;
+                        }
+                        Put(frame.expected, static_cast<std::size_t>(key) * (frame.stride / 2) + word * 2, packed);
+                    }
+                _mm_setcsr(predictionSse);
+                if (!valid)
+                    return ClockResult::OwnerConflict;
+                Put(sequence.expected, 0x42, static_cast<std::uint16_t>(flags | 12u));
+                plan.preparedBytes += inputBytes;
+                plan.outputBytes += outputBytes;
+                receipt.victimPreparedFrames += static_cast<std::uint16_t>(frames);
+                plan.sequences.push_back(std::move(sequence));
+                plan.frames.push_back(std::move(frame));
+            }
+            if (plan.sharedInput && !Map::PrivateWritable(plan.frames[0].address, plan.preparedBytes))
+                return ClockResult::BindingChanged;
+            // Both banks remain engine-owned. The joint CPU journal grants no
+            // private allocation adoption or adapter authority to free a base.
+            receipt.evictionPath = true;
+            receipt.victimHierarchy = plan.token.locator;
+            receipt.victimSharedInput = plan.sharedInput;
+            receipt.victimSequences = static_cast<std::uint32_t>(plan.sequences.size());
+            receipt.victimInputBytes = static_cast<std::uint32_t>(plan.preparedBytes);
+            receipt.victimOutputBytes = static_cast<std::uint32_t>(plan.outputBytes);
+            return VerifyConversion(image, owner, plan, false);
         }
         template <class Plan>
         ClockResult PrepareConversion(std::uintptr_t image, CheckOwner owner, Plan& plan, Calls& receipt)
@@ -749,6 +997,8 @@ namespace mta::game_de
             }
             if (plan.sharedInput && !Map::PrivateWritable(plan.frames[0].address, plan.preparedBytes))
                 return ClockResult::BindingChanged;
+            if (plan.victim && (result = PrepareVictim(image, owner, plan, receipt)) != ClockResult::Ok)
+                return result;
             if (Float(At<std::uint32_t>(plan.before.payload, 0x18)) == 0.0f)
             {
                 const auto predictionSse = _mm_getcsr();
@@ -764,7 +1014,7 @@ namespace mta::game_de
             receipt.sequences = static_cast<std::uint32_t>(plan.sequences.size());
             receipt.encodedBytes = static_cast<std::uint32_t>(plan.preparedBytes);
             receipt.outputBytes = static_cast<std::uint32_t>(plan.outputBytes);
-            return VerifyConversion(image, owner, plan, false);
+            return Verify(image, owner, plan, false);
         }
         template <class Plan>
         ClockResult Prepare(std::uintptr_t image, CheckOwner owner, Plan& plan, Calls& receipt)
@@ -969,6 +1219,11 @@ namespace mta::game_de
         {
             receipt.outputBase = data->outputBase;
             receipt.convertedFrames = receipt.preparedFrames;
+            if (data->victim)
+            {
+                receipt.victimOutputBase = data->victim->outputBase;
+                receipt.victimCompressedFrames = receipt.victimPreparedFrames;
+            }
         }
         receipt.effectsVerified = true;
         return finish(ClockResult::Ok);

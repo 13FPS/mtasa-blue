@@ -54,6 +54,7 @@ namespace mta::game_de
         void                                 RemoveFromUncompressedCache(CAnimBlendHierarchySAInterface*) override;
         void                                 AddAnimBlockRef(int) override;
         int                                  GetNumRefsToAnimBlock(int) override;
+        void                                 RemoveAnimBlockRef(int) override;
         void                                 RemoveAnimBlockRefWithoutDelete(int) override;
         BYTE*                                AllocateKeyFramesMemory(std::uint32_t) override;
         void                                 FreeKeyFramesMemory(void*) override;
@@ -71,6 +72,7 @@ namespace mta::game_de
         bool                                 IsValidGroup(std::uint32_t) const override;
         bool                                 IsValidAnim(std::uint32_t, std::uint32_t) const override;
         int                                  GetAnimationBlockIndex(const char*) override;
+        int                                  RegisterAnimBlock(const char*) override;
         const char*                          GetGateWayBlockName() const override;
         const char*                          GetGateWayAnimationName() const override;
 

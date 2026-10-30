@@ -707,11 +707,20 @@ namespace mta::game_de
         std::memcpy(&value, &bits, sizeof(value));
         return value;
     }
+    void CAnimManagerDE::RemoveAnimBlockRef(int index)
+    {
+        const auto identity = ReadCounterIdentity(index, "RemoveAnimBlockRef");
+        // The matched MTA US1.0 entries4D3FD0/4D3FF0 have byte-identical
+        // 17-byte WORD decrements, including zero toFFFF with no last-ref
+        // unload. Reuse that qualified policy; physical RemoveAnimBlock
+        // remains a separate native lifecycle operation.
+        Require(blockAccess->RemoveAnimationBlockRefWithoutDelete(identity), "RemoveAnimBlockRef");
+    }
     void CAnimManagerDE::RemoveAnimBlockRefWithoutDelete(int index)
     {
         const auto identity = ReadCounterIdentity(index, "RemoveAnimBlockRefWithoutDelete");
-        // Genuine original policy decrements modulo16 even at zero. Cleanup,
-        // unload and the distinct RemoveAnimBlockRef remain separate APIs.
+        // Both matched MTA reference APIs decrement modulo16 even at zero.
+        // Neither this counter write nor its SDK name authorizes block unload.
         Require(blockAccess->RemoveAnimationBlockRefWithoutDelete(identity), "RemoveAnimBlockRefWithoutDelete");
     }
     void CAnimManagerDE::RequireFactory(const char* operation) const
@@ -986,6 +995,18 @@ namespace mta::game_de
                 Require(native.ReadAnimationStaticAssociationAnimID(generation, copiedGroup, copiedAnimation, selected), "IsValidAnim");
                 return true;
             });
+    }
+    int CAnimManagerDE::RegisterAnimBlock(const char* name)
+    {
+        // Snapshot the exact bounded native spelling before owner callbacks.
+        // The same owner returns either the current first match or the fully
+        // verified appended index; no wrapper publishes a block prematurely.
+        const auto   copied = CopyName(name);
+        std::int32_t index = -1;
+        Require(native.RegisterAnimationBlock(ownerGeneration, copied, index), "RegisterAnimBlock");
+        if (index < 0)
+            throw std::runtime_error("DE animation manager registration returned an invalid block index");
+        return index;
     }
     int CAnimManagerDE::GetAnimationBlockIndex(const char* name)
     {

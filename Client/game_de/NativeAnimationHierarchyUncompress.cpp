@@ -512,11 +512,15 @@ namespace mta::game_de
             std::uint64_t                 capacity = 0;
             std::array<unsigned char, 32> block{};
             std::array<unsigned char, 16> stream{};
-            if (!Map::PrivateWritable(plan.cookieAddress, plan.sequenceBytes) || !Map::Copy(plan.cookieAddress, &capacity, sizeof(capacity)) ||
-                !Image::ReadImage(image, plan.blockAddress, block.data(), block.size(), true) ||
+            // With no published rows the originals never consume H8. Keep
+            // the current bank/completion proof, without querying unused tags.
+            if (plan.sequenceBytes &&
+                (!Map::PrivateWritable(plan.cookieAddress, plan.sequenceBytes) || !Map::Copy(plan.cookieAddress, &capacity, sizeof(capacity))))
+                return ClockResult::ReadFailure;
+            if (!Image::ReadImage(image, plan.blockAddress, block.data(), block.size(), true) ||
                 !Image::ReadImage(image, plan.stream.rowAddress, stream.data(), stream.size(), true))
                 return ClockResult::ReadFailure;
-            if (capacity != plan.capacity || block != plan.blockHeader || stream != plan.streamHeader)
+            if ((plan.sequenceBytes && capacity != plan.capacity) || block != plan.blockHeader || stream != plan.streamHeader)
                 return ClockResult::BindingChanged;
             NativeModelLoadedReader reader({image}, owner);
             if ((result = reader.Recheck(plan.stream)) != ClockResult::Ok)
@@ -552,11 +556,35 @@ namespace mta::game_de
             if (!PostSource(image, plan))
                 return ClockResult::BindingChanged;
             const auto hierarchyCount = At<std::int16_t>(plan.before.payload, 0x10);
-            if (hierarchyCount <= 0 || plan.before.payload[0x12])
+            if (hierarchyCount < 0 || (hierarchyCount && plan.before.payload[0x12]))
                 return ClockResult::OwnerConflict;
             plan.sseControl = _mm_getcsr() & 0xffc0u;
             if ((plan.sseControl & 0x1f80u) != 0x1f80u)
                 return ClockResult::OwnerConflict;
+            plan.blockAddress = image + NativeAnimationBlockProfile::BankRva + plan.before.origin.block * NativeAnimationBlockProfile::RowBytes;
+            if (!Image::ReadImage(image, plan.blockAddress, plan.blockHeader.data(), plan.blockHeader.size(), true))
+                return ClockResult::ReadFailure;
+            if (plan.blockHeader[NativeAnimationBlockProfile::LoadedOffset] != 1)
+                return ClockResult::NotInitialized;
+            NativeModelLoadedReader reader({image}, owner);
+            if ((result = reader.Read(NativeStreamingResourceProfile::IfpFirst + plan.before.origin.block, plan.stream)) != ClockResult::Ok)
+                return result;
+            if (plan.stream.rawLoadState != 1 || !plan.stream.streamedIn)
+                return ClockResult::NotInitialized;
+            if (!Image::ReadImage(image, plan.stream.rowAddress, plan.streamHeader.data(), plan.streamHeader.size(), true))
+                return ClockResult::ReadFailure;
+            if (!hierarchyCount)
+            {
+                // FEC4F0 returns without row traversal; FEC1E0 first stores
+                // +0 in Htime and then returns. Neither consumes encoding,
+                // child pointers, capacity cookies, frames or cache nodes.
+                if (plan.operation == Operation::TotalTime)
+                    Put(plan.expected, 0x18, std::uint32_t{0});
+                receipt.beforeTimeBits = At<std::uint32_t>(plan.before.payload, 0x18);
+                receipt.afterTimeBits = At<std::uint32_t>(plan.expected, 0x18);
+                receipt.noOp = plan.before.payload == plan.expected;
+                return VerifyPost(image, owner, plan, false);
+            }
             plan.sequenceFirst = At<std::uintptr_t>(plan.before.payload, 8);
             if (plan.sequenceFirst < 8 || plan.sequenceFirst % 8)
                 return ClockResult::BindingChanged;
@@ -571,18 +599,6 @@ namespace mta::game_de
             if (!Map::PrivateWritable(plan.cookieAddress, plan.sequenceBytes) ||
                 !Map::Disjoint(plan.cookieAddress, plan.sequenceBytes, plan.token.locator, plan.expected.size()))
                 return ClockResult::BindingChanged;
-            plan.blockAddress = image + NativeAnimationBlockProfile::BankRva + plan.before.origin.block * NativeAnimationBlockProfile::RowBytes;
-            if (!Image::ReadImage(image, plan.blockAddress, plan.blockHeader.data(), plan.blockHeader.size(), true))
-                return ClockResult::ReadFailure;
-            if (plan.blockHeader[NativeAnimationBlockProfile::LoadedOffset] != 1)
-                return ClockResult::NotInitialized;
-            NativeModelLoadedReader reader({image}, owner);
-            if ((result = reader.Read(NativeStreamingResourceProfile::IfpFirst + plan.before.origin.block, plan.stream)) != ClockResult::Ok)
-                return result;
-            if (plan.stream.rawLoadState != 1 || !plan.stream.streamedIn)
-                return ClockResult::NotInitialized;
-            if (!Image::ReadImage(image, plan.stream.rowAddress, plan.streamHeader.data(), plan.streamHeader.size(), true))
-                return ClockResult::ReadFailure;
             plan.sequences.reserve(static_cast<std::size_t>(hierarchyCount));
             plan.frames.reserve(static_cast<std::size_t>(hierarchyCount));
             for (std::int32_t index = 0; index < hierarchyCount; ++index)

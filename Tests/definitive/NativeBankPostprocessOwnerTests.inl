@@ -387,6 +387,49 @@ namespace BankPostprocessOwnerFixture
                               !receipt.modifiedFrames && !receipt.convertedFrames && receipt.beforeTimeBits == 0x3fa00000 && !receipt.afterTimeBits,
                           "whole original single-key native duration keeps positive zero and preserves negative/signed-zero key timestamps");
                 }
+            const std::uintptr_t unused[] = {0, 1, (std::numeric_limits<std::uintptr_t>::max)()};
+            const std::uint32_t  initialTimes[] = {0, 0x80000000u, 0x3fa00000u, 0x7fc12345u, 0x7f800000u, 0xff800000u};
+            for (unsigned compressed = 0; compressed != 2; ++compressed)
+                for (const auto pointer : unused)
+                    for (const auto time : initialTimes)
+                    {
+                        Old::CacheFixture cache(saved, image, hierarchy, 1, 0);
+                        Bytes::Store(hierarchy + 8, pointer);
+                        Bytes::Store(hierarchy + 0x10, std::uint16_t{0});
+                        Bytes::Store(hierarchy + 0x12, static_cast<unsigned char>(compressed));
+                        Bytes::Store(hierarchy + 0x13, static_cast<unsigned char>(0xcd));
+                        Bytes::Store(hierarchy + 0x18, time);
+                        std::array<unsigned char, 40>  expectedHeader{};
+                        std::array<unsigned char, 24>  cacheBytes{};
+                        std::array<unsigned char, 160> rowBytes{};
+                        std::memcpy(expectedHeader.data(), reinterpret_cast<const void*>(hierarchy), expectedHeader.size());
+                        std::memcpy(cacheBytes.data(), reinterpret_cast<const void*>(cache.Node(0)), cacheBytes.size());
+                        std::memcpy(rowBytes.data(), reinterpret_cast<const void*>(source.sequences), rowBytes.size());
+                        if (operation == Operation::TotalTime)
+                        {
+                            const std::uint32_t zero = 0;
+                            std::memcpy(expectedHeader.data() + 0x18, &zero, sizeof(zero));
+                        }
+                        const auto before = calls;
+                        const auto sse = _mm_getcsr() & 0xffc0u;
+                        action(command);
+                        const auto& receipt = runtime.hierarchyUncompressReceipt;
+                        Check(calls == before + 1 && executed == calls && valid && nestedBusy && gateBusy && retained && receipt.operation == operation &&
+                                  receipt.postprocessPath && receipt.entered && receipt.returned && receipt.effectsVerified && !receipt.debt &&
+                                  receipt.result == ClockResult::Ok && receipt.entryRva == Entry() && !receipt.sequences && !receipt.preparedFrames &&
+                                  !receipt.modifiedFrames && !receipt.convertedFrames && !receipt.cacheStores && receipt.beforeTimeBits == time &&
+                                  receipt.afterTimeBits == (operation == Operation::TotalTime ? 0u : time) &&
+                                  receipt.noOp == (operation == Operation::QuaternionFlips || time == 0) && (_mm_getcsr() & 0xffc0u) == sse,
+                              "actual empty bank original uses no child/capacity/frame authority and reports exact raw Htime effects");
+                        Check(!std::memcmp(expectedHeader.data(), reinterpret_cast<const void*>(hierarchy), expectedHeader.size()) &&
+                                  !std::memcmp(cacheBytes.data(), reinterpret_cast<const void*>(cache.Node(0)), cacheBytes.size()) &&
+                                  !std::memcmp(rowBytes.data(), reinterpret_cast<const void*>(source.sequences), rowBytes.size()),
+                              "empty originals preserve unused child tags, encoding/custom flags, cache and all untraversed row bytes");
+                        Check(!runtime.hierarchyUncompress.IsRetained() && !runtime.stopping.load(),
+                              "verified empty bank operation leaves the current owner usable");
+                    }
+            std::puts(operation == Operation::QuaternionFlips ? "Production bank empty quaternion whole original fixture completed"
+                                                              : "Production bank empty time whole original fixture completed");
             facade.reset();
             Check(finish() && !service.IsRetained(), "verified native bank postprocess cleanly retires without private storage adoption");
             std::puts(scenario == 0 ? "Production bank postprocess quaternion actual SDK owner fixture completed"
@@ -432,7 +475,7 @@ namespace BankPostprocessOwnerFixture
                     Bytes::Store(hierarchy + 0x12, static_cast<unsigned char>(1));
                     check(command);
                     Bytes::Store(hierarchy + 0x12, static_cast<unsigned char>(0));
-                    Bytes::Store(hierarchy + 0x10, std::uint16_t{0});
+                    Bytes::Store(hierarchy + 0x10, std::uint16_t{0xffff});
                     check(command);
                     Bytes::Store(hierarchy + 0x10, std::uint16_t{2});
                     Bytes::Store(source.sequences + 0x42, std::uint16_t{7});

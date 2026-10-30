@@ -66,6 +66,7 @@
 #include "NativeAnimationHierarchyAccess.h"
 #include "NativeAnimationHierarchyMemory.h"
 #include "NativeAnimationHierarchyUncompress.h"
+#include "NativeAnimationBlockRegistration.h"
 #include "NativeAnimationHierarchyCacheRemove.h"
 #include "NativeAnimationAssociationProgressProfile.h"
 #include "NativeCustomAnimSequenceController.h"
@@ -440,6 +441,7 @@ namespace mta::game_de
             ClockResult ReadAnimationGroupBlockName(std::uint64_t, std::uint32_t, std::uintptr_t&) noexcept override;
             ClockResult FindFirstAnimationGroupByBlockName(std::uint64_t, const std::string&, std::uint32_t&) noexcept override;
             ClockResult FindAnimationBlockIndex(std::uint64_t, const NativeAnimationBlockName&, std::int32_t&) noexcept override;
+            ClockResult RegisterAnimationBlock(std::uint64_t, const NativeAnimationBlockName&, std::int32_t&) noexcept override;
             ClockResult ReadPedInWater(const NativePedReferenceToken&, bool&) noexcept override;
             ClockResult ReadPedAreaCode(const NativePedReferenceToken&, std::uint8_t&) noexcept override;
             ClockResult ReadPedOnFire(const NativePedReferenceToken&, bool&) noexcept override;
@@ -688,6 +690,8 @@ namespace mta::game_de
             // not hide that debt in the custom buffer retirement generation.
             NativeAnimationHierarchyUncompress                hierarchyUncompress;
             NativeAnimationHierarchyUncompressCalls::Receipt  hierarchyUncompressReceipt;
+            NativeAnimationBlockRegistration                  blockRegistration;
+            NativeAnimationBlockRegistrationCalls::Receipt    blockRegistrationReceipt;
             NativeAnimationHierarchyCacheRemove               hierarchyCacheRemove;
             NativeAnimationHierarchyCacheRemoveCalls::Receipt hierarchyCacheRemoveReceipt;
             std::atomic<std::uint64_t>                        customSequenceGeneration{0};
@@ -884,7 +888,7 @@ namespace mta::game_de
                    runtime.pedModelCreationRetained.load() || runtime.modelBackingReferences.IsRetained() || runtime.pedReferences.IsRetained() ||
                    WorldIgnoreRetained() || runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() ||
                    runtime.privateAssociations.IsRetained() || runtime.groupCreations.IsRetained() || runtime.hierarchyUncompress.IsRetained() ||
-                   runtime.hierarchyCacheRemove.IsRetained() || runtime.customSequences.HasPendingCleanup();
+                   runtime.hierarchyCacheRemove.IsRetained() || runtime.blockRegistration.IsRetained() || runtime.customSequences.HasPendingCleanup();
         }
 
         bool WeatherOverrideRetained() noexcept
@@ -8133,6 +8137,32 @@ namespace mta::game_de
             // loaded-block sum or permission to publish hierarchy pointers.
             output = next;
             return ClockResult::Ok;
+        }
+
+        ClockResult NativeAccess::RegisterAnimationBlock(std::uint64_t ownerGeneration, const NativeAnimationBlockName& query, std::int32_t& output) noexcept
+        {
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            const auto copied = query;
+            if (!ownerGeneration || ownerGeneration != generation)
+                return ClockResult::OwnerConflict;
+            NativeAnimationBlockRegistrationCalls::Receipt receipt;
+            result = runtime.blockRegistration.Register(runtime.image, generation, copied, &CheckTimingOwner, &CheckApplicationTimingOwner, &receipt);
+            if (result == ClockResult::Ok)
+                result = CheckTimingOwner();
+            if (result == ClockResult::Ok && (runtime.generation.load() != generation || query != copied))
+                result = ClockResult::OwnerConflict;
+            receipt.result = result;
+            runtime.blockRegistrationReceipt = receipt;
+            // Once stores were entered, refusal cannot mean nothing happened.
+            // Retire the owner and retain every uncertain native store plan.
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.blockRegistration.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            if (result == ClockResult::Ok)
+                output = receipt.index;
+            return result;
         }
 
         ClockResult NativeAccess::FindAnimationBlockIndex(std::uint64_t ownerGeneration, const NativeAnimationBlockName& query, std::int32_t& output) noexcept

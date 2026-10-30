@@ -3552,6 +3552,15 @@ namespace ClockHierarchyUncompressOwnerTest
 #define MTA_DE_ANIMATION_HIERARCHY_UNCOMPRESS_INVOKE ::ClockHierarchyUncompressOwnerTest::Invoke
 #include "../../Client/game_de/NativeAnimationHierarchyUncompress.cpp"
 #undef MTA_DE_ANIMATION_HIERARCHY_UNCOMPRESS_INVOKE
+#include "../../Client/game_de/NativeAnimationBlockRegistration.h"
+namespace ClockBlockRegistrationOwnerTest
+{
+    mta::game_de::ClockResult Write(const mta::game_de::NativeAnimationBlockRegistrationCalls::Store*, std::size_t, std::uint32_t&) noexcept;
+}
+#define MTA_DE_ANIMATION_BLOCK_REGISTRATION_WRITE ::ClockBlockRegistrationOwnerTest::Write
+#include "../../Client/game_de/NativeAnimationBlockRegistration.cpp"
+#undef MTA_DE_ANIMATION_BLOCK_REGISTRATION_WRITE
+
 namespace ClockHierarchyCacheRemoveOwnerTest
 {
     mta::game_de::ClockResult Write(const mta::game_de::NativeAnimationHierarchyCacheRemoveCalls::Store*, std::size_t, std::uint32_t&) noexcept;
@@ -8679,6 +8688,8 @@ namespace
 #include "NativeBankDecompressionOwnerTests.inl"
 #include "NativeBankEvictionOwnerTests.inl"
 #include "NativeBankPostprocessOwnerTests.inl"
+#include "AnimationManagerRegistrationFixture.generated.h"
+#include "NativeAnimationBlockRegistrationOwnerTests.inl"
 #include "ApplicationTimingOwnerTests.inl"
 
 // The strict receiver must execute production typed tickets and the distinct
@@ -8837,6 +8848,16 @@ int main(int argc, char** argv)
         for (unsigned index = 0; index != 4; ++index)
             if (std::strcmp(argv[2] + 21, names[index]) == 0)
                 applicationTimingScenario = index;
+    }
+    const bool blockRegistrationOnly = argc == 3 && std::strncmp(argv[2], "--block-registration-", 21) == 0;
+    unsigned   blockRegistrationScenario = 11;
+    if (blockRegistrationOnly)
+    {
+        const char* names[] = {"success",    "refusals", "timer-owner",  "entered-before", "entered-after", "partial",
+                               "owner-loss", "mismatch", "count-change", "prefix-change",  "group-change"};
+        for (unsigned index = 0; index != 11; ++index)
+            if (std::strcmp(argv[2] + 21, names[index]) == 0)
+                blockRegistrationScenario = index;
     }
     const bool bankPostprocessOnly = argc == 3 && std::strncmp(argv[2], "--bank-postprocess-", 19) == 0;
     unsigned   bankPostprocessScenario = 12;
@@ -9068,9 +9089,9 @@ int main(int argc, char** argv)
            freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly || customAnimationCleanupOnly ||
            standaloneSequenceOperationsOnly || animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly ||
            animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly || animationGroupValidityOnly ||
-           animationIdValidityOnly || animationAssociationGroupReadsOnly || applicationTimingOnly || bankPostprocessOnly || bankEvictionOnly ||
-           bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly || dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly ||
-           jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly || groupEmptyInitializationOnly ||
+           animationIdValidityOnly || animationAssociationGroupReadsOnly || applicationTimingOnly || blockRegistrationOnly || bankPostprocessOnly ||
+           bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly || dynamicClumpOnly || groupFactoriesOnly ||
+           groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly || groupEmptyInitializationOnly ||
            animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly || animationStaticAssociationReadsOnly ||
            staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly || privateAssociationsOnly || associationBonesOnly ||
            associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
@@ -9280,6 +9301,16 @@ int main(int argc, char** argv)
             fixture.Create(argv[1]);
             ApplicationTimingOwnerFixture::Run(fixture, applicationTimingScenario);
         }
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (blockRegistrationOnly)
+    {
+        Check(blockRegistrationScenario < 11, "finite registration scenario required");
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        BlockRegistrationOwnerFixture::scenario = blockRegistrationScenario;
+        BlockRegistrationOwnerFixture::RunPrepared(fixture);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

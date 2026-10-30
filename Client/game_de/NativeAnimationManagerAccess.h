@@ -39,6 +39,13 @@ namespace mta::game_de
         {
             return ClockResult::NotInitialized;
         }
+        // Registration preserves the real MTA find-or-append policy. The
+        // native owner admits a bounded unused bank row; this API never grants
+        // file loading, hierarchy allocation, a second registry or a lease.
+        virtual ClockResult RegisterAnimationBlock(std::uint64_t, const NativeAnimationBlockName&, std::int32_t&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
         // Integer reference operations use raw16 name affinity, not the
         // separate factory/name API's C-string admission contract.
         virtual ClockResult ReadAnimationBlockCounterIdentity(std::uint64_t, std::uint32_t, NativeAnimationBlockIdentity&) noexcept

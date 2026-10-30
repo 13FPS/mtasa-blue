@@ -5,6 +5,8 @@ function Write-AnimationManagerUncompressFixture([string]$RepositoryRoot,[string
     $parent=Write-AnimationManagerFixture $RepositoryRoot $OutputPath
     $text=[IO.File]::ReadAllText($OutputPath)
     foreach($pattern in @(
+        '(?m)^\s*void\s+RemoveFromUncompressedCache\(CAnimBlendHierarchy\*[^\r\n]+\r?\n',
+        '(?m)^\s*void\s+RemoveFromUncompressedCache\(CAnimBlendHierarchySAInterface\*[^\r\n]+\r?\n',
         '(?m)^\s*void\s+UncompressAnimation\([^\r\n]+\r?\n',
         '(?m)^\s*std::unique_ptr<CAnimBlendHierarchy>\s+GetAnimBlendHierarchy\([^\r\n]+\r?\n',
         '(?m)^\s*std::unique_ptr<CAnimBlendHierarchy>\s+GetAnimation\(int[^\r\n]+\r?\n')) {
@@ -19,7 +21,7 @@ function Write-AnimationManagerUncompressFixture([string]$RepositoryRoot,[string
         'AnimationManagerUncompressReceiver(mta::game_de::NativeAnimationManagerAccess& manager,mta::game_de::NativeAnimationBlockAccess& blocks,mta::game_de::NativeAnimationHierarchyAccess& hierarchy,std::uint64_t generation) : CAnimManagerDE(manager,blocks,hierarchy,generation) {}')
     [IO.File]::WriteAllText($OutputPath,$text,[Text.UTF8Encoding]::new($false))
     [ordered]@{path=$OutputPath;sha256=(Get-FileHash -LiteralPath $OutputPath -Algorithm SHA256).Hash.ToLowerInvariant();
-        rejectingMethods=($parent.rejectingMethods-3);inheritedMethods=@('UncompressAnimation(CAnimBlendHierarchy*)','GetAnimBlendHierarchy(raw)','GetAnimation(int)');
+        rejectingMethods=($parent.rejectingMethods-5);inheritedMethods=@('RemoveFromUncompressedCache(CAnimBlendHierarchy*)','RemoveFromUncompressedCache(raw)','UncompressAnimation(CAnimBlendHierarchy*)','GetAnimBlendHierarchy(raw)','GetAnimation(int)');
         receiver='AnimationManagerUncompressReceiver';
         parentGenerator='Tests/definitive/Write-AnimationManagerFixture.ps1';
         parentGeneratorSha256=(Get-FileHash -LiteralPath (Join-Path $RepositoryRoot 'Tests/definitive/Write-AnimationManagerFixture.ps1') -Algorithm SHA256).Hash.ToLowerInvariant();

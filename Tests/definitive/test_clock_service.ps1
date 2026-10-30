@@ -646,6 +646,7 @@ try {
     $sourceNames += @('Tests/definitive/NativeAnimationAssociationGroupEmptyInitializationOwnerTests.inl','Client/game_de/NativeAnimationAssociationGroupInitialization.h')
     $sourceNames += @('Tests/definitive/NativeAnimationAssociationGroupCopyOwnerTests.inl','Client/game_de/NativeAnimationAssociationGroupCopy.h','Client/game_de/NativeAnimationAssociationGroupCopyProfile.h')
     $sourceNames += @('Tests/definitive/NativeAnimationAssociationGroupReplacementOwnerTests.inl','Client/game_de/NativeAnimationAssociationGroupReplacement.h','Client/game_de/NativeAnimationAssociationGroupReplacement.cpp','Client/game_de/NativeAnimationAssociationGroupChildBorrow.h','Client/game_de/NativeStaticAssociationArrayStorageCalls.h','Client/game_de/NativeStaticAssociationArrayProfile.h')
+    $sourceNames += @('Client/game_de/NativeAnimationHierarchyCacheRemove.h','Client/game_de/NativeAnimationHierarchyCacheRemove.cpp','Client/game_de/NativeAnimationHierarchyCacheRemoveProfile.h')
     $sourceNames += @('Client/game_de/NativeAnimationHierarchyUncompress.h','Client/game_de/NativeAnimationHierarchyUncompress.cpp','Tests/definitive/NativeAnimationHierarchyUncompressOwnerTests.inl','Tests/definitive/Write-AnimationManagerUncompressFixture.ps1')
     $sourceNames += @('Tests/definitive/NativeNumericAssociationOwnerTests.inl','Tests/definitive/Write-AnimationAssociationNumericFactoryFixture.ps1','Tests/definitive/Write-AnimationAssociationRawFactoryFixture.ps1','Client/game_de/NativeAnimationAssociationIssuedView.h')
     $sourceNames += @('Tests/definitive/NativeDynamicClumpOwnerTests.inl','Client/game_de/NativeAnimationAssociationClumpTypes.h','Client/game_de/NativeAnimationAssociationClumpCalls.h','Client/game_de/NativeAnimationClumpInitializationPlan.h','Client/game_de/NativeAnimationClumpInitializationPlan.cpp','Client/game_de/NativeAnimationAssociationClumpVerification.h','Client/game_de/NativeAnimationAssociationClumpVerification.cpp','Client/game_de/NativeAnimationAssociationClumpOrigin.h','Client/game_de/NativeAnimationAssociationClumpOrigin.cpp','Client/game_de/NativeAnimationAssociationClumpStorage.inl','Client/game_de/NativeAnimationAssociationHierarchyDependency.h','Client/game_de/NativeAnimationAssociationClumpStorageState.h','Client/game_de/NativeTemporaryDynamicAssociationInitializeCalls.h','Client/game_de/NativeTemporaryDynamicAssociationInitializeCalls.cpp')
@@ -863,7 +864,7 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
     $record.animationBlockRefsSdkFixture.path = $refsEvidence
     . (Join-Path $PSScriptRoot 'Write-AnimationManagerUncompressFixture.ps1')
     $uncompressFixture=Write-AnimationManagerUncompressFixture $taskRoot (Join-Path $scratchRoot 'AnimationManagerUncompressFixture.generated.h')
-    if(@($uncompressFixture.inheritedMethods).Count -ne 3 -or $uncompressFixture.rejectingMethods -ne 66){throw 'Uncompress receiver must inherit actual manager dispatch and two bank factories'}
+    if(@($uncompressFixture.inheritedMethods).Count -ne 5 -or $uncompressFixture.rejectingMethods -ne 64){throw 'Uncompress receiver must inherit actual manager dispatch and two bank factories'}
     $uncompressEvidence=Join-Path $outputRoot 'AnimationManagerUncompressFixture.generated.h'
     Copy-Item -LiteralPath $uncompressFixture.path -Destination $uncompressEvidence
     $record['animationManagerUncompressFixture']=$uncompressFixture
@@ -1483,7 +1484,7 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         # One exact binary runs fresh native-debt lifetimes in task-owned
         # directories; no process can reset an ambiguous entered operation.
         $record['testRuns']=@();$record['testScenarioExecutables']=@();$texts=@();$compiledHash=Sha $executable
-        foreach($scenario in @('success','refusals','entered-before','entered-after','late-owner','effect-mismatch','cache-before','cache-after','cache-mismatch')){
+        foreach($scenario in @('success','refusals','entered-before','entered-after','late-owner','effect-mismatch','cache-before','cache-after','cache-mismatch','remove-success','remove-before','remove-after','remove-mismatch','remove-partial','remove-owner')){
             $scenarioRoot=Join-Path $scratchRoot ('hierarchy-uncompress-'+$scenario)
             [IO.Directory]::CreateDirectory($scenarioRoot)|Out-Null
             $copy=Join-Path $scenarioRoot ([IO.Path]::GetFileName($executable))
@@ -2193,6 +2194,9 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         if(-not($record.nativeAnimationAssociationGroupChildProductsOwnerTested -and $record.actualAnimationAssociationGroupStaticChildSdkOwnerTested -and $record.nativeAnimationAssociationGroupChildProductsCoupledRefusalsTested)){throw 'Actual association group child products scope incomplete'}
         $record.productionNativeCallbackTested=$true
     } elseif($Scope -eq 'AnimationHierarchyUncompress'){
+        $record['nativeHierarchyCacheRemovalOwnerTested']=$text.Contains('Production hierarchy cache removal actual MTA owner fixture completed')
+        $record['nativeHierarchyCacheRemovalDebtTested']=$text.Contains('Production hierarchy cache removal before acknowledgement debt fixture completed') -and $text.Contains('Production hierarchy cache removal after acknowledgement debt fixture completed') -and $text.Contains('Production hierarchy cache removal mismatch debt fixture completed') -and $text.Contains('Production hierarchy cache removal partial debt fixture completed') -and $text.Contains('Production hierarchy cache removal owner loss debt fixture completed')
+        if(-not($record.nativeHierarchyCacheRemovalOwnerTested -and $record.nativeHierarchyCacheRemovalDebtTested)){throw 'Actual cache removal owner and ordered-store debt scope incomplete'}
         $record['nativePrivateHierarchyWarmUncompressTested']=$text.Contains('Production private hierarchy Uncompress source no-effect fixture completed')
         $record['nativeHierarchyExistingCacheMoveTested']=$text.Contains('Production hierarchy Uncompress existing cache LRU fixture completed')
         $record['nativeHierarchyExistingCacheDebtTested']=$text.Contains('Production hierarchy Uncompress cache entered-before debt fixture completed') -and $text.Contains('Production hierarchy Uncompress cache entered-after debt fixture completed') -and $text.Contains('Production hierarchy Uncompress cache mismatch debt fixture completed')

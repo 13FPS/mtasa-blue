@@ -58,6 +58,50 @@ namespace ClockHierarchyUncompressOwnerTest
     }
 }
 
+namespace ClockHierarchyCacheRemoveOwnerTest
+{
+    namespace Calls = NativeAnimationHierarchyCacheRemoveCalls;
+    namespace Bytes = ClockPrivateAnimationAssociationTest;
+    std::uintptr_t                         image = 0, hierarchy = 0;
+    NativeAnimationHierarchyReferenceToken token;
+    unsigned                               calls = 0, executed = 0, mode = 0;
+    bool                                   targetsValid = true, nestedBusy = false, gateBusy = false, lifetimeBusy = false;
+    ClockResult                            Write(const Calls::Store* stores, std::size_t count, std::uint32_t& exception) noexcept
+    {
+        ++calls;
+        targetsValid = targetsValid && count == 8 && stores[6].address == hierarchy + 0x20 && !stores[6].value && !stores[7].value;
+        nestedBusy = runtime.access.RemovePrivateAnimationHierarchyFromUncompressedCache(token) == ClockResult::Busy;
+        const bool entered = NativeStreamingCompletionContext::TryEnter();
+        gateBusy = !entered;
+        if (entered)
+            NativeStreamingCompletionContext::Leave();
+        lifetimeBusy = runtime.hierarchyCacheRemove.IsRetained() && NativeLifetimeRetained();
+        if (!targetsValid)
+            return ClockResult::BindingChanged;
+        if (mode == 1)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return ClockResult::WriteFailure;
+        }
+        // Execute the actual shipping store writer; a partial prefix below
+        // models lost acknowledgement without publishing a successful command.
+        const auto result = mta::game_de::AnimationHierarchyCacheRemoveDetail::WriteStores(stores, mode == 4 ? 3 : count, exception);
+        if (result != ClockResult::Ok)
+            return result;
+        ++executed;
+        if (mode == 2 || mode == 4)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return ClockResult::WriteFailure;
+        }
+        if (mode == 3)
+            Bytes::Store(image + NativeBorrowedGcProfile::markerRva, LONG{1});
+        if (mode == 5)
+            Bytes::Store(stores[0].address, std::uintptr_t{0});
+        return ClockResult::Ok;
+    }
+}
+
 namespace AnimationHierarchyUncompressOwnerFixture
 {
     namespace Hook = ClockHierarchyUncompressOwnerTest;
@@ -126,6 +170,79 @@ namespace AnimationHierarchyUncompressOwnerFixture
             // a native recovery acknowledgement or a cache-node release API.
             std::memcpy(reinterpret_cast<void*>(hierarchy), originalHierarchy.data(), originalHierarchy.size());
             std::memcpy(reinterpret_cast<void*>(Head()), originalSentinels.data(), originalSentinels.size());
+            if (nodes)
+                VirtualFree(reinterpret_cast<void*>(nodes), 0, MEM_RELEASE);
+        }
+    };
+    struct FreeCacheFixture
+    {
+        std::uintptr_t                image, nodes = 0;
+        unsigned                      count;
+        std::array<unsigned char, 48> original{};
+        std::uintptr_t                Head() const { return image + 0x53c08d0; }
+        std::uintptr_t                Tail() const { return image + 0x53c08e8; }
+        std::uintptr_t                Node(unsigned index) const { return nodes + index * 24; }
+        FreeCacheFixture(WorldGroundOwnerFixture::Writes& saved, std::uintptr_t image, unsigned count) : image(image), count(count)
+        {
+            std::memcpy(original.data(), reinterpret_cast<const void*>(Head()), original.size());
+            if (count)
+            {
+                nodes = reinterpret_cast<std::uintptr_t>(VirtualAlloc(nullptr, count * 24, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+                Check(nodes != 0, "free cache fixture owns its synthetic allocation");
+            }
+            std::array<unsigned char, 48> sentinels{};
+            WorldGroundOwnerFixture::Writes::Apply(&saved, 0x53c08d0, sentinels.data(), sentinels.size(), PAGE_READWRITE);
+            Bytes::Store(Head(), std::uintptr_t{0xa1});
+            Bytes::Store(Head() + 8, std::uintptr_t{0xb2});
+            Bytes::Store(Head() + 16, count ? Node(0) : Tail());
+            Bytes::Store(Tail(), std::uintptr_t{0xc3});
+            Bytes::Store(Tail() + 8, count ? Node(count - 1) : Head());
+            Bytes::Store(Tail() + 16, std::uintptr_t{0xd4});
+            for (unsigned index = 0; index != count; ++index)
+            {
+                Bytes::Store(Node(index), std::uintptr_t{0});
+                Bytes::Store(Node(index) + 8, index ? Node(index - 1) : Head());
+                Bytes::Store(Node(index) + 16, index + 1 == count ? Tail() : Node(index + 1));
+            }
+        }
+        void CheckRemoved(const CacheFixture& active) const
+        {
+            auto previous = active.Head();
+            auto current = Bytes::Load<std::uintptr_t>(previous + 16);
+            for (unsigned index = 0; index != active.count; ++index)
+                if (index != active.selected)
+                {
+                    Check(current == active.Node(index) && Bytes::Load<std::uintptr_t>(current + 8) == previous &&
+                              Bytes::Load<std::uintptr_t>(current) == std::uintptr_t{0xabc000} + index,
+                          "cache removal preserves remaining active order, backlinks and opaque row data");
+                    previous = current;
+                    current = Bytes::Load<std::uintptr_t>(current + 16);
+                }
+            Check(current == active.Tail() && Bytes::Load<std::uintptr_t>(active.Tail() + 8) == previous,
+                  "active terminal links agree after first/middle/last/only removal");
+            previous = active.Node(active.selected);
+            Check(Bytes::Load<std::uintptr_t>(Head() + 16) == previous && Bytes::Load<std::uintptr_t>(previous + 8) == Head() &&
+                      !Bytes::Load<std::uintptr_t>(previous) && !Bytes::Load<std::uintptr_t>(active.hierarchy + 0x20),
+                  "selected row becomes free head with cleared data and H cache link");
+            current = Bytes::Load<std::uintptr_t>(previous + 16);
+            for (unsigned index = 0; index != count; ++index)
+            {
+                Check(current == Node(index) && Bytes::Load<std::uintptr_t>(current + 8) == previous && !Bytes::Load<std::uintptr_t>(current),
+                      "existing free rows preserve order, backlinks and data");
+                previous = current;
+                current = Bytes::Load<std::uintptr_t>(current + 16);
+            }
+            Check(current == Tail() && Bytes::Load<std::uintptr_t>(Tail() + 8) == previous && Bytes::Load<std::uintptr_t>(Head()) == 0xa1 &&
+                      Bytes::Load<std::uintptr_t>(Head() + 8) == 0xb2 && Bytes::Load<std::uintptr_t>(Tail()) == 0xc3 &&
+                      Bytes::Load<std::uintptr_t>(Tail() + 16) == 0xd4 && Bytes::Load<std::uintptr_t>(active.Head()) == 0x11112222 &&
+                      Bytes::Load<std::uintptr_t>(active.Tail() + 16) == 0x77778888,
+                  "both lists preserve unrelated sentinel fields");
+        }
+        ~FreeCacheFixture()
+        {
+            // This is disposal of owned synthetic fixture data, after debt
+            // assertions. It never acknowledges native recovery or replay.
+            std::memcpy(reinterpret_cast<void*>(Head()), original.data(), original.size());
             if (nodes)
                 VirtualFree(reinterpret_cast<void*>(nodes), 0, MEM_RELEASE);
         }
@@ -240,8 +357,11 @@ namespace AnimationHierarchyUncompressOwnerFixture
         WorldGroundOwnerFixture::Writes::Apply(&saved, 0x4bc80ac, Profile::TimeScaleBytes.data(), Profile::TimeScaleBytes.size(), PAGE_READONLY);
         saved.Global(NativeAnimationAssociationProfile::VtableRva, fixture.image + NativeAnimationAssociationProfile::DestructorRva, PAGE_READONLY);
         PrivateAnimationAssociationOwnerFixture::SourceBank source(fixture, saved);
-        FrameStorage                                        frames;
-        const auto                                          seed = [&](unsigned which)
+        WorldGroundOwnerFixture::Writes::Apply(&saved, NativeAnimationHierarchyCacheRemoveProfile::SourceRva,
+                                               NativeAnimationHierarchyCacheRemoveProfile::SourceBytes.data(),
+                                               NativeAnimationHierarchyCacheRemoveProfile::SourceBytes.size(), PAGE_EXECUTE_READ);
+        FrameStorage frames;
+        const auto   seed = [&](unsigned which)
         {
             if (!which)
             {
@@ -527,6 +647,103 @@ namespace AnimationHierarchyUncompressOwnerFixture
             hierarchy.reset();
             Check(finish() && !service.IsRetained() && !Hook::calls, "all typed pre-entry refusals leave the actual module owner releasable");
             std::puts("Production hierarchy Uncompress actual owner coupled refusal fixture completed");
+        }
+        else if (scenario >= 9)
+        {
+            namespace RemoveHook = ClockHierarchyCacheRemoveOwnerTest;
+            RemoveHook::image = fixture.image;
+            RemoveHook::hierarchy = source.hierarchy;
+            RemoveHook::token = Hook::token;
+            RemoveHook::calls = RemoveHook::executed = RemoveHook::mode = 0;
+            RemoveHook::targetsValid = true;
+            if (scenario == 9)
+            {
+                action([&] { sdk.RemoveFromUncompressedCache(hierarchy.get()); });
+                Check(!RemoveHook::calls && runtime.hierarchyCacheRemoveReceipt.noOp && runtime.hierarchyCacheRemoveReceipt.effectsVerified,
+                      "actual bank cache0 source operation acknowledges no effect without touching either list");
+                for (const auto& spec : {std::array<unsigned, 3>{3, 1, 2}, {3, 2, 0}, {3, 0, 2}, {1, 0, 0}})
+                {
+                    seed(0);
+                    CacheFixture                  cache(saved, fixture.image, source.hierarchy, spec[0], spec[1]);
+                    FreeCacheFixture              free(saved, fixture.image, spec[2]);
+                    std::array<unsigned char, 40> expected{}, observed{};
+                    std::memcpy(expected.data(), reinterpret_cast<const void*>(source.hierarchy), expected.size());
+                    std::memset(expected.data() + 0x20, 0, sizeof(std::uintptr_t));
+                    const auto before = RemoveHook::calls;
+                    action([&] { sdk.RemoveFromUncompressedCache(hierarchy.get()); });
+                    free.CheckRemoved(cache);
+                    std::memcpy(observed.data(), reinterpret_cast<const void*>(source.hierarchy), observed.size());
+                    const auto& receipt = runtime.hierarchyCacheRemoveReceipt;
+                    Check(observed == expected && RemoveHook::calls == before + 1 && RemoveHook::targetsValid && RemoveHook::nestedBusy &&
+                              RemoveHook::gateBusy && RemoveHook::lifetimeBusy && receipt.entered && receipt.returned && receipt.effectsVerified &&
+                              !receipt.noOp && !receipt.debt && receipt.cacheNodes == spec[0] + spec[2] && !runtime.hierarchyCacheRemove.IsRetained(),
+                          "actual MTA virtual cache removal executes the shipping eight-store command under the same callback/gate/lifetime");
+                }
+                for (unsigned malformed = 0; malformed != 3; ++malformed)
+                {
+                    seed(0);
+                    CacheFixture     cache(saved, fixture.image, source.hierarchy, 3, 1);
+                    FreeCacheFixture free(saved, fixture.image, 2);
+                    if (malformed == 0)
+                        Bytes::Store(cache.Node(1) + 8, cache.Head());
+                    else if (malformed == 1)
+                        Bytes::Store(free.Node(1) + 16, free.Node(0));
+                    else
+                        Bytes::Store(free.Head() + 16, cache.Node(0));
+                    const auto before = RemoveHook::calls;
+                    action(
+                        [&]
+                        { refuses([&] { sdk.RemoveFromUncompressedCache(hierarchy.get()); }, "bad active/free backlinks, cycles and shared nodes refuse"); });
+                    Check(RemoveHook::calls == before && !runtime.hierarchyCacheRemove.IsRetained() && !runtime.stopping.load(),
+                          "malformed cache shape refuses before any store or entered debt");
+                }
+                seed(0);
+                hierarchy.reset();
+                Check(finish() && !service.IsRetained() && !host.mallocCalls && !host.freeCalls,
+                      "verified cache removal retires the actual owner without allocating or freeing frame storage");
+                std::puts("Production hierarchy cache removal actual MTA owner fixture completed");
+            }
+            else
+            {
+                seed(0);
+                CacheFixture     cache(saved, fixture.image, source.hierarchy, 3, 1);
+                FreeCacheFixture free(saved, fixture.image, 2);
+                RemoveHook::mode = scenario == 10 ? 1 : scenario == 11 ? 2 : scenario == 12 ? 5 : scenario == 13 ? 4 : 3;
+                action([&] { refuses([&] { sdk.RemoveFromUncompressedCache(hierarchy.get()); }, "unknown cache stores cannot publish SDK success"); });
+                Check(runtime.hierarchyCacheRemoveReceipt.entered && !runtime.hierarchyCacheRemoveReceipt.effectsVerified &&
+                          runtime.hierarchyCacheRemoveReceipt.debt && runtime.hierarchyCacheRemove.RecoveryPending() && NativeLifetimeRetained() &&
+                          RemoveHook::calls == 1,
+                      "cache command retains the prepared whole-graph/store journal after unknown, partial, mismatched or late-owner effects");
+                if (scenario == 11)
+                    free.CheckRemoved(cache);
+                if (RemoveHook::mode == 3)
+                    Bytes::Store(fixture.image + NativeBorrowedGcProfile::markerRva, LONG{0});
+                std::array<unsigned char, 72> active{}, afterActive{};
+                std::array<unsigned char, 48> freeNodes{}, afterFreeNodes{}, activeEnds{}, afterActiveEnds{}, freeEnds{}, afterFreeEnds{};
+                std::array<unsigned char, 40> h{}, afterH{};
+                const auto                    snapshot = [&](auto& a, auto& f, auto& ae, auto& fe, auto& header)
+                {
+                    std::memcpy(a.data(), reinterpret_cast<const void*>(cache.nodes), a.size());
+                    std::memcpy(f.data(), reinterpret_cast<const void*>(free.nodes), f.size());
+                    std::memcpy(ae.data(), reinterpret_cast<const void*>(cache.Head()), ae.size());
+                    std::memcpy(fe.data(), reinterpret_cast<const void*>(free.Head()), fe.size());
+                    std::memcpy(header.data(), reinterpret_cast<const void*>(source.hierarchy), header.size());
+                };
+                snapshot(active, freeNodes, activeEnds, freeEnds, h);
+                hierarchy.reset();
+                Check(!finish() && service.IsRetained() && runtime.hierarchyCacheRemove.RecoveryPending() && RemoveHook::calls == 1 &&
+                          RemoveHook::executed == (scenario == 10 ? 0u : 1u),
+                      "End retains unknown cache effects and its module without retrying any store");
+                snapshot(afterActive, afterFreeNodes, afterActiveEnds, afterFreeEnds, afterH);
+                Check(active == afterActive && freeNodes == afterFreeNodes && activeEnds == afterActiveEnds && freeEnds == afterFreeEnds && h == afterH,
+                      "shutdown performs no guessed linked-list repair or rollback");
+                std::puts(scenario == 10   ? "Production hierarchy cache removal before acknowledgement debt fixture completed"
+                          : scenario == 11 ? "Production hierarchy cache removal after acknowledgement debt fixture completed"
+                          : scenario == 12 ? "Production hierarchy cache removal mismatch debt fixture completed"
+                          : scenario == 13 ? "Production hierarchy cache removal partial debt fixture completed"
+                                           : "Production hierarchy cache removal owner loss debt fixture completed");
+            }
+            RemoveHook::image = RemoveHook::hierarchy = 0;
         }
         else if (scenario >= 6)
         {

@@ -857,9 +857,9 @@ namespace mta::game_de
         const auto token = facade->reference;
         if (token.ownerGeneration != ownerGeneration || !token.locator)
             Require(ClockResult::BindingChanged, "RemoveFromUncompressedCache");
-        // Copy immutable facade affinity directly. A virtual GetInterface
-        // observation cannot grant ownership or turn a foreign/bank cache
-        // into the qualified private cache0 domain supplied by this service.
+        // Copy the same-owner facade affinity without a virtual raw-pointer
+        // observation. The native owner chooses its issued private cache0
+        // proof or the current bank's complete cache-removal journal.
         Require(hierarchyAccess->RemovePrivateAnimationHierarchyFromUncompressedCache(token), "RemoveFromUncompressedCache");
     }
     void CAnimManagerDE::RemoveFromUncompressedCache(CAnimBlendHierarchySAInterface* hierarchy)

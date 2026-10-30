@@ -72,8 +72,9 @@ namespace mta::game_de
     }
     void CAnimBlendHierarchyDE::RemoveFromUncompressedCache()
     {
-        // The owner must observe cache0 under its current record/child
-        // bookends. The SDK cannot replace that admission with a no-op.
+        // The same owner qualifies an issued private cache0 record or the
+        // current native bank's active/free lists. The SDK grants no cache
+        // authority merely by retaining an interface address.
         const auto token = reference;
         Require(native.RemovePrivateAnimationHierarchyFromUncompressedCache(token), "RemoveFromUncompressedCache");
     }

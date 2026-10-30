@@ -162,6 +162,8 @@
 #include "../../Client/game_de/NativeAnimationAssociationProfile.h"
 #include "../../Client/game_de/NativeAnimationAssociationProgressProfile.h"
 #include "../../Client/game_de/NativeAnimationHierarchyUncompress.h"
+#include "../../Client/game_de/NativeAnimationHierarchyCacheRemove.h"
+#include "../../Client/game_de/NativeAnimationHierarchyCacheRemoveProfile.h"
 #include "../../Client/game_de/CAnimBlendAssociationDE.h"
 #include "../../Client/game_de/NativePedRenderProfile.h"
 #include "../../Client/game_de/NativePedMetadataProfile.h"
@@ -3550,6 +3552,14 @@ namespace ClockHierarchyUncompressOwnerTest
 #define MTA_DE_ANIMATION_HIERARCHY_UNCOMPRESS_INVOKE ::ClockHierarchyUncompressOwnerTest::Invoke
 #include "../../Client/game_de/NativeAnimationHierarchyUncompress.cpp"
 #undef MTA_DE_ANIMATION_HIERARCHY_UNCOMPRESS_INVOKE
+namespace ClockHierarchyCacheRemoveOwnerTest
+{
+    mta::game_de::ClockResult Write(const mta::game_de::NativeAnimationHierarchyCacheRemoveCalls::Store*, std::size_t, std::uint32_t&) noexcept;
+}
+#define MTA_DE_ANIMATION_HIERARCHY_CACHE_REMOVE_WRITE ClockHierarchyCacheRemoveOwnerTest::Write
+#include "../../Client/game_de/NativeAnimationHierarchyCacheRemove.cpp"
+#undef MTA_DE_ANIMATION_HIERARCHY_CACHE_REMOVE_WRITE
+
 namespace ClockAnimationHierarchyBankOwnerTest
 {
     bool Copy(std::uintptr_t source, void* target, std::size_t bytes) noexcept
@@ -8816,12 +8826,13 @@ int main(int argc, char** argv)
     const bool animationStaticAssociationReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-static-association-reads") == 0;
     const bool animationAssociationGroupReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-association-group-reads") == 0;
     const bool hierarchyUncompressOnly = argc == 3 && std::strncmp(argv[2], "--hierarchy-uncompress-", 23) == 0;
-    unsigned   hierarchyUncompressScenario = 9;
+    unsigned   hierarchyUncompressScenario = 15;
     if (hierarchyUncompressOnly)
     {
-        const char* names[] = {"success",         "refusals",     "entered-before", "entered-after", "late-owner",
-                               "effect-mismatch", "cache-before", "cache-after",    "cache-mismatch"};
-        for (unsigned index = 0; index != 9; ++index)
+        const char* names[] = {"success",         "refusals",     "entered-before",  "entered-after",  "late-owner",
+                               "effect-mismatch", "cache-before", "cache-after",     "cache-mismatch", "remove-success",
+                               "remove-before",   "remove-after", "remove-mismatch", "remove-partial", "remove-owner"};
+        for (unsigned index = 0; index != 15; ++index)
             if (std::strcmp(argv[2] + 23, names[index]) == 0)
                 hierarchyUncompressScenario = index;
     }
@@ -9200,7 +9211,7 @@ int main(int argc, char** argv)
     }
     if (hierarchyUncompressOnly)
     {
-        Check(hierarchyUncompressScenario < 9, "exact finite hierarchy Uncompress scenario is required");
+        Check(hierarchyUncompressScenario < 15, "exact finite hierarchy Uncompress scenario is required");
         ClockImageFixture fixture;
         fixture.Create(argv[1]);
         // Each entered-debt journal requires its own ordinary host process;

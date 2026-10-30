@@ -99,7 +99,7 @@ try {
     . (Join-Path $PSScriptRoot 'Write-AnimationManagerUncompressFixture.ps1')
     $generated=Join-Path $scratchRoot 'AnimationManagerUncompressFixture.generated.h'
     $record['generatedFixture']=Write-AnimationManagerUncompressFixture $taskRoot $generated
-    if($record.generatedFixture.rejectingMethods -ne 66 -or @($record.generatedFixture.inheritedMethods).Count -ne 3){throw 'Actual uncompress manager partition changed'}
+    if($record.generatedFixture.rejectingMethods -ne 64 -or @($record.generatedFixture.inheritedMethods).Count -ne 5){throw 'Actual uncompress manager partition changed'}
     Copy-Item -LiteralPath $generated -Destination (Join-Path $outputRoot ([IO.Path]::GetFileName($generated)))
 
     $env:TEMP = $scratchRoot

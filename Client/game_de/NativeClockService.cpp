@@ -66,6 +66,7 @@
 #include "NativeAnimationHierarchyAccess.h"
 #include "NativeAnimationHierarchyMemory.h"
 #include "NativeAnimationHierarchyUncompress.h"
+#include "NativeAnimationHierarchyCacheRemove.h"
 #include "NativeAnimationAssociationProgressProfile.h"
 #include "NativeCustomAnimSequenceController.h"
 #include "NativePrivateAnimationHierarchyController.h"
@@ -685,9 +686,11 @@ namespace mta::game_de
             // A bank's timestamp conversion owns no private allocation.
             // Retain only its actual entered/unknown operation journal; do
             // not hide that debt in the custom buffer retirement generation.
-            NativeAnimationHierarchyUncompress               hierarchyUncompress;
-            NativeAnimationHierarchyUncompressCalls::Receipt hierarchyUncompressReceipt;
-            std::atomic<std::uint64_t>                       customSequenceGeneration{0};
+            NativeAnimationHierarchyUncompress                hierarchyUncompress;
+            NativeAnimationHierarchyUncompressCalls::Receipt  hierarchyUncompressReceipt;
+            NativeAnimationHierarchyCacheRemove               hierarchyCacheRemove;
+            NativeAnimationHierarchyCacheRemoveCalls::Receipt hierarchyCacheRemoveReceipt;
+            std::atomic<std::uint64_t>                        customSequenceGeneration{0};
             // One native address filter is the only retained pointer intent.
             // Keep both CAS candidates when an interrupted replacement cannot
             // be acknowledged, then clear it before either token is released.
@@ -876,7 +879,7 @@ namespace mta::game_de
                    runtime.pedModelCreationRetained.load() || runtime.modelBackingReferences.IsRetained() || runtime.pedReferences.IsRetained() ||
                    WorldIgnoreRetained() || runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() ||
                    runtime.privateAssociations.IsRetained() || runtime.groupCreations.IsRetained() || runtime.hierarchyUncompress.IsRetained() ||
-                   runtime.customSequences.HasPendingCleanup();
+                   runtime.hierarchyCacheRemove.IsRetained() || runtime.customSequences.HasPendingCleanup();
         }
 
         bool WeatherOverrideRetained() noexcept
@@ -3988,18 +3991,32 @@ namespace mta::game_de
 
         ClockResult NativeAccess::RemovePrivateAnimationHierarchyFromUncompressedCache(const NativeAnimationHierarchyReferenceToken& token) noexcept
         {
-            // The source cache operation does nothing only after its actual
-            // link is qualified null. This still needs the current owner and
-            // any child epoch; absence of a binding is never success.
             const auto request = token;
             auto       result = CheckAnimationHierarchyRequest(request);
             if (result != ClockResult::Ok)
                 return result;
-            result = runtime.privateHierarchies.CheckCacheZero(runtime.image, request, &CheckTimingOwner);
-            PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+            if (runtime.privateHierarchies.Owns(request))
+            {
+                // Issued private records retain their existing cache0/child
+                // epoch proof. They never borrow the stock bank list journal.
+                result = runtime.privateHierarchies.CheckCacheZero(runtime.image, request, &CheckTimingOwner);
+                PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+                if (result == ClockResult::Ok)
+                    result = CheckAnimationHierarchyRequest(request);
+                if (runtime.privateHierarchies.RecoveryPending())
+                    Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+                return result;
+            }
+            // This is the same MTA operation on a current native bank H. Its
+            // owner verifies both complete lists and retains uncertain stores;
+            // no frame storage, allocation or private record is adopted here.
+            NativeAnimationHierarchyCacheRemoveCalls::Receipt receipt;
+            result = runtime.hierarchyCacheRemove.Remove(runtime.image, request, &CheckTimingOwner, &receipt);
             if (result == ClockResult::Ok)
                 result = CheckAnimationHierarchyRequest(request);
-            if (runtime.privateHierarchies.RecoveryPending())
+            receipt.result = result;
+            runtime.hierarchyCacheRemoveReceipt = receipt;
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.hierarchyCacheRemove.RecoveryPending())
                 Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
             return result;
         }

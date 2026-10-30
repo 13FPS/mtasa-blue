@@ -65,6 +65,7 @@
 #include "NativeAnimationSequenceAccess.h"
 #include "NativeAnimationHierarchyAccess.h"
 #include "NativeAnimationHierarchyMemory.h"
+#include "NativeAnimationHierarchyUncompress.h"
 #include "NativeCustomAnimSequenceController.h"
 #include "NativePrivateAnimationHierarchyController.h"
 #include "NativeCustomAnimationCleanupAccess.h"
@@ -403,6 +404,7 @@ namespace mta::game_de
             ClockResult RemoveEmptyPrivateAnimationHierarchySequences(const NativeAnimationHierarchyReferenceToken&) noexcept override;
             ClockResult RemovePrivateAnimationHierarchyQuaternionFlips(const NativeAnimationHierarchyReferenceToken&) noexcept override;
             ClockResult CalculatePrivateAnimationHierarchyTotalTime(const NativeAnimationHierarchyReferenceToken&) noexcept override;
+            ClockResult UncompressAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&) noexcept override;
             ClockResult ReadAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&, NativeAnimationHierarchyValues&) noexcept override;
             ClockResult ReadAnimationHierarchySequences(const NativeAnimationHierarchyReferenceToken&, std::uintptr_t&) noexcept override;
             ClockResult ReadAnimationHierarchySequence(const NativeAnimationHierarchyReferenceToken&, std::uint32_t, std::uintptr_t&) noexcept override;
@@ -679,7 +681,12 @@ namespace mta::game_de
             // Empty module-owned hierarchy interfaces share this callback debt
             // group; no native publication or child-release authority is implied.
             NativePrivateAnimationHierarchyController privateHierarchies{&customSequences};
-            std::atomic<std::uint64_t>                customSequenceGeneration{0};
+            // A bank's timestamp conversion owns no private allocation.
+            // Retain only its actual entered/unknown operation journal; do
+            // not hide that debt in the custom buffer retirement generation.
+            NativeAnimationHierarchyUncompress               hierarchyUncompress;
+            NativeAnimationHierarchyUncompressCalls::Receipt hierarchyUncompressReceipt;
+            std::atomic<std::uint64_t>                       customSequenceGeneration{0};
             // One native address filter is the only retained pointer intent.
             // Keep both CAS candidates when an interrupted replacement cannot
             // be acknowledged, then clear it before either token is released.
@@ -867,7 +874,8 @@ namespace mta::game_de
                    runtime.startupCollisionBusy.load() || runtime.startupCollisionRetained.load() || runtime.pedModelCreationBusy.load() ||
                    runtime.pedModelCreationRetained.load() || runtime.modelBackingReferences.IsRetained() || runtime.pedReferences.IsRetained() ||
                    WorldIgnoreRetained() || runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() ||
-                   runtime.privateAssociations.IsRetained() || runtime.groupCreations.IsRetained() || runtime.customSequences.HasPendingCleanup();
+                   runtime.privateAssociations.IsRetained() || runtime.groupCreations.IsRetained() || runtime.hierarchyUncompress.IsRetained() ||
+                   runtime.customSequences.HasPendingCleanup();
         }
 
         bool WeatherOverrideRetained() noexcept
@@ -4047,6 +4055,29 @@ namespace mta::game_de
             if (result == ClockResult::Ok)
                 result = CheckAnimationHierarchyRequest(request);
             if ((receipt.entered && result != ClockResult::Ok) || runtime.privateHierarchies.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result;
+        }
+
+        ClockResult NativeAccess::UncompressAnimationHierarchy(const NativeAnimationHierarchyReferenceToken& source) noexcept
+        {
+            const auto request = source;
+            auto       result = CheckAnimationHierarchyRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            // The genuine bank/sequence/frame path cannot adopt an issued
+            // private H through matching bytes, including the warm no-op.
+            if (runtime.privateHierarchies.Owns(request))
+                return ClockResult::OwnerConflict;
+            NativeAnimationHierarchyUncompressCalls::Receipt receipt;
+            result = runtime.hierarchyUncompress.Uncompress(runtime.image, request, &CheckTimingOwner, &receipt);
+            runtime.hierarchyUncompressReceipt = receipt;
+            if (result == ClockResult::Ok)
+                result = CheckAnimationHierarchyRequest(request);
+            // Timestamp conversion is persistent source intent, never a
+            // scoped value to roll back. An entered unknown keeps the actual
+            // journal/module fence, while Stop prevents another SDK entry.
+            if ((receipt.entered && result != ClockResult::Ok) || runtime.hierarchyUncompress.RecoveryPending())
                 Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
             return result;
         }

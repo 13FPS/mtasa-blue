@@ -161,6 +161,7 @@
 #include "../../Client/game_de/NativeAnimationAssociationController.h"
 #include "../../Client/game_de/NativeAnimationAssociationProfile.h"
 #include "../../Client/game_de/NativeAnimationAssociationProgressProfile.h"
+#include "../../Client/game_de/NativeAnimationHierarchyUncompress.h"
 #include "../../Client/game_de/CAnimBlendAssociationDE.h"
 #include "../../Client/game_de/NativePedRenderProfile.h"
 #include "../../Client/game_de/NativePedMetadataProfile.h"
@@ -3542,6 +3543,13 @@ namespace ClockAnimationAssociationGroupOffsetTest
 #include "../../Client/game_de/NativeAnimationHierarchyMemory.cpp"
 #undef MTA_DE_ANIMATION_HIERARCHY_COPY
 #undef ReadImage
+namespace ClockHierarchyUncompressOwnerTest
+{
+    mta::game_de::ClockResult Invoke(mta::game_de::NativeAnimationHierarchyUncompressCalls::Function, std::uintptr_t, std::uint32_t&) noexcept;
+}
+#define MTA_DE_ANIMATION_HIERARCHY_UNCOMPRESS_INVOKE ::ClockHierarchyUncompressOwnerTest::Invoke
+#include "../../Client/game_de/NativeAnimationHierarchyUncompress.cpp"
+#undef MTA_DE_ANIMATION_HIERARCHY_UNCOMPRESS_INVOKE
 namespace ClockAnimationHierarchyBankOwnerTest
 {
     bool Copy(std::uintptr_t source, void* target, std::size_t bytes) noexcept
@@ -8656,6 +8664,8 @@ namespace
 #include "NativeDynamicClumpOwnerTests.inl"
 #include "AnimationAssociationRawFactoryFixture.generated.h"
 #include "NativeNumericAssociationOwnerTests.inl"
+#include "AnimationManagerUncompressFixture.generated.h"
+#include "NativeAnimationHierarchyUncompressOwnerTests.inl"
 
 // The strict receiver must execute production typed tickets and the distinct
 // metadata-only delete route. Deleting an interface acknowledges only its own
@@ -8805,6 +8815,15 @@ int main(int argc, char** argv)
         staticAssociationInitializationUnknown || (argc == 3 && std::strcmp(argv[2], "--static-association-initialization-success") == 0);
     const bool animationStaticAssociationReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-static-association-reads") == 0;
     const bool animationAssociationGroupReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-association-group-reads") == 0;
+    const bool hierarchyUncompressOnly = argc == 3 && std::strncmp(argv[2], "--hierarchy-uncompress-", 23) == 0;
+    unsigned   hierarchyUncompressScenario = 6;
+    if (hierarchyUncompressOnly)
+    {
+        const char* names[] = {"success", "refusals", "entered-before", "entered-after", "late-owner", "effect-mismatch"};
+        for (unsigned index = 0; index != 6; ++index)
+            if (std::strcmp(argv[2] + 23, names[index]) == 0)
+                hierarchyUncompressScenario = index;
+    }
     const bool numericAssociationOnly = argc == 3 && std::strncmp(argv[2], "--numeric-association-", 22) == 0;
     unsigned   numericAssociationScenario = 8;
     if (numericAssociationOnly)
@@ -8993,11 +9012,11 @@ int main(int argc, char** argv)
            freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly || customAnimationCleanupOnly ||
            standaloneSequenceOperationsOnly || animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly ||
            animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly || animationGroupValidityOnly ||
-           animationIdValidityOnly || animationAssociationGroupReadsOnly || numericAssociationOnly || dynamicClumpOnly || groupFactoriesOnly ||
-           groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly || groupEmptyInitializationOnly ||
-           animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly || animationStaticAssociationReadsOnly ||
-           staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly || privateAssociationsOnly || associationBonesOnly ||
-           associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
+           animationIdValidityOnly || animationAssociationGroupReadsOnly || hierarchyUncompressOnly || numericAssociationOnly || dynamicClumpOnly ||
+           groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
+           groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
+           animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
+           privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
     if (presentTransitionClockOnly)
@@ -9175,6 +9194,18 @@ int main(int argc, char** argv)
         fixture.Create(argv[1]);
         // One real module-pinned lifetime needs one pristine host process.
         NativeAnimationBlocksOwnedSdk(fixture, &AnimationAssociationGroupChildProductsOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (hierarchyUncompressOnly)
+    {
+        Check(hierarchyUncompressScenario < 6, "exact finite hierarchy Uncompress scenario is required");
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        // Each entered-debt journal requires its own ordinary host process;
+        // no failed owner epoch or native acknowledgement is reset in place.
+        AnimationHierarchyUncompressOwnerFixture::scenario = hierarchyUncompressScenario;
+        AnimationHierarchyUncompressOwnerFixture::RunPrepared(fixture);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

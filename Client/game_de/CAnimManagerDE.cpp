@@ -829,6 +829,24 @@ namespace mta::game_de
         CKeyGenDE keys;
         return keys.GetUppercaseKey(MtaGame::CAnimGatewayNames::GetAnimationName()) == actualHash;
     }
+    void CAnimManagerDE::UncompressAnimation(CAnimBlendHierarchy* hierarchy)
+    {
+        const auto  generation = ownerGeneration;
+        auto* const owner = dynamic_cast<NativeAnimationHierarchyAccess*>(&native);
+        if (!generation || !owner || dynamic_cast<void*>(owner) != dynamic_cast<void*>(&native))
+            Require(ClockResult::NotInitialized, "UncompressAnimation");
+        auto* const facade = dynamic_cast<CAnimBlendHierarchyDE*>(hierarchy);
+        if (!facade || dynamic_cast<void*>(&facade->native) != dynamic_cast<void*>(&native))
+            throw std::invalid_argument("DE UncompressAnimation requires its same-owner hierarchy facade");
+        const auto token = facade->reference;
+        if (token.ownerGeneration != generation || !token.locator)
+            Require(ClockResult::BindingChanged, "UncompressAnimation");
+        // Reuse the actual facade's immutable origin, rather than calling a
+        // virtual raw getter and then adopting its result. The owner performs
+        // the original compressed-time conversion and preserves entered debt;
+        // an unsupported cache/decompression phase remains an explicit refusal.
+        Require(owner->UncompressAnimationHierarchy(token), "UncompressAnimation");
+    }
     void CAnimManagerDE::RemoveFromUncompressedCache(CAnimBlendHierarchy* hierarchy)
     {
         if (!hierarchyAccess || !ownerGeneration)

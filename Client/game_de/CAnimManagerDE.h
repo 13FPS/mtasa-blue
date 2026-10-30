@@ -49,6 +49,7 @@ namespace mta::game_de
         void                                 DeleteCustomAnimHierarchyInterface(CAnimBlendHierarchySAInterface*) override;
         std::unique_ptr<CAnimBlendSequence>  GetCustomAnimBlendSequenceAt(CAnimBlendSequenceSAInterface*, DWORD) override;
         bool                                 isGateWayAnimationHierarchy(CAnimBlendHierarchySAInterface*) override;
+        void                                 UncompressAnimation(CAnimBlendHierarchy*) override;
         void                                 RemoveFromUncompressedCache(CAnimBlendHierarchy*) override;
         void                                 RemoveFromUncompressedCache(CAnimBlendHierarchySAInterface*) override;
         void                                 AddAnimBlockRef(int) override;

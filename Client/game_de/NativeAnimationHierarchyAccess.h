@@ -29,6 +29,10 @@ namespace mta::game_de
     {
     public:
         virtual ~NativeAnimationHierarchyAccess() = default;
+        // Actual manager Uncompress runs the original phase-qualified
+        // operation. Only the current owner admits native BANK compressed
+        // frames; this is neither a scalar-time setter nor a cache no-op.
+        virtual ClockResult UncompressAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&) noexcept { return ClockResult::NotInitialized; }
         // The token is immediate callback-generation affinity, not a lease.
         // Scalars do not acquire or validate a dynamic child array.
         virtual ClockResult ReadAnimationHierarchy(const NativeAnimationHierarchyReferenceToken&, NativeAnimationHierarchyValues&) noexcept

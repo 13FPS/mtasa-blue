@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('NumericAssociationOwner','DynamicClumpOwner','AnimationAssociationGroupFactories','GroupSourceCreationOwner','JointTemporaryStaticInitializerOwner','GroupReplacementOwner','GroupCopyAnimationOwner','GroupEmptyInitialization','AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','PresentTransitionClock','StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
+    [ValidateSet('AnimationHierarchyUncompress','NumericAssociationOwner','DynamicClumpOwner','AnimationAssociationGroupFactories','GroupSourceCreationOwner','JointTemporaryStaticInitializerOwner','GroupReplacementOwner','GroupCopyAnimationOwner','GroupEmptyInitialization','AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','PresentTransitionClock','StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -23,6 +23,12 @@ $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;a
 # Historical markers start false and are set only by the branch that actually
 # executed. Focus mode must never inherit the cumulative suite's claims.
 $record['runScope'] = $Scope
+$record['nativeHierarchyUncompressActualSdkTested']=$false
+$record['nativeHierarchyUncompressCoupledRefusalsTested']=$false
+$record['nativeHierarchyUncompressUnknownRetained']=$false
+$record['nativeHierarchyUncompressPostOwnerLossTested']=$false
+$record['nativeHierarchyUncompressEffectMismatchTested']=$false
+$record['originalHierarchyUncompressInstructionsExecuted']=$false
 $record['numericAssociationActualFactoryTested']=$false
 $record['numericAssociationCodeChildLifetimeTested']=$false
 $record['numericAssociationNullTested']=$false
@@ -640,6 +646,7 @@ try {
     $sourceNames += @('Tests/definitive/NativeAnimationAssociationGroupEmptyInitializationOwnerTests.inl','Client/game_de/NativeAnimationAssociationGroupInitialization.h')
     $sourceNames += @('Tests/definitive/NativeAnimationAssociationGroupCopyOwnerTests.inl','Client/game_de/NativeAnimationAssociationGroupCopy.h','Client/game_de/NativeAnimationAssociationGroupCopyProfile.h')
     $sourceNames += @('Tests/definitive/NativeAnimationAssociationGroupReplacementOwnerTests.inl','Client/game_de/NativeAnimationAssociationGroupReplacement.h','Client/game_de/NativeAnimationAssociationGroupReplacement.cpp','Client/game_de/NativeAnimationAssociationGroupChildBorrow.h','Client/game_de/NativeStaticAssociationArrayStorageCalls.h','Client/game_de/NativeStaticAssociationArrayProfile.h')
+    $sourceNames += @('Client/game_de/NativeAnimationHierarchyUncompress.h','Client/game_de/NativeAnimationHierarchyUncompress.cpp','Tests/definitive/NativeAnimationHierarchyUncompressOwnerTests.inl','Tests/definitive/Write-AnimationManagerUncompressFixture.ps1')
     $sourceNames += @('Tests/definitive/NativeNumericAssociationOwnerTests.inl','Tests/definitive/Write-AnimationAssociationNumericFactoryFixture.ps1','Tests/definitive/Write-AnimationAssociationRawFactoryFixture.ps1','Client/game_de/NativeAnimationAssociationIssuedView.h')
     $sourceNames += @('Tests/definitive/NativeDynamicClumpOwnerTests.inl','Client/game_de/NativeAnimationAssociationClumpTypes.h','Client/game_de/NativeAnimationAssociationClumpCalls.h','Client/game_de/NativeAnimationClumpInitializationPlan.h','Client/game_de/NativeAnimationClumpInitializationPlan.cpp','Client/game_de/NativeAnimationAssociationClumpVerification.h','Client/game_de/NativeAnimationAssociationClumpVerification.cpp','Client/game_de/NativeAnimationAssociationClumpOrigin.h','Client/game_de/NativeAnimationAssociationClumpOrigin.cpp','Client/game_de/NativeAnimationAssociationClumpStorage.inl','Client/game_de/NativeAnimationAssociationHierarchyDependency.h','Client/game_de/NativeAnimationAssociationClumpStorageState.h','Client/game_de/NativeTemporaryDynamicAssociationInitializeCalls.h','Client/game_de/NativeTemporaryDynamicAssociationInitializeCalls.cpp')
     $sourceNames += @('Tests/definitive/NativeAnimationAssociationGroupFactoriesOwnerTests.inl','Tests/definitive/Write-AnimationAssociationGroupFactoryFixture.ps1')
@@ -854,6 +861,13 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
     Copy-Item -LiteralPath $refsFixture.path -Destination $refsEvidence
     $record['animationBlockRefsSdkFixture'] = $refsFixture
     $record.animationBlockRefsSdkFixture.path = $refsEvidence
+    . (Join-Path $PSScriptRoot 'Write-AnimationManagerUncompressFixture.ps1')
+    $uncompressFixture=Write-AnimationManagerUncompressFixture $taskRoot (Join-Path $scratchRoot 'AnimationManagerUncompressFixture.generated.h')
+    if(@($uncompressFixture.inheritedMethods).Count -ne 3 -or $uncompressFixture.rejectingMethods -ne 66){throw 'Uncompress receiver must inherit actual manager dispatch and two bank factories'}
+    $uncompressEvidence=Join-Path $outputRoot 'AnimationManagerUncompressFixture.generated.h'
+    Copy-Item -LiteralPath $uncompressFixture.path -Destination $uncompressEvidence
+    $record['animationManagerUncompressFixture']=$uncompressFixture
+    $record.animationManagerUncompressFixture.path=$uncompressEvidence
     . (Join-Path $PSScriptRoot 'Write-AnimationAssociationRawFactoryFixture.ps1')
     $numericFactoryFixture=Write-AnimationAssociationRawFactoryFixture $taskRoot (Join-Path $scratchRoot 'AnimationAssociationRawFactoryFixture.generated.h')
     if(@($numericFactoryFixture.inheritedFactories).Count -ne 2 -or $numericFactoryFixture.rejectingMethods -ne 67){throw 'Issued raw receiver must inherit exactly actual numeric Create and raw Get'}
@@ -1462,6 +1476,26 @@ namespace ClockPrivateHierarchyParentWriteFixture {
                 throw ('Group offset '+$scenario+' failed')
             }
             if((Sha $scenarioExecutable) -cne $compiledHash){throw 'Group offset execution copy changed while running'}
+            $record.checks+=[int]$Matches[1];$texts+=$part
+        }
+        $record.testRun=$record.testRuns[-1];$text=$texts -join [Environment]::NewLine
+    } elseif($Scope -eq 'AnimationHierarchyUncompress'){
+        # One exact binary runs fresh native-debt lifetimes in task-owned
+        # directories; no process can reset an ambiguous entered operation.
+        $record['testRuns']=@();$record['testScenarioExecutables']=@();$texts=@();$compiledHash=Sha $executable
+        foreach($scenario in @('success','refusals','entered-before','entered-after','late-owner','effect-mismatch')){
+            $scenarioRoot=Join-Path $scratchRoot ('hierarchy-uncompress-'+$scenario)
+            [IO.Directory]::CreateDirectory($scenarioRoot)|Out-Null
+            $copy=Join-Path $scenarioRoot ([IO.Path]::GetFileName($executable))
+            if(Test-Path -LiteralPath $copy){throw 'Hierarchy Uncompress execution copy already exists'}
+            Copy-Item -LiteralPath $executable -Destination $copy
+            if((Sha $copy) -cne $compiledHash){throw 'Hierarchy Uncompress process differs from compiled binary'}
+            $record.testScenarioExecutables+=@{scenario=$scenario;path=$copy;sha256=$compiledHash;removedWithOwnedScratch=$true}
+            $run=RunBounded $copy @($scenarioRoot,('--hierarchy-uncompress-'+$scenario)) ('test-hierarchy-uncompress-'+$scenario) 60000
+            $record.testRuns+=$run
+            $part=[IO.File]::ReadAllText($run.stdout)+[IO.File]::ReadAllText($run.stderr)
+            if($run.exitCode -ne 0 -or $run.timedOut -or $part -notmatch 'Passed (\d+) production clock service checks'){throw ('Hierarchy Uncompress '+$scenario+' failed')}
+            if((Sha $copy) -cne $compiledHash){throw 'Hierarchy Uncompress execution copy changed'}
             $record.checks+=[int]$Matches[1];$texts+=$part
         }
         $record.testRun=$record.testRuns[-1];$text=$texts -join [Environment]::NewLine
@@ -2158,6 +2192,15 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         $record.nativeAnimationAssociationGroupChildProductsCoupledRefusalsTested=$text.Contains('Production animation association group child products coupled refusal fixture completed')
         if(-not($record.nativeAnimationAssociationGroupChildProductsOwnerTested -and $record.actualAnimationAssociationGroupStaticChildSdkOwnerTested -and $record.nativeAnimationAssociationGroupChildProductsCoupledRefusalsTested)){throw 'Actual association group child products scope incomplete'}
         $record.productionNativeCallbackTested=$true
+    } elseif($Scope -eq 'AnimationHierarchyUncompress'){
+        $record.nativeHierarchyUncompressActualSdkTested=$text.Contains('Production hierarchy Uncompress actual SDK original compressed conversion fixture completed')
+        $record.nativeHierarchyUncompressCoupledRefusalsTested=$text.Contains('Production hierarchy Uncompress actual owner coupled refusal fixture completed')
+        $record.nativeHierarchyUncompressUnknownRetained=$text.Contains('Production hierarchy Uncompress entered before acknowledgement debt fixture completed') -and $text.Contains('Production hierarchy Uncompress entered after original debt fixture completed')
+        $record.nativeHierarchyUncompressPostOwnerLossTested=$text.Contains('Production hierarchy Uncompress post original owner loss fixture completed')
+        $record.nativeHierarchyUncompressEffectMismatchTested=$text.Contains('Production hierarchy Uncompress post original effect mismatch fixture completed')
+        if(-not($record.nativeHierarchyUncompressActualSdkTested -and $record.nativeHierarchyUncompressCoupledRefusalsTested -and $record.nativeHierarchyUncompressUnknownRetained -and $record.nativeHierarchyUncompressPostOwnerLossTested -and $record.nativeHierarchyUncompressEffectMismatchTested)){throw 'Actual hierarchy Uncompress selected owner/original/debt scope incomplete'}
+        $record.productionNativeCallbackTested=$true
+        $record.originalHierarchyUncompressInstructionsExecuted=$true
     } elseif($Scope -eq 'NumericAssociationOwner'){
 $record['rawAssociationIssuedFactoryTested']=$text.Contains('Production issued raw association actual factory and unconstructed lifetime fixture completed')
 $record.numericAssociationActualFactoryTested=$text.Contains('Production numeric association actual manager and independent child lifetime fixture completed')

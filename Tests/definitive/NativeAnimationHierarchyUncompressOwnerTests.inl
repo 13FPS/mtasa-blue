@@ -1,0 +1,419 @@
+/****************************************************************************
+ * PROJECT: Multi Theft Auto
+ * LICENSE: See LICENSE in the repository root
+ * PURPOSE: Actual manager-to-bank Uncompress entry, effects and retained debt
+ ****************************************************************************/
+#include <initializer_list>
+namespace ClockHierarchyUncompressOwnerTest
+{
+    namespace Calls = NativeAnimationHierarchyUncompressCalls;
+    namespace Profile = NativeAnimationAssociationProgressProfile;
+    namespace Bytes = ClockPrivateAnimationAssociationTest;
+    std::uintptr_t                         image = 0, hierarchy = 0;
+    unsigned                               calls = 0, executed = 0, mode = 0;
+    bool                                   targetsValid = true, nestedBusy = false, gateBusy = false, lifetimeBusy = false;
+    NativeAnimationHierarchyReferenceToken token;
+    ClockResult                            Invoke(Calls::Function function, std::uintptr_t requested, std::uint32_t& exception) noexcept
+    {
+        ++calls;
+        targetsValid = targetsValid && reinterpret_cast<std::uintptr_t>(function) == image + Profile::HierarchyTimeRva && requested == hierarchy;
+        nestedBusy = runtime.access.UncompressAnimationHierarchy(token) == ClockResult::Busy;
+        const bool entered = NativeStreamingCompletionContext::TryEnter();
+        gateBusy = !entered;
+        if (entered)
+            NativeStreamingCompletionContext::Leave();
+        lifetimeBusy = runtime.hierarchyUncompress.IsRetained() && NativeLifetimeRetained();
+        if (!targetsValid)
+            return ClockResult::BindingChanged;
+        if (mode == 1)
+        {
+            // Entry was attempted but its acknowledgement is unavailable.
+            // No synthetic payload supplies success for this uncertainty case.
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return ClockResult::OriginalException;
+        }
+        // Execute the whole original FF0D10 body in the owned MEM_IMAGE.
+        // Its genuine compressed-time branch needs no substituted native leaf.
+        function(requested);
+        ++executed;
+        if (mode == 2)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return ClockResult::OriginalException;
+        }
+        if (mode == 3)
+            Bytes::Store(image + NativeBorrowedGcProfile::markerRva, LONG{1});
+        if (mode == 4)
+        {
+            const auto sequences = Bytes::Load<std::uintptr_t>(requested + 8);
+            const auto frames = Bytes::Load<std::uintptr_t>(sequences + 0x48);
+            Bytes::Store(frames + 8, static_cast<std::uint16_t>(Bytes::Load<std::uint16_t>(frames + 8) ^ 1));
+        }
+        return ClockResult::Ok;
+    }
+}
+
+namespace AnimationHierarchyUncompressOwnerFixture
+{
+    namespace Hook = ClockHierarchyUncompressOwnerTest;
+    namespace Bytes = ClockPrivateAnimationAssociationTest;
+    namespace Host = NativeCustomAnimSequenceStorageFixture;
+    namespace Profile = NativeAnimationAssociationProgressProfile;
+    unsigned scenario = 0;
+    struct FrameStorage
+    {
+        std::array<std::uintptr_t, 2>                pointers{};
+        std::array<std::array<unsigned char, 64>, 2> expected{};
+        FrameStorage()
+        {
+            for (auto& pointer : pointers)
+            {
+                pointer = reinterpret_cast<std::uintptr_t>(VirtualAlloc(nullptr, 64, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+                Check(pointer != 0, "compressed frame fixture owns two disjoint bounded private payloads");
+            }
+        }
+        void Seed(std::uintptr_t sequences, unsigned row, std::initializer_list<std::uint16_t> times, bool root)
+        {
+            const auto stride = root ? 16u : 10u;
+            auto&      contents = expected[row];
+            contents.fill(0xa5);
+            unsigned      index = 0;
+            std::uint16_t previous = 0;
+            for (const auto value : times)
+            {
+                std::memcpy(contents.data() + index * stride + 8, &value, sizeof(value));
+                ++index;
+            }
+            std::memcpy(reinterpret_cast<void*>(pointers[row]), contents.data(), contents.size());
+            index = 0;
+            for (const auto value : times)
+            {
+                const auto delta = static_cast<std::uint16_t>(value - previous);
+                // The native backward walk leaves frame0 absolute. Preserve
+                // every other payload byte so an accidental wide write fails.
+                if (index)
+                    std::memcpy(contents.data() + index * stride + 8, &delta, sizeof(delta));
+                previous = value;
+                ++index;
+            }
+            const auto address = sequences + row * 80;
+            std::memset(reinterpret_cast<void*>(address), 0x3c, 80);
+            Bytes::Store(address + 0x42, static_cast<std::uint16_t>(root ? 0x07 : 0x05));
+            Bytes::Store(address + 0x44, static_cast<std::uint16_t>(times.size()));
+            Bytes::Store(address + 0x48, pointers[row]);
+        }
+        bool Matches() const noexcept
+        {
+            return !std::memcmp(reinterpret_cast<const void*>(pointers[0]), expected[0].data(), expected[0].size()) &&
+                   !std::memcmp(reinterpret_cast<const void*>(pointers[1]), expected[1].data(), expected[1].size());
+        }
+        ~FrameStorage()
+        {
+            // Fixture-owned backing is disposed only after all debt facts have
+            // been asserted; this is never an acknowledgement of native work.
+            for (const auto pointer : pointers)
+                if (pointer)
+                    VirtualFree(reinterpret_cast<void*>(pointer), 0, MEM_RELEASE);
+        }
+    };
+    void RunPrepared(ClockImageFixture& fixture)
+    {
+        WorldGroundOwnerFixture::Writes saved{fixture, {}};
+        const auto                      admit = [&](const auto& pins)
+        {
+            for (const auto& pin : pins)
+                WorldGroundOwnerFixture::Writes::Apply(&saved, pin.rva, pin.bytes, pin.size, PAGE_EXECUTE_READ);
+        };
+        admit(NativeStreamingLoadAllProfile::Code);
+        for (const auto& pin : NativeStartupOwnerProfile::pins)
+            WorldGroundOwnerFixture::Writes::Apply(&saved, pin.rva, pin.bytes, pin.size, pin.code ? PAGE_EXECUTE_READ : PAGE_READONLY);
+        for (const auto& pin : NativeStartupWorldProfile::pins)
+            WorldGroundOwnerFixture::Writes::Apply(&saved, pin.rva, pin.bytes, pin.size, pin.code ? PAGE_EXECUTE_READ : PAGE_READONLY);
+        admit(NativeUObjectMembershipProfile::pins);
+        for (const auto& pin : NativeGameStateProfile::pins)
+            WorldGroundOwnerFixture::Writes::Apply(&saved, pin.rva, pin.bytes, pin.size, pin.code ? PAGE_EXECUTE_READ : PAGE_READONLY);
+        admit(NativeBorrowedGcProfile::pins);
+        for (const auto& pin : NativeStartGameProfile::Code)
+            if (pin.rva == 0xab879c || pin.rva == 0xab92f0 || pin.rva == 0x1af4ef0)
+                WorldGroundOwnerFixture::Writes::Apply(&saved, pin.rva, pin.bytes.data(), pin.size, PAGE_EXECUTE_READ);
+        alignas(std::uintptr_t) std::array<unsigned char, 0x180> root{};
+        NativeStreamingLoadAllFixture::Graph graph(fixture.image, reinterpret_cast<std::uintptr_t>(root.data()), &WorldGroundOwnerFixture::Writes::Apply,
+                                                   &saved);
+        NativePedClothesFixture::Install(fixture.image, &WorldGroundOwnerFixture::Writes::Apply, &saved);
+        NativePedClothesFixture::NameState names;
+        names.Reset(fixture.image, &WorldGroundOwnerFixture::Writes::Apply, &saved);
+        Host::State host;
+        host.Reset(fixture.image, &WorldGroundOwnerFixture::Writes::Apply, &saved);
+        Host::active = &host;
+        admit(NativePedPoolProfile::Code);
+        NativeAnimationBlockFactoryFixture::Install(fixture.image, &WorldGroundOwnerFixture::Writes::Apply, &saved);
+        admit(NativeAnimationBlockProfile::Code);
+        saved.Global(NativeAnimationBlockProfile::RemapRva + NativeAnimationBlockProfile::LoadedOpcodeIndex,
+                     static_cast<unsigned char>(NativeAnimationBlockProfile::LoadedSelector), PAGE_EXECUTE_READ);
+        saved.Global(NativeAnimationBlockProfile::DispatchRva + NativeAnimationBlockProfile::LoadedSelector * 4,
+                     static_cast<std::uint32_t>(NativeAnimationBlockProfile::LoadedBranchRva), PAGE_EXECUTE_READ);
+        saved.Global(NativeAnimationBlockProfile::GroupSlotRva, fixture.image + NativeAnimationBlockProfile::GroupRva, PAGE_READONLY);
+        admit(NativeAnimationBlockRefProfile::Code);
+        admit(NativeAnimationGroupArrayProfile::Code);
+        admit(NativeAnimationStaticAssociationProfile::Code);
+        admit(NativeAnimationStaticAssociationProfile::ReadCode);
+        admit(NativeAnimationAssociationProfile::Code);
+        admit(NativeAnimationHierarchyReadProfile::Code);
+        admit(NativeAnimationSequenceRowProfile::Code);
+        admit(NativeAnimationSequenceFrameBindProfile::Code);
+        WorldGroundOwnerFixture::Writes::Apply(&saved, Profile::HierarchyTimeRva, Profile::HierarchyTimeBytes.data(), Profile::HierarchyTimeBytes.size(),
+                                               PAGE_EXECUTE_READ);
+        WorldGroundOwnerFixture::Writes::Apply(&saved, 0x4bc80ac, Profile::TimeScaleBytes.data(), Profile::TimeScaleBytes.size(), PAGE_READONLY);
+        saved.Global(NativeAnimationAssociationProfile::VtableRva, fixture.image + NativeAnimationAssociationProfile::DestructorRva, PAGE_READONLY);
+        PrivateAnimationAssociationOwnerFixture::SourceBank source(fixture, saved);
+        FrameStorage                                        frames;
+        const auto                                          seed = [&](unsigned which)
+        {
+            if (!which)
+            {
+                frames.Seed(source.sequences, 0, {30, 90, 15, 300}, true);
+                frames.Seed(source.sequences, 1, {5, 32760, 32767}, false);
+            }
+            else if (which == 1)
+            {
+                frames.Seed(source.sequences, 0, {65530, 3, 4}, true);
+                frames.Seed(source.sequences, 1, {65535}, false);
+            }
+            else
+            {
+                frames.Seed(source.sequences, 0, {65535}, true);
+                frames.Seed(source.sequences, 1, {300, 65534}, false);
+            }
+            saved.Global(source.hierarchy - fixture.image + 8, source.sequences);
+            saved.Global(source.hierarchy - fixture.image + 0x10, std::uint16_t{2});
+            saved.Global(source.hierarchy - fixture.image + 0x12, static_cast<unsigned char>(0x80));
+            saved.Global(source.hierarchy - fixture.image + 0x13, static_cast<unsigned char>(1));
+            saved.Global(source.hierarchy - fixture.image + 0x18, std::uint32_t{0});
+            saved.Global(source.hierarchy - fixture.image + 0x20, std::uintptr_t{0});
+        };
+        seed(0);
+        graph.Reset();
+        saved.Global(NativeGameStateProfile::stateRva, std::uint32_t{9});
+        saved.Global(NativeStartGameProfile::ThreadInitializedRva, static_cast<unsigned char>(1));
+        saved.Global(NativeStartGameProfile::ThreadIdRva, GetCurrentThreadId());
+        saved.Global(NativeBorrowedGcProfile::markerRva, LONG{0});
+        const auto previousImage = ClockReaderTestHost::image;
+        ClockReaderTestHost::image = fixture.image;
+        Hook::image = fixture.image;
+        Hook::hierarchy = source.hierarchy;
+        Hook::calls = Hook::executed = Hook::mode = 0;
+        Hook::targetsValid = true;
+        WorldGroundOwnerFixture::Callback callback;
+        NativeClockService                service;
+        callback.action = [](NativeGameTimingAccess&) {};
+        ClockServiceStateV1 rejected, admitted;
+        Check(!service.BeginGameTiming({}, rejected, &WorldGroundOwnerFixture::Callback::Invoke, &callback) &&
+                  rejected.failure == ClockResult::UnsupportedBuild && !rejected.bound && !rejected.hooked &&
+                  !NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock),
+              "shipping public Begin refuses the fixture executable before any explicit owned-image supplier");
+        fixture.Seed();
+        // A rejected epoch remains closed. Only a fresh actual public Begin
+        // may admit this explicitly owned image and install its real hook.
+        ClockNumericAssociationIssuedTest::admittedImage = fixture.image;
+        const bool began = service.BeginGameTiming({}, admitted, &WorldGroundOwnerFixture::Callback::Invoke, &callback);
+        ClockNumericAssociationIssuedTest::admittedImage = 0;
+        Check(began && admitted.generation > rejected.generation && admitted.bound && admitted.modulePinned &&
+                  NativeServiceAdmission::IsClaimed(NativeServiceAdmission::Category::Clock),
+              "actual fresh public Begin owns the native Uncompress fixture image, hook and callback epoch");
+        const auto generation = runtime.generation.load();
+        const auto action = [&](const auto& body)
+        {
+            callback.action = [&](NativeGameTimingAccess&) { body(); };
+            Check(service.Renew(generation), "renew the actual Uncompress callback owner");
+            StaticAssociationInitializationOwnerFixture::ProducerPulse pulse(service, generation);
+            Check(pulse.renewals.load() && !pulse.unexpectedFailures.load(), "Uncompress has a real independent producer before original entry");
+            fixture.invokeTimer();
+            pulse.Stop();
+            Check(!pulse.unexpectedFailures.load() && runtime.producerThread == GetCurrentThreadId(),
+                  "Uncompress preserves the public producer and engine callback handoff");
+            callback.action = [](NativeGameTimingAccess&) {};
+        };
+        AnimationManagerUncompressReceiver   manager(runtime.access, runtime.access, runtime.access, generation);
+        CAnimManager&                        sdk = manager;
+        std::unique_ptr<CAnimBlendHierarchy> hierarchy;
+        action(
+            [&]
+            {
+                Check(runtime.access.ResolveBankAnimationHierarchyAt(generation, 0, Hook::token) == ClockResult::Ok && Hook::token.locator == source.hierarchy,
+                      "actual runtime resolves the source bank hierarchy through its present block and range");
+                hierarchy = sdk.GetAnimation(0);
+                Check(hierarchy && reinterpret_cast<std::uintptr_t>(hierarchy->GetInterface()) == source.hierarchy,
+                      "actual manager creates the real hierarchy facade from the current bank, without a successful provider fixture");
+            });
+        const auto refuses = [&](const auto& operation, const char* label)
+        {
+            bool rejectedOperation = false;
+            try
+            {
+                operation();
+            }
+            catch (const std::exception&)
+            {
+                rejectedOperation = true;
+            }
+            Check(rejectedOperation, label);
+        };
+        const auto finish = [&]
+        {
+            bool done = service.End();
+            for (unsigned attempt = 0; attempt != 3 && !done; ++attempt)
+            {
+                fixture.invokeTimer();
+                done = service.End();
+            }
+            return done;
+        };
+        if (scenario == 0)
+        {
+            float scale = 0;
+            std::memcpy(&scale, Profile::TimeScaleBytes.data(), sizeof(scale));
+            for (unsigned which = 0; which != 3; ++which)
+            {
+                seed(which);
+                const auto    before = Hook::calls;
+                const auto    expectedTime = (which == 0 ? 32767.0f : which == 1 ? 4.0f : 0.0f) * scale;
+                std::uint32_t expectedTimeBits = 0;
+                std::memcpy(&expectedTimeBits, &expectedTime, sizeof(expectedTimeBits));
+                std::array<unsigned char, 160> originalRows{};
+                std::memcpy(originalRows.data(), reinterpret_cast<const void*>(source.sequences), originalRows.size());
+                action([&] { sdk.UncompressAnimation(hierarchy.get()); });
+                const auto& receipt = runtime.hierarchyUncompressReceipt;
+                Check(Hook::calls == before + 1 && Hook::executed == Hook::calls && Hook::targetsValid && Hook::nestedBusy && Hook::gateBusy &&
+                          Hook::lifetimeBusy && receipt.entered && receipt.returned && receipt.effectsVerified && !receipt.debt &&
+                          receipt.result == ClockResult::Ok && receipt.hierarchy == source.hierarchy && receipt.generation == generation &&
+                          receipt.entryRva == Profile::HierarchyTimeRva && !receipt.beforeTimeBits && receipt.afterTimeBits == expectedTimeBits &&
+                          receipt.sequences == 2 &&
+                          receipt.preparedFrames == (which == 0   ? 7u
+                                                     : which == 1 ? 4u
+                                                                  : 3u) &&
+                          receipt.modifiedFrames == (which == 0   ? 5u
+                                                     : which == 1 ? 2u
+                                                                  : 1u),
+                      "actual SDK reaches the same native bank component and one whole original call under its busy gate and retained lifetime");
+                Check(frames.Matches() && Bytes::Load<std::uint32_t>(source.hierarchy + 0x18) == expectedTimeBits &&
+                          !std::memcmp(originalRows.data(), reinterpret_cast<const void*>(source.sequences), originalRows.size()) &&
+                          Bytes::Load<unsigned char>(source.hierarchy + 0x12) == 0x80 && Bytes::Load<unsigned char>(source.hierarchy + 0x13) == 1 &&
+                          !runtime.hierarchyUncompress.IsRetained() && !runtime.stopping.load(),
+                      "whole native compressed conversion preserves flags and row metadata, writes exact modulo WORD deltas and signed-last maximum time");
+                if (!which)
+                {
+                    action([&] { sdk.UncompressAnimation(hierarchy.get()); });
+                    Check(Hook::calls == before + 2 && runtime.hierarchyUncompressReceipt.noOp && runtime.hierarchyUncompressReceipt.effectsVerified &&
+                              frames.Matches(),
+                          "the genuine warm nonzero-time native path performs no second timestamp subtraction");
+                }
+            }
+            seed(0);
+            saved.Global(source.hierarchy - fixture.image + 8, std::uintptr_t{1});
+            saved.Global(source.hierarchy - fixture.image + 0x10, std::uint16_t{0});
+            saved.Global(source.hierarchy - fixture.image + 0x18, std::uint32_t{0x80000000});
+            const auto before = Hook::calls;
+            action([&] { sdk.UncompressAnimation(hierarchy.get()); });
+            Check(Hook::calls == before + 1 && runtime.hierarchyUncompressReceipt.effectsVerified && !runtime.hierarchyUncompressReceipt.sequences &&
+                      !runtime.hierarchyUncompressReceipt.preparedFrames && !Bytes::Load<std::uint32_t>(source.hierarchy + 0x18),
+                  "native count0 converts negative zero without borrowing its deliberately invalid child pointer");
+            saved.Global(source.hierarchy - fixture.image + 0x10, std::uint16_t{0x8000});
+            saved.Global(source.hierarchy - fixture.image + 0x18, std::uint32_t{0x80000000});
+            action([&] { sdk.UncompressAnimation(hierarchy.get()); });
+            Check(Hook::calls == before + 2 && runtime.hierarchyUncompressReceipt.effectsVerified && !Bytes::Load<std::uint32_t>(source.hierarchy + 0x18),
+                  "the native signed WORD hierarchy count skips the same child walk for a high-bit count");
+            hierarchy.reset();
+            Check(finish() && !service.IsRetained() && !host.mallocCalls && !host.freeCalls,
+                  "verified bank conversion closes the actual owner without inventing a private allocation or free receipt");
+            std::puts("Production hierarchy Uncompress actual SDK original compressed conversion fixture completed");
+        }
+        else if (scenario == 1)
+        {
+            refuses([&] { sdk.UncompressAnimation(hierarchy.get()); }, "retained manager and H facade cannot mutate between callbacks");
+            action(
+                [&]
+                {
+                    refuses([&] { sdk.UncompressAnimation(nullptr); }, "null hierarchy cannot become native Uncompress authority");
+                    animation_hierarchy_fixture::AnimationHierarchyReceiver wrong(runtime.access, {generation - 1, source.hierarchy});
+                    refuses([&] { sdk.UncompressAnimation(&wrong); }, "actual manager refuses a wrong-generation hierarchy");
+                    NativeAnimationHierarchyReferenceToken missing{};
+                    Check(runtime.access.UncompressAnimationHierarchy(missing) != ClockResult::Ok, "missing token cannot enter original conversion");
+                    saved.Global(NativeBorrowedGcProfile::markerRva, LONG{1});
+                    Check(runtime.access.UncompressAnimationHierarchy(Hook::token) != ClockResult::Ok, "borrowed GC marker blocks Uncompress before entry");
+                    saved.Global(NativeBorrowedGcProfile::markerRva, LONG{0});
+                    saved.Global(NativeStartGameProfile::ThreadIdRva, GetCurrentThreadId() ^ 0x80000000u);
+                    Check(runtime.access.UncompressAnimationHierarchy(Hook::token) != ClockResult::Ok, "native GT identity blocks Uncompress before entry");
+                    saved.Global(NativeStartGameProfile::ThreadIdRva, GetCurrentThreadId());
+                });
+            const auto rejectCurrent = [&](const auto& change, const char* label)
+            {
+                seed(0);
+                change();
+                action([&] { refuses([&] { sdk.UncompressAnimation(hierarchy.get()); }, label); });
+                Check(!Hook::calls && !runtime.hierarchyUncompress.IsRetained() && !runtime.stopping.load(),
+                      "pre-entry source refusal creates no native debt or stop condition");
+            };
+            rejectCurrent([&] { saved.Global(source.hierarchy - fixture.image + 0x13, static_cast<unsigned char>(0)); },
+                          "cache/LRU mutation branch remains unqualified");
+            rejectCurrent([&] { saved.Global(source.hierarchy - fixture.image + 0x10, std::uint16_t{3}); },
+                          "actual hierarchy count cannot exceed its current row cookie");
+            rejectCurrent([&]
+                          { saved.Global(NativeAnimationBlockProfile::BankRva + NativeAnimationBlockProfile::LoadedOffset, static_cast<unsigned char>(0)); },
+                          "unloaded bank supplies no compressed payload authority");
+            saved.Global(NativeAnimationBlockProfile::BankRva + NativeAnimationBlockProfile::LoadedOffset, static_cast<unsigned char>(1));
+            rejectCurrent([&] { Bytes::Store(source.sequences + 0x42, std::uint16_t{3}); },
+                          "uncompressed frame representation cannot enter compressed conversion");
+            rejectCurrent([&] { Bytes::Store(source.sequences + 0x44, std::uint16_t{0}); }, "native last-frame access refuses an empty sequence row");
+            rejectCurrent([&] { Bytes::Store(source.sequences + 0x48, std::uintptr_t{1}); }, "unreadable odd frame pointer supplies no payload provenance");
+            rejectCurrent([&] { Bytes::Store(source.sequences + 80 + 0x48, frames.pointers[0]); }, "two rows cannot share timestamp write authority");
+            rejectCurrent([&] { saved.Global(0x4bc80ac, std::uint32_t{0x3f800000}, PAGE_READONLY); },
+                          "changed native time scale refuses before original entry");
+            WorldGroundOwnerFixture::Writes::Apply(&saved, 0x4bc80ac, Profile::TimeScaleBytes.data(), Profile::TimeScaleBytes.size(), PAGE_READONLY);
+            rejectCurrent(
+                [&]
+                {
+                    saved.Global(Profile::HierarchyTimeRva + Profile::HierarchyTimeBytes.size() - 1,
+                                 static_cast<unsigned char>(Profile::HierarchyTimeBytes.back() ^ 1), PAGE_EXECUTE_READ);
+                },
+                "changed last byte of the whole saved native entry refuses before execution");
+            WorldGroundOwnerFixture::Writes::Apply(&saved, Profile::HierarchyTimeRva, Profile::HierarchyTimeBytes.data(), Profile::HierarchyTimeBytes.size(),
+                                                   PAGE_EXECUTE_READ);
+            seed(0);
+            hierarchy.reset();
+            Check(finish() && !service.IsRetained() && !Hook::calls, "all typed pre-entry refusals leave the actual module owner releasable");
+            std::puts("Production hierarchy Uncompress actual owner coupled refusal fixture completed");
+        }
+        else
+        {
+            Hook::mode = scenario - 1;
+            action(
+                [&]
+                {
+                    refuses([&] { sdk.UncompressAnimation(hierarchy.get()); }, "entered uncertainty cannot publish a successful SDK return");
+                    const auto& receipt = runtime.hierarchyUncompressReceipt;
+                    Check(Hook::calls == 1 && receipt.entered && !receipt.effectsVerified && receipt.debt && runtime.hierarchyUncompress.RecoveryPending() &&
+                              runtime.hierarchyUncompress.IsRetained() && NativeLifetimeRetained(),
+                          "actual entered call retains its native bank, sequence and frame journal before callback exit");
+                });
+            if (Hook::mode == 3)
+                Bytes::Store(fixture.image + NativeBorrowedGcProfile::markerRva, LONG{0});
+            std::array<unsigned char, 64> after{};
+            std::memcpy(after.data(), reinterpret_cast<const void*>(frames.pointers[0]), after.size());
+            const auto afterTime = Bytes::Load<std::uint32_t>(source.hierarchy + 0x18);
+            refuses([&] { sdk.UncompressAnimation(hierarchy.get()); }, "an entered ambiguous call cannot replay through its old retained facade");
+            hierarchy.reset();
+            Check(runtime.stopping.load() && !finish() && service.IsRetained() && runtime.hierarchyUncompress.RecoveryPending() && Hook::calls == 1 &&
+                      Hook::executed == (Hook::mode == 1 ? 0u : 1u) && Bytes::Load<std::uint32_t>(source.hierarchy + 0x18) == afterTime &&
+                      !std::memcmp(after.data(), reinterpret_cast<const void*>(frames.pointers[0]), after.size()) && !host.mallocCalls && !host.freeCalls,
+                  "End and natural callbacks retain unknown effects without replay, rollback, guessed cleanup or allocation receipts");
+            std::puts(Hook::mode == 1   ? "Production hierarchy Uncompress entered before acknowledgement debt fixture completed"
+                      : Hook::mode == 2 ? "Production hierarchy Uncompress entered after original debt fixture completed"
+                      : Hook::mode == 3 ? "Production hierarchy Uncompress post original owner loss fixture completed"
+                                        : "Production hierarchy Uncompress post original effect mismatch fixture completed");
+        }
+        ClockReaderTestHost::image = previousImage;
+        Hook::image = Hook::hierarchy = 0;
+        Host::active = nullptr;
+        saved.Restore();
+    }
+}

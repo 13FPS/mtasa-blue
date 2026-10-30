@@ -23,6 +23,13 @@ CAnimBlendAssocGroupSA::CAnimBlendAssocGroupSA(CAnimBlendAssocGroupSAInterface* 
     SetupAnimBlock();
 }
 
+CAnimBlendAssocGroupSA::~CAnimBlendAssocGroupSA()
+{
+    // SetupAnimBlock allocated only this CPU wrapper. The native group,
+    // animation block and its reference count remain owned by the engine.
+    delete m_pAnimBlock;
+}
+
 CAnimBlendAssociationSAInterface* CAnimBlendAssocGroupSA::CopyAnimation(unsigned int AnimID)
 {
     CAnimBlendAssociationSAInterface* pAnimAssociationReturn = nullptr;

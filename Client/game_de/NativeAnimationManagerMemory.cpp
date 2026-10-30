@@ -983,6 +983,43 @@ namespace mta::game_de
         output = next;
         return ClockResult::Ok;
     }
+    ClockResult NativeAnimationManagerMemory::ResolveAssociationGroupReference(std::uintptr_t                                 requested,
+                                                                               NativeAnimationAssociationGroupReferenceToken& output) const noexcept
+    {
+        namespace Group = AnimationGroupCreatedDetail;
+        namespace P = NativeAnimationGroupArrayProfile;
+        const auto locator = requested;
+        if (!locator)
+            return ClockResult::InvalidArgument;
+        Group::Snapshot first, final;
+        // Any valid physical row implies row0 exists. Reuse the established
+        // current-array/cookie/private-span qualification rather than scanning
+        // groups or treating the raw address as a classic C++ interface object.
+        auto result = Group::Capture(binding, owner, 0, first);
+        if (result != ClockResult::Ok)
+            return result;
+        if (locator < first.rows)
+            return ClockResult::InvalidArgument;
+        const auto displacement = locator - first.rows;
+        const auto index = displacement / P::RowBytes;
+        if (displacement % P::RowBytes || index >= static_cast<std::uint32_t>(first.count) || index >= first.capacity)
+            return ClockResult::InvalidArgument;
+        NativeAnimationAssociationGroupReferenceToken next;
+        // The existing numeric path independently re-admits the selected row.
+        // Coupling it back to both parent bookends prevents a new current bank
+        // from silently redirecting this raw pointer to the same integer index.
+        if ((result = ResolveAssociationGroup(static_cast<std::uint32_t>(index), next)) != ClockResult::Ok ||
+            (result = Group::Capture(binding, owner, 0, final)) != ClockResult::Ok)
+            return result;
+        if (first.rows != final.rows || first.capacity != final.capacity || first.count != final.count || next.locator != locator)
+            return ClockResult::BindingChanged;
+        if ((result = Group::Begin(binding, owner)) != ClockResult::Ok)
+            return result;
+        // Only the actual runtime stamps its generation after caller-side
+        // owner checks. This immediate origin token is not an ABA promise.
+        output = next;
+        return ClockResult::Ok;
+    }
     ClockResult NativeAnimationManagerMemory::ReadAssociationGroup(const NativeAnimationAssociationGroupReferenceToken& source,
                                                                    NativeAnimationAssociationGroupValues&               output) const noexcept
     {

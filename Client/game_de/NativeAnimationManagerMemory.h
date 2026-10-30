@@ -31,6 +31,9 @@ namespace mta::game_de
         ClockResult ReadStaticAssociationAnimID(std::uint32_t, std::uint32_t, std::int16_t&) const noexcept;
         ClockResult ResolveStaticAssociationById(std::uint32_t, std::uint32_t, NativeAnimationStaticAssociationReferenceToken&) const noexcept;
         ClockResult ResolveAssociationGroup(std::uint32_t, NativeAnimationAssociationGroupReferenceToken&) const noexcept;
+        // Resolve only an exact physical row of the freshly admitted current
+        // cookie-backed array. Raw pointers add no Created or enum-range policy.
+        ClockResult ResolveAssociationGroupReference(std::uintptr_t, NativeAnimationAssociationGroupReferenceToken&) const noexcept;
         ClockResult ReadAssociationGroup(const NativeAnimationAssociationGroupReferenceToken&, NativeAnimationAssociationGroupValues&) const noexcept;
         ClockResult ReadAssociationGroupLoaded(const NativeAnimationAssociationGroupReferenceToken&, bool&) const noexcept;
         ClockResult ReadAssociationGroupBlock(const NativeAnimationAssociationGroupReferenceToken&, NativeAnimationAssociationGroupBlock&) const noexcept;

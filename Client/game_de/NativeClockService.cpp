@@ -230,6 +230,8 @@ namespace mta::game_de
             ClockResult InitializeAnimationStaticAssociation(const NativeAnimationStaticAssociationReferenceToken&, std::uintptr_t,
                                                              std::uintptr_t) noexcept override;
             ClockResult ResolveAnimationAssociationGroup(std::uint64_t, std::uint32_t, NativeAnimationAssociationGroupReferenceToken&) noexcept override;
+            ClockResult ResolveAnimationAssociationGroupInterface(std::uint64_t, std::uintptr_t,
+                                                                  NativeAnimationAssociationGroupReferenceToken&) noexcept override;
             ClockResult ReadAnimationAssociationGroup(const NativeAnimationAssociationGroupReferenceToken&,
                                                       NativeAnimationAssociationGroupValues&) noexcept override;
             ClockResult ReadAnimationAssociationGroupLoaded(const NativeAnimationAssociationGroupReferenceToken&, bool&) noexcept override;
@@ -7072,6 +7074,30 @@ namespace mta::game_de
                 return result;
             if (generation != runtime.generation.load())
                 return ClockResult::OwnerConflict;
+            next.ownerGeneration = generation;
+            output = next;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::ResolveAnimationAssociationGroupInterface(std::uint64_t requestedGeneration, std::uintptr_t requestedLocator,
+                                                                            NativeAnimationAssociationGroupReferenceToken& output) noexcept
+        {
+            const auto generation = requestedGeneration;
+            const auto locator = requestedLocator;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (!generation || generation != runtime.generation.load())
+                return ClockResult::OwnerConflict;
+            NativeAnimationAssociationGroupReferenceToken next;
+            result = NativeAnimationManagerMemory({runtime.image}, &CheckTimingOwner).ResolveAssociationGroupReference(locator, next);
+            if (result != ClockResult::Ok || (result = CheckTimingOwner()) != ClockResult::Ok)
+                return result;
+            if (generation != runtime.generation.load())
+                return ClockResult::OwnerConflict;
+            if (next.locator != locator)
+                return ClockResult::BindingChanged;
+            // Stamping belongs to this same admitted owner, not the memory
+            // reader or a second manager constructed by a raw SDK factory.
             next.ownerGeneration = generation;
             output = next;
             return ClockResult::Ok;

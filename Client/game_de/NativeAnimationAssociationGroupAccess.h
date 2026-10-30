@@ -47,6 +47,13 @@ namespace mta::game_de
         {
             return ClockResult::NotInitialized;
         }
+        // A raw SDK interface is only a candidate address in the current
+        // engine-owned group array. Exact physical membership is re-admitted;
+        // it never grants a native lease, private adoption or release authority.
+        virtual ClockResult ResolveAnimationAssociationGroupInterface(std::uint64_t, std::uintptr_t, NativeAnimationAssociationGroupReferenceToken&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
         // Scalar/source-tag reads do not acquire a child array or require a
         // loaded block, a C-string name, or a nonzero animation count.
         virtual ClockResult ReadAnimationAssociationGroup(const NativeAnimationAssociationGroupReferenceToken&, NativeAnimationAssociationGroupValues&) noexcept

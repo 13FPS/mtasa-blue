@@ -587,4 +587,9 @@ public:
     virtual bool                              IsLoaded() = 0;
     virtual void                              SetIDOffset(int iOffset) = 0;
     virtual CAnimBlendAssocGroupSAInterface*  GetInterface() = 0;
+
+    // Manager factories return unique_ptr<CAnimBlendAssocGroup> owning a CPU
+    // wrapper. Destroy its derived caches without retiring borrowed native
+    // groups/blocks. This changes the common C++ ABI; consumers must rebuild.
+    virtual ~CAnimBlendAssocGroup() = default;
 };

@@ -5,6 +5,7 @@
  ****************************************************************************/
 #pragma once
 #include "NativeAnimationManagerAccess.h"
+#include "NativeAnimationAssociationGroupAccess.h"
 #include "NativeAnimationStaticAssociationAccess.h"
 #include "NativeAnimationSequenceStorageAccess.h"
 #include "NativeAnimationHierarchyAccess.h"
@@ -23,6 +24,8 @@ namespace mta::game_de
     class CAnimManagerDE : public CAnimManager
     {
     public:
+        AnimAssocGroup_type                                GetAnimBlendAssoc(AssocGroupId) const override;
+        AnimAssocGroup_type                                GetAnimBlendAssocGroup(CAnimBlendAssocGroupSAInterface*) override;
         std::unique_ptr<CCustomAnimationCleanup>           BeginCustomAnimationCleanup(const SCustomAnimationCleanupRequest&) override;
         bool                                               HasPendingCustomAnimationCleanup() const noexcept override;
         std::unique_ptr<CAnimBlendSequence>                GetCustomAnimBlendSequence() override;
@@ -94,12 +97,14 @@ namespace mta::game_de
         NativeAnimationBlockIdentity          ReadCounterIdentity(int, const char*) const;
         void                                  RequireFactory(const char*) const;
         std::unique_ptr<CAnimBlock>           MakeBlock(const NativeAnimationBlockIdentity&, const char*);
+        AnimAssocGroup_type                   MakeGroup(const NativeAnimationAssociationGroupReferenceToken&, const char*) const;
         NativeAnimationManagerCounts          Read(const char*) const;
         NativeAnimationManagerAccess&         native;
         const std::uint64_t                   ownerGeneration;
         // Resolve this optional service only from the actual complete owner,
         // shared by every constructor; no second manager or CGame is fabricated.
         NativeAnimationStaticAssociationAccess* staticAccess = dynamic_cast<NativeAnimationStaticAssociationAccess*>(&native);
+        NativeAnimationAssociationGroupAccess*  groupAccess = dynamic_cast<NativeAnimationAssociationGroupAccess*>(&native);
         NativeAnimationBlockAccess*             blockAccess = nullptr;
         CGame*                                  gameProvider = nullptr;
         NativeAnimationSequenceStorageAccess*   storageAccess = nullptr;

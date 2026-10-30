@@ -8561,6 +8561,7 @@ namespace
 #include "AnimBlockRefsFixture.generated.h"
 #include "NativeAnimationBlockRefsOwnerTests.inl"
 #include "AnimationBlockFactoryManager.generated.h"
+#include "AnimationAssociationGroupFactoryManagerFixture.generated.h"
 #include "NativeAnimationBlockFactoryOwnerTests.inl"
 #include "NativeAnimationBlockNameOwnerTests.inl"
 #include "NativeAnimationManagerOwnerTests.inl"
@@ -8612,6 +8613,7 @@ namespace
 #include "NativeStaticAssociationInitializationOwnerTests.inl"
 #include "NativeAnimationAssociationGroupEmptyInitializationOwnerTests.inl"
 #include "NativeAnimationAssociationGroupChildProductsOwnerTests.inl"
+#include "NativeAnimationAssociationGroupFactoriesOwnerTests.inl"
 #include "NativeAnimationStaticAssociationWritesOwnerTests.inl"
 #include "PrivateAnimationAssociationFixture.generated.h"
 #include "NativePrivateAnimationAssociationOwnerTests.inl"
@@ -8772,6 +8774,7 @@ int main(int argc, char** argv)
         staticAssociationInitializationUnknown || (argc == 3 && std::strcmp(argv[2], "--static-association-initialization-success") == 0);
     const bool animationStaticAssociationReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-static-association-reads") == 0;
     const bool animationAssociationGroupReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-association-group-reads") == 0;
+    const bool groupFactoriesOnly = argc == 3 && std::strcmp(argv[2], "--animation-association-group-factories") == 0;
     const bool groupSourceCreationOnly = argc == 3 && std::strncmp(argv[2], "--group-source-creation-", 24) == 0;
     unsigned   groupSourceCreationScenario = 0;
     if (groupSourceCreationOnly)
@@ -8940,10 +8943,10 @@ int main(int argc, char** argv)
            freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly || customAnimationCleanupOnly ||
            standaloneSequenceOperationsOnly || animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly ||
            animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly || animationGroupValidityOnly ||
-           animationIdValidityOnly || animationAssociationGroupReadsOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly ||
-           groupCopyAnimationOnly || groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
-           animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
-           privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
+           animationIdValidityOnly || animationAssociationGroupReadsOnly || groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly ||
+           groupReplacementOnly || groupCopyAnimationOnly || groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly ||
+           animationAssociationGroupOffsetOnly || animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly ||
+           pedRenderOnly || privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
     if (presentTransitionClockOnly)
@@ -9121,6 +9124,14 @@ int main(int argc, char** argv)
         fixture.Create(argv[1]);
         // One real module-pinned lifetime needs one pristine host process.
         NativeAnimationBlocksOwnedSdk(fixture, &AnimationAssociationGroupChildProductsOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (groupFactoriesOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NativeAnimationBlocksOwnedSdk(fixture, &AnimationAssociationGroupFactoriesOwnerFixture::RunPrepared);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

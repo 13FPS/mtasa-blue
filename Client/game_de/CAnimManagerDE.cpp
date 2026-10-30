@@ -4,6 +4,7 @@
  * PURPOSE: Preserve native counter and missing-name facts without fallback
  ****************************************************************************/
 #include "CAnimManagerDE.h"
+#include "CAnimBlendAssocGroupDE.h"
 #include "CAnimBlockRequestDE.h"
 #include "CAnimBlendHierarchyDE.h"
 #include "CAnimBlendSequenceDE.h"
@@ -652,6 +653,54 @@ namespace mta::game_de
     {
         if (!blockAccess || !gameProvider)
             Require(ClockResult::NotInitialized, operation);
+    }
+    CAnimManagerDE::AnimAssocGroup_type CAnimManagerDE::MakeGroup(const NativeAnimationAssociationGroupReferenceToken& token, const char* operation) const
+    {
+        RequireFactory(operation);
+        if (!groupAccess || !ownerGeneration)
+            Require(ClockResult::NotInitialized, operation);
+        if (token.ownerGeneration != ownerGeneration)
+            Require(ClockResult::OwnerConflict, operation);
+        if (!token.locator)
+            Require(ClockResult::BindingChanged, operation);
+        AnimAssocGroup_type result(new CAnimBlendAssocGroupDE(*groupAccess, token, *gameProvider));
+        // Classic construction calls SetupAnimBlock once. Match that warm
+        // through the actual DE path; unique_ptr cleans CPU caches on refusal.
+        (void)result->GetAnimBlock();
+        return result;
+    }
+    CAnimManagerDE::AnimAssocGroup_type CAnimManagerDE::GetAnimBlendAssoc(AssocGroupId requested) const
+    {
+        static_assert(sizeof(AssocGroupId) == sizeof(std::uint32_t));
+        const auto index = static_cast<std::uint32_t>(requested);
+        const auto generation = ownerGeneration;
+        RequireFactory("GetAnimBlendAssoc");
+        if (!groupAccess || !generation)
+            Require(ClockResult::NotInitialized, "GetAnimBlendAssoc");
+        NativeAnimationAssociationGroupReferenceToken token;
+        Require(groupAccess->ResolveAnimationAssociationGroup(generation, index, token), "GetAnimBlendAssoc");
+        if (token.ownerGeneration != generation)
+            Require(ClockResult::OwnerConflict, "GetAnimBlendAssoc");
+        if (token.index != index || !token.locator)
+            Require(ClockResult::BindingChanged, "GetAnimBlendAssoc");
+        return MakeGroup(token, "GetAnimBlendAssoc");
+    }
+    CAnimManagerDE::AnimAssocGroup_type CAnimManagerDE::GetAnimBlendAssocGroup(CAnimBlendAssocGroupSAInterface* raw)
+    {
+        const auto locator = reinterpret_cast<std::uintptr_t>(raw);
+        if (!locator)
+            return nullptr;
+        const auto generation = ownerGeneration;
+        RequireFactory("GetAnimBlendAssocGroup");
+        if (!groupAccess || !generation)
+            Require(ClockResult::NotInitialized, "GetAnimBlendAssocGroup");
+        NativeAnimationAssociationGroupReferenceToken token;
+        Require(groupAccess->ResolveAnimationAssociationGroupInterface(generation, locator, token), "GetAnimBlendAssocGroup");
+        if (token.ownerGeneration != generation || token.locator != locator)
+            Require(ClockResult::OwnerConflict, "GetAnimBlendAssocGroup");
+        // The raw legacy type is only an opaque request for a freshly admitted
+        // current bank row. It is never cast into a native or CPU object.
+        return MakeGroup(token, "GetAnimBlendAssocGroup");
     }
     std::unique_ptr<CAnimBlock> CAnimManagerDE::MakeBlock(const NativeAnimationBlockIdentity& identity, const char* operation)
     {

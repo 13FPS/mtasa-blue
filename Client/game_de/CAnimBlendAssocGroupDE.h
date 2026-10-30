@@ -19,6 +19,7 @@ namespace mta::game_de
     class CAnimBlendAssocGroupDE : public CAnimBlendAssocGroup
     {
     public:
+        ~CAnimBlendAssocGroupDE() override = default;
         CAnimBlendAssociationSAInterface* CopyAnimation(unsigned int) override;
         void                              InitEmptyAssociations(RpClump*) override;
         CAnimBlock*                       GetAnimBlock() override;
@@ -49,6 +50,9 @@ namespace mta::game_de
         }
 
     private:
+        // The real same-owner manager creates only this borrowed CPU facade;
+        // its public unique_ptr owns the CPU child caches, not native rows.
+        friend class CAnimManagerDE;
         NativeAnimationAssociationGroupValues               Read(const char*) const;
         NativeAnimationAssociationGroupAccess&              native;
         const NativeAnimationAssociationGroupReferenceToken reference;
@@ -69,9 +73,10 @@ namespace mta::game_de
         // still re-admits the native row.
         std::vector<StaticProduct> staticFacades;
     };
-    // All eleven SDK methods use actual owner paths. Protected construction
-    // and the unchanged common deletion ABI still grant no public factory or
-    // permission to delete this concrete CPU facade through the common base.
+    // Same-owner manager factories own this CPU facade through the common
+    // virtual destructor. Destruction retires only CPU child caches; the native
+    // owner and explicit game must outlive the facade and its borrowed products.
+    // Tokens re-admit native rows and grant no native allocation or GC lease.
     static_assert(!std::is_abstract_v<CAnimBlendAssocGroupDE> && std::is_base_of_v<CAnimBlendAssocGroup, CAnimBlendAssocGroupDE>);
     static_assert(!std::is_default_constructible_v<CAnimBlendAssocGroupDE>);
 }

@@ -1,7 +1,7 @@
 /****************************************************************************
  * PROJECT: Multi Theft Auto
  * LICENSE: See LICENSE in the repository root
- * PURPOSE: Verify the original compressed timestamp conversion in place
+ * PURPOSE: Verify original bank animation operations and retain unknown effects
  ****************************************************************************/
 #include "NativeAnimationHierarchyUncompress.h"
 #include "NativeAnimationHierarchyOrigin.h"
@@ -10,6 +10,7 @@
 #include "NativeAnimationAssociationProgressProfile.h"
 #include "NativeAnimationHierarchyDecompressProfile.h"
 #include "NativeAnimationHierarchyEvictionProfile.h"
+#include "NativePrivateAnimationHierarchyPostProcessProfile.h"
 #include "NativeCustomAnimSequenceStorageProfile.h"
 #include "NativeModelLoadedReader.h"
 #include "NativeModelReferenceHeap.h"
@@ -39,6 +40,7 @@ namespace mta::game_de
         namespace Heap = NativeModelReferenceHeap;
         namespace StorageProfile = NativeCustomAnimSequenceStorageProfile;
         using Calls = NativeAnimationHierarchyUncompressCalls::Receipt;
+        using Operation = NativeAnimationHierarchyUncompressCalls::Operation;
         using CheckOwner = NativeAnimationHierarchyUncompressCalls::CheckOwner;
         using Hierarchy = std::array<unsigned char, 40>;
         using Row = std::array<unsigned char, 80>;
@@ -204,7 +206,7 @@ namespace mta::game_de
             return _mm_cvtss_f32(_mm_mul_ss(_mm_cvtepi32_ps(integer), _mm_set_ss(Float(scale))));
         }
         template <class Plan>
-        void PredictPostProcess(Plan& plan) noexcept
+        void PredictPostProcess(Plan& plan, bool quaternions = true, bool timestamps = true) noexcept
         {
             float         duration = 0.0f;
             std::uint32_t sign = 0;
@@ -213,40 +215,45 @@ namespace mta::game_de
             {
                 const auto stride = frame.stride * 2;
                 const auto count = frame.expected.size() / stride;
-                for (std::size_t key = 1; key != count; ++key)
-                {
-                    const auto current = key * stride;
-                    const auto previous = current - stride;
-                    const auto multiply = [&](std::size_t word)
+                if (quaternions)
+                    for (std::size_t key = 1; key != count; ++key)
                     {
-                        return _mm_mul_ss(_mm_set_ss(Float(At<std::uint32_t>(frame.expected, current + word * 4))),
-                                          _mm_set_ss(Float(At<std::uint32_t>(frame.expected, previous + word * 4))));
-                    };
-                    // Preserve FEC4F0's rounding order: (y*prevY + x*prevX)
-                    // + (w*prevW + z*prevZ). The possibly flipped current
-                    // quaternion becomes the next predecessor.
-                    const auto xy = _mm_add_ss(multiply(1), multiply(0));
-                    const auto zw = _mm_add_ss(multiply(3), multiply(2));
-                    if (_mm_comilt_ss(_mm_add_ss(xy, zw), _mm_setzero_ps()))
-                        for (std::size_t word = 0; word != 4; ++word)
-                            Put(frame.expected, current + word * 4, At<std::uint32_t>(frame.expected, current + word * 4) ^ sign);
-                }
-                const auto last = Float(At<std::uint32_t>(frame.expected, (count - 1) * stride + 16));
-                if (_mm_comigt_ss(_mm_set_ss(last), _mm_set_ss(duration)))
-                    duration = last;
-                // FEC1E0 chooses the signed maximum last absolute time before
-                // descending SUBSS stores. Backward traversal preserves each
-                // predecessor's original timestamp, including signed zeros.
-                for (std::size_t key = count - 1; key != 0; --key)
+                        const auto current = key * stride;
+                        const auto previous = current - stride;
+                        const auto multiply = [&](std::size_t word)
+                        {
+                            return _mm_mul_ss(_mm_set_ss(Float(At<std::uint32_t>(frame.expected, current + word * 4))),
+                                              _mm_set_ss(Float(At<std::uint32_t>(frame.expected, previous + word * 4))));
+                        };
+                        // Preserve FEC4F0's rounding order: (y*prevY + x*prevX)
+                        // + (w*prevW + z*prevZ). The possibly flipped current
+                        // quaternion becomes the next predecessor.
+                        const auto xy = _mm_add_ss(multiply(1), multiply(0));
+                        const auto zw = _mm_add_ss(multiply(3), multiply(2));
+                        if (_mm_comilt_ss(_mm_add_ss(xy, zw), _mm_setzero_ps()))
+                            for (std::size_t word = 0; word != 4; ++word)
+                                Put(frame.expected, current + word * 4, At<std::uint32_t>(frame.expected, current + word * 4) ^ sign);
+                    }
+                if (timestamps)
                 {
-                    const auto current = key * stride + 16;
-                    const auto previous = current - stride;
-                    const auto difference = _mm_sub_ss(_mm_set_ss(Float(At<std::uint32_t>(frame.expected, current))),
-                                                       _mm_set_ss(Float(At<std::uint32_t>(frame.expected, previous))));
-                    Put(frame.expected, current, Bits(_mm_cvtss_f32(difference)));
+                    const auto last = Float(At<std::uint32_t>(frame.expected, (count - 1) * stride + 16));
+                    if (_mm_comigt_ss(_mm_set_ss(last), _mm_set_ss(duration)))
+                        duration = last;
+                    // FEC1E0 chooses the signed maximum last absolute time before
+                    // descending SUBSS stores. Backward traversal preserves each
+                    // predecessor's original timestamp, including signed zeros.
+                    for (std::size_t key = count - 1; key != 0; --key)
+                    {
+                        const auto current = key * stride + 16;
+                        const auto previous = current - stride;
+                        const auto difference = _mm_sub_ss(_mm_set_ss(Float(At<std::uint32_t>(frame.expected, current))),
+                                                           _mm_set_ss(Float(At<std::uint32_t>(frame.expected, previous))));
+                        Put(frame.expected, current, Bits(_mm_cvtss_f32(difference)));
+                    }
                 }
             }
-            Put(plan.expected, 0x18, Bits(duration));
+            if (timestamps)
+                Put(plan.expected, 0x18, Bits(duration));
         }
         ClockResult Observe(Binding binding, std::uintptr_t row, Hierarchy& output) noexcept
         {
@@ -321,6 +328,7 @@ namespace mta::game_de
         bool                                                       payload = false, cache = false, conversion = false, sharedInput = false, compression = false;
         std::unique_ptr<Data>                                      victim;
         Data*                                                      joint = nullptr;
+        NativeAnimationHierarchyUncompressCalls::Operation         operation = NativeAnimationHierarchyUncompressCalls::Operation::Uncompress;
         NativeAnimationHierarchyUncompressCalls::CheckOwner        afterApplicationFrameOwner = nullptr;
         NativeModelReferenceHeap::Value                            heap{};
         NativeModelLoadedReader::Value                             stream{};
@@ -461,9 +469,182 @@ namespace mta::game_de
                 return ClockResult::BindingChanged;
             return ConversionOwner(image, owner, plan);
         }
+
+        template <class Plan>
+        bool PostSource(std::uintptr_t image, const Plan& plan) noexcept
+        {
+            namespace Profile = NativePrivateAnimationHierarchyPostProcessProfile;
+            const auto qualify = [&](std::uintptr_t rva, const auto& code)
+            {
+                const NativeAnimationBlockProfile::Pin              pin{rva, code.data(), code.size()};
+                std::array<unsigned char, Profile::MaximumPinBytes> observed{};
+                return Origin::Sections({image}, plan.location.rva, 0, &pin, 1) &&
+                       Image::ReadImage(image, image + rva, observed.data(), code.size(), false, true) &&
+                       !std::memcmp(observed.data(), code.data(), code.size());
+            };
+            if (plan.operation == Operation::TotalTime)
+                return qualify(Profile::TimeRva, Profile::Time);
+            std::array<unsigned char, 16> sign{};
+            return plan.operation == Operation::QuaternionFlips && qualify(Profile::QuaternionRva, Profile::Quaternion) &&
+                   Heap::ReadOnlyImage(image, image + ConversionProfile::SignMask.rva, sign.size()) &&
+                   Image::ReadImage(image, image + ConversionProfile::SignMask.rva, sign.data(), sign.size()) &&
+                   !std::memcmp(sign.data(), ConversionProfile::SignMask.bytes, sign.size());
+        }
+        ClockResult CapturePost(std::uintptr_t image, CheckOwner owner, const Origin::Location& location, Observation& output) noexcept
+        {
+            const auto result = Origin::Capture({image}, owner, location.ordinal, location.rva, &Observe, output);
+            if (result != ClockResult::Ok)
+                return result;
+            return At<std::uint32_t>(output.payload, 0x14) == output.origin.block ? ClockResult::Ok : ClockResult::BindingChanged;
+        }
+        template <class Plan>
+        ClockResult VerifyPost(std::uintptr_t image, CheckOwner owner, Plan& plan, bool after) noexcept
+        {
+            auto result = ConversionOwner(image, owner, plan);
+            if (result != ClockResult::Ok)
+                return result;
+            if ((_mm_getcsr() & 0xffc0u) != plan.sseControl || !PostSource(image, plan))
+                return ClockResult::BindingChanged;
+            if ((result = CapturePost(image, owner, plan.location, plan.observed)) != ClockResult::Ok)
+                return result;
+            if (!Origin::Same(plan.before.origin, plan.observed.origin) || plan.observed.payload != (after ? plan.expected : plan.before.payload))
+                return ClockResult::BindingChanged;
+            std::uint64_t                 capacity = 0;
+            std::array<unsigned char, 32> block{};
+            std::array<unsigned char, 16> stream{};
+            if (!Map::PrivateWritable(plan.cookieAddress, plan.sequenceBytes) || !Map::Copy(plan.cookieAddress, &capacity, sizeof(capacity)) ||
+                !Image::ReadImage(image, plan.blockAddress, block.data(), block.size(), true) ||
+                !Image::ReadImage(image, plan.stream.rowAddress, stream.data(), stream.size(), true))
+                return ClockResult::ReadFailure;
+            if (capacity != plan.capacity || block != plan.blockHeader || stream != plan.streamHeader)
+                return ClockResult::BindingChanged;
+            NativeModelLoadedReader reader({image}, owner);
+            if ((result = reader.Recheck(plan.stream)) != ClockResult::Ok)
+                return result;
+            for (auto& sequence : plan.sequences)
+                if (!Map::Copy(sequence.address, sequence.observed.data(), sequence.observed.size()))
+                    return ClockResult::ReadFailure;
+                else if (sequence.observed != sequence.before)
+                    return ClockResult::BindingChanged;
+            for (auto& frame : plan.frames)
+                if (!Map::PrivateWritable(frame.address, frame.before.size()) || !Map::Copy(frame.address, frame.observed.data(), frame.observed.size()))
+                    return ClockResult::ReadFailure;
+                else if (frame.observed != (after ? frame.expected : frame.before))
+                    return ClockResult::BindingChanged;
+            Observation final;
+            if ((result = CapturePost(image, owner, plan.location, final)) != ClockResult::Ok || (result = reader.Recheck(plan.stream)) != ClockResult::Ok)
+                return result;
+            if (!Origin::Same(plan.before.origin, final.origin) || final.payload != plan.observed.payload || !PostSource(image, plan) ||
+                (_mm_getcsr() & 0xffc0u) != plan.sseControl)
+                return ClockResult::BindingChanged;
+            return ConversionOwner(image, owner, plan);
+        }
+        template <class Plan>
+        ClockResult PreparePost(std::uintptr_t image, CheckOwner owner, Plan& plan, Calls& receipt)
+        {
+            auto result = ConversionOwner(image, owner, plan);
+            if (result != ClockResult::Ok)
+                return result;
+            if ((result = Origin::Locate({image}, plan.token.locator, plan.location)) != ClockResult::Ok ||
+                (result = CapturePost(image, owner, plan.location, plan.before)) != ClockResult::Ok)
+                return result;
+            plan.expected = plan.before.payload;
+            if (!PostSource(image, plan))
+                return ClockResult::BindingChanged;
+            const auto hierarchyCount = At<std::int16_t>(plan.before.payload, 0x10);
+            if (hierarchyCount <= 0 || plan.before.payload[0x12])
+                return ClockResult::OwnerConflict;
+            plan.sseControl = _mm_getcsr() & 0xffc0u;
+            if ((plan.sseControl & 0x1f80u) != 0x1f80u)
+                return ClockResult::OwnerConflict;
+            plan.sequenceFirst = At<std::uintptr_t>(plan.before.payload, 8);
+            if (plan.sequenceFirst < 8 || plan.sequenceFirst % 8)
+                return ClockResult::BindingChanged;
+            plan.cookieAddress = plan.sequenceFirst - 8;
+            if (!Map::Copy(plan.cookieAddress, &plan.capacity, sizeof(plan.capacity)))
+                return ClockResult::ReadFailure;
+            if (plan.capacity < static_cast<std::uint16_t>(hierarchyCount))
+                return ClockResult::BindingChanged;
+            if (plan.capacity > (MaximumPreparedBytes - 8) / ReadProfile::SequenceStride)
+                return ClockResult::Busy;
+            plan.sequenceBytes = 8 + static_cast<std::size_t>(plan.capacity) * ReadProfile::SequenceStride;
+            if (!Map::PrivateWritable(plan.cookieAddress, plan.sequenceBytes) ||
+                !Map::Disjoint(plan.cookieAddress, plan.sequenceBytes, plan.token.locator, plan.expected.size()))
+                return ClockResult::BindingChanged;
+            plan.blockAddress = image + NativeAnimationBlockProfile::BankRva + plan.before.origin.block * NativeAnimationBlockProfile::RowBytes;
+            if (!Image::ReadImage(image, plan.blockAddress, plan.blockHeader.data(), plan.blockHeader.size(), true))
+                return ClockResult::ReadFailure;
+            if (plan.blockHeader[NativeAnimationBlockProfile::LoadedOffset] != 1)
+                return ClockResult::NotInitialized;
+            NativeModelLoadedReader reader({image}, owner);
+            if ((result = reader.Read(NativeStreamingResourceProfile::IfpFirst + plan.before.origin.block, plan.stream)) != ClockResult::Ok)
+                return result;
+            if (plan.stream.rawLoadState != 1 || !plan.stream.streamedIn)
+                return ClockResult::NotInitialized;
+            if (!Image::ReadImage(image, plan.stream.rowAddress, plan.streamHeader.data(), plan.streamHeader.size(), true))
+                return ClockResult::ReadFailure;
+            plan.sequences.reserve(static_cast<std::size_t>(hierarchyCount));
+            plan.frames.reserve(static_cast<std::size_t>(hierarchyCount));
+            for (std::int32_t index = 0; index < hierarchyCount; ++index)
+            {
+                Sequence sequence;
+                sequence.address = plan.sequenceFirst + static_cast<std::size_t>(index) * ReadProfile::SequenceStride;
+                if (!Map::Copy(sequence.address, sequence.before.data(), sequence.before.size()))
+                    return ClockResult::ReadFailure;
+                sequence.expected = sequence.before;
+                const auto flags = At<std::uint16_t>(sequence.before, 0x42);
+                const auto count = At<std::int16_t>(sequence.before, 0x44);
+                if ((flags & 4) || count <= 0)
+                    return ClockResult::OwnerConflict;
+                Frame frame;
+                frame.address = At<std::uintptr_t>(sequence.before, 0x48);
+                frame.stride = flags & 2 ? FrameProfile::RootStride : FrameProfile::ChildStride;
+                const auto bytes = static_cast<std::size_t>(count) * frame.stride * 2;
+                if (bytes > MaximumPreparedBytes - plan.preparedBytes)
+                    return ClockResult::Busy;
+                if (!frame.address || frame.address % 4 || !Map::PrivateWritable(frame.address, bytes) ||
+                    !Map::Disjoint(frame.address, bytes, plan.cookieAddress, plan.sequenceBytes) ||
+                    !Map::Disjoint(frame.address, bytes, plan.token.locator, plan.expected.size()) ||
+                    (At<std::uintptr_t>(plan.before.payload, 0x20) && !Map::Disjoint(frame.address, bytes, At<std::uintptr_t>(plan.before.payload, 0x20), 24)))
+                    return ClockResult::BindingChanged;
+                for (const auto& prior : plan.frames)
+                    if (!Map::Disjoint(frame.address, bytes, prior.address, prior.before.size()))
+                        return ClockResult::OwnerConflict;
+                frame.before.resize(bytes);
+                frame.observed.resize(bytes);
+                if (!Map::Copy(frame.address, frame.before.data(), bytes))
+                    return ClockResult::ReadFailure;
+                // Reject only nonfinite lanes actually consumed by this
+                // operation; unrelated position/time bytes remain opaque.
+                for (std::int32_t key = 0; key < count; ++key)
+                    for (std::size_t lane = plan.operation == Operation::TotalTime ? 4 : 0; lane < (plan.operation == Operation::TotalTime ? 5u : 4u); ++lane)
+                        if (!Finite(At<std::uint32_t>(frame.before, static_cast<std::size_t>(key) * frame.stride * 2 + lane * 4)))
+                            return ClockResult::OwnerConflict;
+                frame.expected = frame.before;
+                plan.preparedBytes += bytes;
+                receipt.preparedFrames += static_cast<std::uint16_t>(count);
+                plan.sequences.push_back(std::move(sequence));
+                plan.frames.push_back(std::move(frame));
+            }
+            const auto predictionSse = _mm_getcsr();
+            PredictPostProcess(plan, plan.operation == Operation::QuaternionFlips, plan.operation == Operation::TotalTime);
+            _mm_setcsr(predictionSse);
+            for (const auto& frame : plan.frames)
+                for (std::size_t key = 0; key != frame.before.size() / (frame.stride * 2); ++key)
+                    if (std::memcmp(frame.before.data() + key * frame.stride * 2, frame.expected.data() + key * frame.stride * 2, frame.stride * 2))
+                        ++receipt.modifiedFrames;
+            receipt.sequences = static_cast<std::uint32_t>(plan.sequences.size());
+            receipt.beforeTimeBits = At<std::uint32_t>(plan.before.payload, 0x18);
+            receipt.afterTimeBits = At<std::uint32_t>(plan.expected, 0x18);
+            receipt.noOp = plan.before.payload == plan.expected && receipt.modifiedFrames == 0;
+            return VerifyPost(image, owner, plan, false);
+        }
+
         template <class Plan>
         ClockResult Verify(std::uintptr_t image, CheckOwner owner, Plan& plan, bool after) noexcept
         {
+            if (plan.operation != Operation::Uncompress)
+                return VerifyPost(image, owner, plan, after);
             if (plan.conversion)
             {
                 // Compression publishes its output before target expansion.
@@ -1019,6 +1200,8 @@ namespace mta::game_de
         template <class Plan>
         ClockResult Prepare(std::uintptr_t image, CheckOwner owner, Plan& plan, Calls& receipt)
         {
+            if (plan.operation != Operation::Uncompress)
+                return PreparePost(image, owner, plan, receipt);
             auto result = Origin::Locate({image}, plan.token.locator, plan.location);
             if (result != ClockResult::Ok || (result = Capture(image, owner, plan.location, plan.before)) != ClockResult::Ok)
                 return result;
@@ -1136,11 +1319,43 @@ namespace mta::game_de
     ClockResult NativeAnimationHierarchyUncompress::Uncompress(std::uintptr_t image, const NativeAnimationHierarchyReferenceToken& requested, CheckOwner owner,
                                                                Receipt* output, Invoke invoke, CheckOwner afterApplicationFrameOwner) noexcept
     {
+        return Process(image, requested, NativeAnimationHierarchyUncompressCalls::Operation::Uncompress, owner, output, invoke, afterApplicationFrameOwner);
+    }
+    ClockResult NativeAnimationHierarchyUncompress::PostProcess(std::uintptr_t image, const NativeAnimationHierarchyReferenceToken& requested,
+                                                                NativeAnimationHierarchyUncompressCalls::Operation operation, CheckOwner owner, Receipt* output,
+                                                                Invoke invoke, CheckOwner afterApplicationFrameOwner) noexcept
+    {
+        if (operation != NativeAnimationHierarchyUncompressCalls::Operation::QuaternionFlips &&
+            operation != NativeAnimationHierarchyUncompressCalls::Operation::TotalTime)
+        {
+            if (output)
+            {
+                *output = {};
+                output->hierarchy = requested.locator;
+                output->generation = requested.ownerGeneration;
+                output->operation = operation;
+                output->debt = debt.load(std::memory_order_acquire);
+                output->result = ClockResult::InvalidArgument;
+            }
+            return ClockResult::InvalidArgument;
+        }
+        return Process(image, requested, operation, owner, output, invoke, afterApplicationFrameOwner);
+    }
+    ClockResult NativeAnimationHierarchyUncompress::Process(std::uintptr_t image, const NativeAnimationHierarchyReferenceToken& requested,
+                                                            NativeAnimationHierarchyUncompressCalls::Operation operationKind, CheckOwner owner, Receipt* output,
+                                                            Invoke invoke, CheckOwner afterApplicationFrameOwner) noexcept
+    {
         namespace Detail = AnimationHierarchyUncompressDetail;
         const auto request = requested;
         Receipt    receipt;
         receipt.hierarchy = request.locator;
         receipt.generation = request.ownerGeneration;
+        receipt.operation = operationKind;
+        receipt.postprocessPath = operationKind != NativeAnimationHierarchyUncompressCalls::Operation::Uncompress;
+        if (receipt.postprocessPath)
+            receipt.entryRva = operationKind == NativeAnimationHierarchyUncompressCalls::Operation::QuaternionFlips
+                                   ? NativePrivateAnimationHierarchyPostProcessProfile::QuaternionRva
+                                   : NativePrivateAnimationHierarchyPostProcessProfile::TimeRva;
         const auto finish = [&](ClockResult result)
         {
             if (receipt.entered && result != ClockResult::Ok)
@@ -1183,6 +1398,7 @@ namespace mta::game_de
         {
             data = std::make_unique<Data>();
             data->token = request;
+            data->operation = operationKind;
             data->afterApplicationFrameOwner = afterApplicationFrameOwner;
             result = Detail::Prepare(image, owner, *data, receipt);
         }
@@ -1201,12 +1417,12 @@ namespace mta::game_de
 #endif
         // All rows, expected bytes and post-call buffers exist before entry.
         // Unknown native payload effects retain this actual plan with no replay.
-        if (data->conversion && (result = Detail::ConversionOwner(image, owner, *data)) != ClockResult::Ok)
+        if ((data->conversion || receipt.postprocessPath) && (result = Detail::ConversionOwner(image, owner, *data)) != ClockResult::Ok)
             return finish(result);
         receipt.entered = true;
         result = entry(reinterpret_cast<NativeAnimationHierarchyUncompressCalls::Function>(image + receipt.entryRva), request.locator, receipt.exceptionCode);
         receipt.returned = result == ClockResult::Ok;
-        const auto postOwner = data->conversion ? Detail::ConversionOwner(image, owner, *data) : ClockResult::Ok;
+        const auto postOwner = data->conversion || receipt.postprocessPath ? Detail::ConversionOwner(image, owner, *data) : ClockResult::Ok;
         if (result != ClockResult::Ok)
             return finish(result);
         if (postOwner != ClockResult::Ok)

@@ -8678,6 +8678,7 @@ namespace
 #include "NativeAnimationHierarchyUncompressOwnerTests.inl"
 #include "NativeBankDecompressionOwnerTests.inl"
 #include "NativeBankEvictionOwnerTests.inl"
+#include "NativeBankPostprocessOwnerTests.inl"
 #include "ApplicationTimingOwnerTests.inl"
 
 // The strict receiver must execute production typed tickets and the distinct
@@ -8836,6 +8837,16 @@ int main(int argc, char** argv)
         for (unsigned index = 0; index != 4; ++index)
             if (std::strcmp(argv[2] + 21, names[index]) == 0)
                 applicationTimingScenario = index;
+    }
+    const bool bankPostprocessOnly = argc == 3 && std::strncmp(argv[2], "--bank-postprocess-", 19) == 0;
+    unsigned   bankPostprocessScenario = 12;
+    if (bankPostprocessOnly)
+    {
+        const char* names[] = {"quaternion-success", "time-success", "refusals",         "timer-owner", "quaternion-before",   "quaternion-after",
+                               "time-before",        "time-after",   "quaternion-owner", "time-owner",  "quaternion-mismatch", "time-mismatch"};
+        for (unsigned index = 0; index != 12; ++index)
+            if (std::strcmp(argv[2] + 19, names[index]) == 0)
+                bankPostprocessScenario = index;
     }
     const bool bankEvictionOnly = argc == 3 && std::strncmp(argv[2], "--bank-eviction-", 16) == 0;
     unsigned   bankEvictionScenario = 13;
@@ -9057,11 +9068,12 @@ int main(int argc, char** argv)
            freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly || customAnimationCleanupOnly ||
            standaloneSequenceOperationsOnly || animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly ||
            animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly || animationGroupValidityOnly ||
-           animationIdValidityOnly || animationAssociationGroupReadsOnly || applicationTimingOnly || bankEvictionOnly || bankDecompressionOnly ||
-           hierarchyUncompressOnly || numericAssociationOnly || dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly ||
-           groupReplacementOnly || groupCopyAnimationOnly || groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly ||
-           animationAssociationGroupOffsetOnly || animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly ||
-           pedRenderOnly || privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
+           animationIdValidityOnly || animationAssociationGroupReadsOnly || applicationTimingOnly || bankPostprocessOnly || bankEvictionOnly ||
+           bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly || dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly ||
+           jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly || groupEmptyInitializationOnly ||
+           animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly || animationStaticAssociationReadsOnly ||
+           staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly || privateAssociationsOnly || associationBonesOnly ||
+           associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
     if (presentTransitionClockOnly)
@@ -9268,6 +9280,18 @@ int main(int argc, char** argv)
             fixture.Create(argv[1]);
             ApplicationTimingOwnerFixture::Run(fixture, applicationTimingScenario);
         }
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (bankPostprocessOnly)
+    {
+        Check(bankPostprocessScenario < 12, "exact finite bank postprocess scenario required");
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        // Unknown native effects keep a distinct host lifetime. A later
+        // scenario never resets the native command journal to permit replay.
+        BankPostprocessOwnerFixture::scenario = bankPostprocessScenario;
+        BankPostprocessOwnerFixture::RunPrepared(fixture);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

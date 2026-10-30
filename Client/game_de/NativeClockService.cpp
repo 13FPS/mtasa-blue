@@ -4079,6 +4079,21 @@ namespace mta::game_de
             auto       result = CheckAnimationHierarchyRequest(request);
             if (result != ClockResult::Ok)
                 return result;
+            if (!runtime.privateHierarchies.Owns(request))
+            {
+                // A bank facade borrows its real completed engine hierarchy
+                // after original frame work; it is never a private allocation.
+                NativeAnimationHierarchyUncompressCalls::Receipt receipt;
+                result = runtime.hierarchyUncompress.PostProcess(runtime.image, request, NativeAnimationHierarchyUncompressCalls::Operation::QuaternionFlips,
+                                                                 &CheckTimingOwner, &receipt, nullptr, &CheckApplicationTimingOwner);
+                if (result == ClockResult::Ok)
+                    result = CheckAnimationHierarchyRequest(request);
+                receipt.result = result;
+                runtime.hierarchyUncompressReceipt = receipt;
+                if ((receipt.entered && result != ClockResult::Ok) || runtime.hierarchyUncompress.RecoveryPending())
+                    Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+                return result;
+            }
             NativePrivateAnimationHierarchyController::PostProcessReceipt receipt;
             result = runtime.privateHierarchies.RemoveQuaternionFlips(runtime.image, request, &CheckTimingOwner, &receipt);
             PublishCustomAnimationSequenceDebt(request.ownerGeneration);
@@ -4098,6 +4113,21 @@ namespace mta::game_de
             auto       result = CheckAnimationHierarchyRequest(request);
             if (result != ClockResult::Ok)
                 return result;
+            if (!runtime.privateHierarchies.Owns(request))
+            {
+                // A bank facade borrows its real completed engine hierarchy
+                // after original frame work; it is never a private allocation.
+                NativeAnimationHierarchyUncompressCalls::Receipt receipt;
+                result = runtime.hierarchyUncompress.PostProcess(runtime.image, request, NativeAnimationHierarchyUncompressCalls::Operation::TotalTime,
+                                                                 &CheckTimingOwner, &receipt, nullptr, &CheckApplicationTimingOwner);
+                if (result == ClockResult::Ok)
+                    result = CheckAnimationHierarchyRequest(request);
+                receipt.result = result;
+                runtime.hierarchyUncompressReceipt = receipt;
+                if ((receipt.entered && result != ClockResult::Ok) || runtime.hierarchyUncompress.RecoveryPending())
+                    Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+                return result;
+            }
             NativePrivateAnimationHierarchyController::PostProcessReceipt receipt;
             result = runtime.privateHierarchies.CalculateTotalTime(runtime.image, request, &CheckTimingOwner, &receipt);
             PublishCustomAnimationSequenceDebt(request.ownerGeneration);

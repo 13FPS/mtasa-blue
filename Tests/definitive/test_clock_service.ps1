@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('BankEviction','BankDecompression','ApplicationTiming','AnimationHierarchyUncompress','NumericAssociationOwner','DynamicClumpOwner','AnimationAssociationGroupFactories','GroupSourceCreationOwner','JointTemporaryStaticInitializerOwner','GroupReplacementOwner','GroupCopyAnimationOwner','GroupEmptyInitialization','AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','PresentTransitionClock','StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
+    [ValidateSet('BankPostprocess','BankEviction','BankDecompression','ApplicationTiming','AnimationHierarchyUncompress','NumericAssociationOwner','DynamicClumpOwner','AnimationAssociationGroupFactories','GroupSourceCreationOwner','JointTemporaryStaticInitializerOwner','GroupReplacementOwner','GroupCopyAnimationOwner','GroupEmptyInitialization','AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','PresentTransitionClock','StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -23,6 +23,10 @@ $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;a
 # Historical markers start false and are set only by the branch that actually
 # executed. Focus mode must never inherit the cumulative suite's claims.
 $record['runScope'] = $Scope
+$record['nativeBankPostprocessActualSdkOwnerTested']=$false
+$record['nativeBankPostprocessEffectsTested']=$false
+$record['nativeBankPostprocessRefusalsTested']=$false
+$record['nativeBankPostprocessUnknownRetained']=$false
 $record['nativeBankEvictionActualSdkOwnerTested']=$false
 $record['nativeBankEvictionConversionTested']=$false
 $record['nativeBankEvictionRefusalsTested']=$false
@@ -657,6 +661,7 @@ try {
     $sourceNames += @('Client/game_de/NativeAnimationHierarchyCacheRemove.h','Client/game_de/NativeAnimationHierarchyCacheRemove.cpp','Client/game_de/NativeAnimationHierarchyCacheRemoveProfile.h')
     $sourceNames += @('Tests/definitive/ApplicationTimingOwnerTests.inl')
     $sourceNames += @('Tests/definitive/NativeBankDecompressionOwnerTests.inl','Client/game_de/NativeAnimationHierarchyDecompressProfile.h','Tests/definitive/NativeBankEvictionOwnerTests.inl','Client/game_de/NativeAnimationHierarchyEvictionProfile.h')
+    $sourceNames += @('Tests/definitive/NativeBankPostprocessOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativeAnimationHierarchyUncompress.h','Client/game_de/NativeAnimationHierarchyUncompress.cpp','Tests/definitive/NativeAnimationHierarchyUncompressOwnerTests.inl','Tests/definitive/Write-AnimationManagerUncompressFixture.ps1')
     $sourceNames += @('Tests/definitive/NativeNumericAssociationOwnerTests.inl','Tests/definitive/Write-AnimationAssociationNumericFactoryFixture.ps1','Tests/definitive/Write-AnimationAssociationRawFactoryFixture.ps1','Client/game_de/NativeAnimationAssociationIssuedView.h')
     $sourceNames += @('Tests/definitive/NativeDynamicClumpOwnerTests.inl','Client/game_de/NativeAnimationAssociationClumpTypes.h','Client/game_de/NativeAnimationAssociationClumpCalls.h','Client/game_de/NativeAnimationClumpInitializationPlan.h','Client/game_de/NativeAnimationClumpInitializationPlan.cpp','Client/game_de/NativeAnimationAssociationClumpVerification.h','Client/game_de/NativeAnimationAssociationClumpVerification.cpp','Client/game_de/NativeAnimationAssociationClumpOrigin.h','Client/game_de/NativeAnimationAssociationClumpOrigin.cpp','Client/game_de/NativeAnimationAssociationClumpStorage.inl','Client/game_de/NativeAnimationAssociationHierarchyDependency.h','Client/game_de/NativeAnimationAssociationClumpStorageState.h','Client/game_de/NativeTemporaryDynamicAssociationInitializeCalls.h','Client/game_de/NativeTemporaryDynamicAssociationInitializeCalls.cpp')
@@ -1131,7 +1136,7 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         (Join-Path $taskRoot 'Client/game_de/NativePresentTransitionGate.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeImageAccess.cpp')) +
         $runtimeDependencies + @(('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'fixture.pdb')),('/Fe'+$executable),'/link','bcrypt.lib','user32.lib') + $objects
-    if($Scope -in @('PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess')){
+    if($Scope -in @('PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','BankPostprocess')){
         # All selected positive calls execute the real admitted saved body;
         # the same delegate schedules intentional post-return failures only.
         $postHook=Join-Path $scratchRoot 'PrivateHierarchyPostprocessHook.generated.h'
@@ -1507,6 +1512,42 @@ namespace ClockPrivateHierarchyParentWriteFixture {
             $part=[IO.File]::ReadAllText($run.stdout)+[IO.File]::ReadAllText($run.stderr)
             if($run.exitCode -ne 0 -or $run.timedOut -or $part -notmatch 'Passed (\d+) production clock service checks'){throw ('Application timing '+$scenario+' failed')}
             if((Sha $copy) -cne $compiledHash){throw 'Application timing execution copy changed'}
+            $record.checks+=[int]$Matches[1];$texts+=$part
+        }
+        $record.testRun=$record.testRuns[-1];$text=$texts -join [Environment]::NewLine
+    } elseif($Scope -eq 'BankPostprocess'){
+        # The one compiled binary covers new actual post-frame conversions and
+        # all37 component regressions and the existing private success owner, each in a fresh host.
+        $record['testRuns']=@();$record['testScenarioExecutables']=@();$texts=@();$compiledHash=Sha $executable
+        $cases=@()
+        foreach($scenario in @('quaternion-success','time-success','refusals','timer-owner','quaternion-before','quaternion-after','time-before','time-after','quaternion-owner','time-owner','quaternion-mismatch','time-mismatch')){
+            $cases+=@{key=('bank-postprocess-'+$scenario);cli=('--bank-postprocess-'+$scenario)}
+        }
+        foreach($scenario in @('success','refusals','timer-owner','entered-before','entered-after','late-owner','victim-mismatch','target-mismatch','victim-fallback','target-fallback','victim-no-output','target-no-output','cache-mismatch')){
+            $cases+=@{key=('bank-eviction-'+$scenario);cli=('--bank-eviction-'+$scenario)}
+        }
+        foreach($scenario in @('success','refusals','timer-owner','entered-before','entered-after','late-owner','effect-mismatch','allocation-fallback','no-output')){
+            $cases+=@{key=('bank-decompression-'+$scenario);cli=('--bank-decompression-'+$scenario)}
+        }
+        foreach($scenario in @('success','refusals','entered-before','entered-after','late-owner','effect-mismatch','cache-before','cache-after','cache-mismatch','remove-success','remove-before','remove-after','remove-mismatch','remove-partial','remove-owner')){
+            $cases+=@{key=('hierarchy-uncompress-'+$scenario);cli=('--hierarchy-uncompress-'+$scenario)}
+        }
+        # Reuse the existing actual private SDK success case in this binary.
+        # Runtime's new bank dispatch must preserve the private owner branch.
+        $cases+=@{key='private-hierarchy-postprocess-success';cli='--private-hierarchy-postprocess-success'}
+        foreach($case in $cases){
+            $scenarioRoot=Join-Path $scratchRoot $case.key
+            [IO.Directory]::CreateDirectory($scenarioRoot)|Out-Null
+            $copy=Join-Path $scenarioRoot ([IO.Path]::GetFileName($executable))
+            if(Test-Path -LiteralPath $copy){throw 'Bank postprocess execution copy already exists'}
+            Copy-Item -LiteralPath $executable -Destination $copy
+            if((Sha $copy) -cne $compiledHash){throw 'Bank postprocess process differs from compiled binary'}
+            $record.testScenarioExecutables+=@{scenario=$case.key;path=$copy;sha256=$compiledHash;removedWithOwnedScratch=$true}
+            $run=RunBounded $copy @($scenarioRoot,$case.cli) ('test-'+$case.key) 60000
+            $record.testRuns+=$run
+            $part=[IO.File]::ReadAllText($run.stdout)+[IO.File]::ReadAllText($run.stderr)
+            if($run.exitCode -ne 0 -or $run.timedOut -or $part -notmatch 'Passed (\d+) production clock service checks'){throw ('Bank postprocess '+$case.key+' failed')}
+            if((Sha $copy) -cne $compiledHash){throw 'Bank postprocess execution copy changed'}
             $record.checks+=[int]$Matches[1];$texts+=$part
         }
         $record.testRun=$record.testRuns[-1];$text=$texts -join [Environment]::NewLine
@@ -2287,6 +2328,22 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         $record['applicationTimingLegacyRegressionsTested']=$text.Contains('Production application timing selected legacy regressions fixture completed')
         if(-not($record.applicationTimingActualOwnerTested -and $record.applicationTimingCleanupRetryTested -and $record.applicationTimingThrowCleanupTested -and $record.applicationTimingLegacyRegressionsTested)){throw 'Actual application timing selected scope incomplete'}
         $record.productionNativeCallbackTested=$true
+    } elseif($Scope -eq 'BankPostprocess'){
+        $record.nativeBankPostprocessActualSdkOwnerTested=$text.Contains('Production bank postprocess quaternion actual SDK owner fixture completed') -and $text.Contains('Production bank postprocess time actual SDK owner fixture completed')
+        $record.nativeBankPostprocessEffectsTested=$text.Contains('Production bank postprocess exact quaternion signed-zero effects fixture completed') -and $text.Contains('Production bank postprocess exact timestamp and Htime effects fixture completed')
+        $record.nativeBankPostprocessRefusalsTested=$text.Contains('Production bank postprocess coupled current bank refusals fixture completed') -and $text.Contains('Production bank postprocess default timer refusal fixture completed')
+        $record.nativeBankPostprocessUnknownRetained=$true
+        foreach($debt in @('quaternion-before','quaternion-after','time-before','time-after','quaternion-owner','time-owner','quaternion-mismatch','time-mismatch')){
+            $record.nativeBankPostprocessUnknownRetained=$record.nativeBankPostprocessUnknownRetained -and $text.Contains('Production bank postprocess '+$debt+' retained debt fixture completed')
+        }
+        if(-not($record.nativeBankPostprocessActualSdkOwnerTested -and $record.nativeBankPostprocessEffectsTested -and $record.nativeBankPostprocessRefusalsTested -and $record.nativeBankPostprocessUnknownRetained)){throw 'Actual bank postprocess owner/effects/refusal/debt scope incomplete'}
+        $record['bankPostprocessExisting37RegressionsTested']=$record.testRuns.Count -eq 50 -and $text.Contains('Production bank eviction actual SDK whole original fixture completed') -and $text.Contains('Production bank eviction cache-mismatch retained debt fixture completed') -and $text.Contains('Production bank decompression no-output retained debt fixture completed') -and $text.Contains('Production hierarchy cache removal owner loss debt fixture completed')
+        if(-not $record.bankPostprocessExisting37RegressionsTested){throw 'Changed component existing37 regression processes incomplete'}
+        $record.nativePrivateHierarchyPostprocessOwnerTested=$text.Contains('Production native private hierarchy postprocess owner fixture completed')
+        $record.actualPrivateHierarchyPostprocessSdkOwnerTested=$text.Contains('Production actual private hierarchy postprocess SDK owner fixture completed')
+        if(-not($record.nativePrivateHierarchyPostprocessOwnerTested -and $record.actualPrivateHierarchyPostprocessSdkOwnerTested)){throw 'Existing actual private postprocess SDK owner regression incomplete'}
+        $record.productionNativeCallbackTested=$true
+        $record['originalHierarchyPostprocessInstructionsExecuted']=$true
     } elseif($Scope -eq 'BankEviction'){
         $record.nativeBankEvictionActualSdkOwnerTested=$text.Contains('Production bank eviction actual SDK whole original fixture completed')
         $record.nativeBankEvictionConversionTested=$text.Contains('Production bank eviction both lifetime conversion and freed address reuse fixture completed')

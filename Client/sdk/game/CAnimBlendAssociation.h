@@ -59,4 +59,7 @@ public:
     virtual void  SetAnimID(short sAnimID) = 0;
     virtual void  SetAnimGroup(short sAnimGroup) = 0;
     virtual void  SetFlags(short sFlags) = 0;
+    // Manager products own CPU facades through unique_ptr<Base>. Native
+    // association/ref/node lifetime remains in the actual engine owner.
+    virtual ~CAnimBlendAssociation() = default;
 };

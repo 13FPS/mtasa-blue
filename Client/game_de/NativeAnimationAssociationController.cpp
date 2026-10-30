@@ -26,17 +26,32 @@ namespace mta::game_de
     }
     struct NativeAnimationAssociationController::Entry
     {
-        Token                             token{};
-        NativeAnimationAssociationStorage storage;
+        Token                                                     token{};
+        NativeAnimationAssociationStorage                         storage;
+        std::shared_ptr<NativeAnimationAssociationFacadeLifetime> code;
+        Receipt                                                   retirement{};
+        bool                                                      retirementRecorded = false;
     };
     NativeAnimationAssociationController::NativeAnimationAssociationController() noexcept = default;
     NativeAnimationAssociationController::~NativeAnimationAssociationController() = default;
+    bool NativeAnimationAssociationController::CodePending(const Entry& entry) noexcept
+    {
+        return entry.code && (entry.code->views.load(std::memory_order_acquire) != 0 || entry.code->dirty.load(std::memory_order_acquire) ||
+                              entry.code->offCreatorDrop.load(std::memory_order_acquire));
+    }
+    bool NativeAnimationAssociationController::CanErase(const Entry& entry) noexcept
+    {
+        return entry.storage.CanDiscard() &&
+               (!entry.code || (entry.code->views.load(std::memory_order_acquire) == 0 && !entry.code->offCreatorDrop.load(std::memory_order_acquire) &&
+                                entry.code->creator == std::this_thread::get_id()));
+    }
     void NativeAnimationAssociationController::Publish() noexcept
     {
-        bool any = false, fault = false;
+        bool any = false, code = false, fault = false;
         for (const auto& entry : records)
         {
             any |= entry->storage.IsRetained();
+            code |= CodePending(*entry);
             const auto state = entry->storage.GetState();
             fault |= state == NativeAnimationAssociationStorage::State::FaultDebt || state == NativeAnimationAssociationStorage::State::PublicationPinned ||
                      state == NativeAnimationAssociationStorage::State::ConstructEntered || state == NativeAnimationAssociationStorage::State::RetireEntered ||
@@ -44,7 +59,50 @@ namespace mta::game_de
                      state == NativeAnimationAssociationStorage::State::NodeClearEntered || state == NativeAnimationAssociationStorage::State::CopyEntered;
         }
         retained.store(any, std::memory_order_release);
+        codeRetained.store(code, std::memory_order_release);
         recovery.store(fault, std::memory_order_release);
+    }
+    void NativeAnimationAssociationController::CloseFacadeIssuance(std::uint64_t generation) noexcept
+    {
+        // Stop can run inside the original call while busy is held. Closure
+        // therefore raises a monotonic barrier without waiting or reopening.
+        auto closed = closedFacadeThrough.load(std::memory_order_acquire);
+        while (generation > closed && !closedFacadeThrough.compare_exchange_weak(closed, generation, std::memory_order_acq_rel))
+        {
+        }
+    }
+    ClockResult NativeAnimationAssociationController::PruneFacadeCode(std::uintptr_t image, std::uint64_t generation, CheckOwner owner) noexcept
+    {
+        if (!image || !generation || !owner)
+            return ClockResult::InvalidArgument;
+        auto result = owner();
+        if (result != ClockResult::Ok)
+            return result;
+        if (!AnimationAssociationControllerDetail::Enter(busy))
+            return ClockResult::Busy;
+        AnimationAssociationControllerDetail::Guard guard{busy};
+        if (facadeGeneration && facadeGeneration != generation)
+            return ClockResult::OwnerConflict;
+        for (auto at = records.begin(); at != records.end();)
+        {
+            auto& entry = **at;
+            if (!entry.code || entry.token.ownerGeneration != generation)
+            {
+                ++at;
+                continue;
+            }
+            if (entry.code->image != image || entry.code->token.ownerGeneration != generation || entry.code->token.serial != entry.token.serial ||
+                entry.code->creator != std::this_thread::get_id())
+                return ClockResult::OwnerConflict;
+            // A CPU destructor only drops a count. This creator callback runs
+            // afterwards and can erase code-only released native records.
+            if (CanErase(entry))
+                at = records.erase(at);
+            else
+                ++at;
+        }
+        Publish();
+        return owner();
     }
     NativeAnimationAssociationController::Entry* NativeAnimationAssociationController::Find(std::uint64_t generation, const Token& token) noexcept
     {
@@ -60,23 +118,65 @@ namespace mta::game_de
                                                                     CheckOwner owner, std::uintptr_t& output,
                                                                     NativeAnimationAssociationCalls::GroupCopyReceipt* receipt) noexcept
     {
+        return CopyFromGroupImpl(image, generation, group, animationId, owner, output, nullptr, receipt);
+    }
+    ClockResult NativeAnimationAssociationController::CopyFromGroupIssued(std::uintptr_t image, std::uint64_t generation,
+                                                                          const NativeAnimationAssociationGroupReferenceToken& group, std::uint32_t animationId,
+                                                                          CheckOwner owner, NativeAnimationAssociationIssuedCopy& output,
+                                                                          NativeAnimationAssociationCalls::GroupCopyReceipt* receipt) noexcept
+    {
+        std::uintptr_t returned = 0;
+        return CopyFromGroupImpl(image, generation, group, animationId, owner, returned, &output, receipt);
+    }
+    ClockResult NativeAnimationAssociationController::CopyFromGroupImpl(std::uintptr_t image, std::uint64_t generation,
+                                                                        const NativeAnimationAssociationGroupReferenceToken& group, std::uint32_t animationId,
+                                                                        CheckOwner owner, std::uintptr_t& output, NativeAnimationAssociationIssuedCopy* issued,
+                                                                        NativeAnimationAssociationCalls::GroupCopyReceipt* receipt) noexcept
+    {
         const auto                                        request = group;
+        const auto                                        animation = animationId;
         NativeAnimationAssociationCalls::GroupCopyReceipt next;
         if (receipt)
             *receipt = next;
         if (!generation || request.ownerGeneration != generation)
             return ClockResult::OwnerConflict;
+        if (issued && (issued->token.ownerGeneration || issued->token.serial || issued->interfaceAddress || issued->code.IsIssued()))
+            return ClockResult::InvalidArgument;
         if (!AnimationAssociationControllerDetail::Enter(busy))
             return ClockResult::Busy;
         AnimationAssociationControllerDetail::Guard guard{busy};
         if (serial == (std::numeric_limits<std::uint64_t>::max)())
             return ClockResult::OwnerConflict;
-        // The issued record and its CPU storage exist before the original
-        // allocator may run; return adoption never allocates a second record.
+        if (issued)
+        {
+            if (!image || !owner || generation <= closedFacadeThrough.load(std::memory_order_acquire) || generation < facadeGeneration)
+                return ClockResult::OwnerConflict;
+            const auto checked = owner();
+            if (checked != ClockResult::Ok)
+                return checked;
+            if (facadeGeneration != generation)
+            {
+                // A new generation may follow prior aggregate quiescence;
+                // raw records already issued in this same new epoch are fine.
+                for (const auto& entry : records)
+                    if (entry->token.ownerGeneration != generation && (CodePending(*entry) || !CanErase(*entry)))
+                        return ClockResult::OwnerConflict;
+                for (auto at = records.begin(); at != records.end();)
+                    if ((*at)->token.ownerGeneration != generation)
+                        at = records.erase(at);
+                    else
+                        ++at;
+                facadeGeneration = generation;
+            }
+        }
+        // Both products use one actual Entry/serial. The typed product also
+        // reserves code lifetime before the original allocator may execute.
         try
         {
             auto entry = std::make_unique<Entry>();
             entry->token = {generation, serial + 1};
+            if (issued)
+                entry->code.reset(new NativeAnimationAssociationFacadeLifetime(image, entry->token));
             records.push_back(std::move(entry));
         }
         catch (...)
@@ -85,8 +185,39 @@ namespace mta::game_de
         }
         auto& entry = *records.back();
         serial = entry.token.serial;
-        const auto result = NativeAnimationAssociationCalls::CopyFromGroup(image, entry.storage, entry.token, request, animationId, owner, output, &next);
-        if (entry.storage.CanDiscard())
+        if (issued && generation <= closedFacadeThrough.load(std::memory_order_acquire))
+        {
+            records.pop_back();
+            Publish();
+            return ClockResult::OwnerConflict;
+        }
+        std::uintptr_t returned = 0;
+        auto           result = NativeAnimationAssociationCalls::CopyFromGroup(image, entry.storage, entry.token, request, animation, owner, returned, &next);
+        if (issued && result == ClockResult::Ok)
+        {
+            if (!next.entered || !next.returned || !next.verified || next.issued.ownerGeneration != entry.token.ownerGeneration ||
+                next.issued.serial != entry.token.serial || next.returnedInterface != returned ||
+                (next.returnedNull ? (returned != 0 || !entry.storage.CanDiscard())
+                                   : (!returned || entry.storage.GetState() != NativeAnimationAssociationStorage::State::LiveUnpublished ||
+                                      next.resources.receiver != returned)))
+                result = ClockResult::BindingChanged;
+            if (result == ClockResult::Ok)
+                result = owner();
+            // Closure during the original call cannot publish another facade.
+            // Its actual native resource remains in the same existing ledger.
+            if (result == ClockResult::Ok && generation <= closedFacadeThrough.load(std::memory_order_acquire))
+                result = ClockResult::OwnerConflict;
+            if (result == ClockResult::Ok && !next.returnedNull)
+            {
+                entry.code->views.store(1, std::memory_order_release);
+                issued->token = entry.token;
+                issued->interfaceAddress = returned;
+                issued->code = NativeAnimationAssociationFacadeView(entry.code);
+            }
+        }
+        if (result == ClockResult::Ok)
+            output = returned;
+        if (CanErase(entry))
             records.pop_back();
         Publish();
         if (receipt)
@@ -279,8 +410,25 @@ namespace mta::game_de
         auto*                                       entry = Find(generation, request);
         if (!entry)
             return ClockResult::OwnerConflict;
-        const auto result = NativeAnimationAssociationCalls::Retire(image, entry->storage, generation, owner, &next);
+        ClockResult result = ClockResult::Ok;
         if (entry->storage.CanDiscard())
+        {
+            if (!entry->retirementRecorded)
+                return ClockResult::OwnerConflict;
+            next = entry->retirement;
+        }
+        else
+        {
+            result = NativeAnimationAssociationCalls::Retire(image, entry->storage, generation, owner, &next);
+            if (entry->storage.CanDiscard())
+            {
+                entry->retirement = next;
+                entry->retirementRecorded = true;
+            }
+        }
+        // Native release and facade deletion are independent. Keep a released
+        // Entry while code views exist; repeated retirement uses its real ACK.
+        if (!entry->code && CanErase(*entry))
             for (auto at = records.begin(); at != records.end(); ++at)
                 if (at->get() == entry)
                 {
@@ -306,8 +454,10 @@ namespace mta::game_de
             auto  at = records.begin();
             auto& entry = **at;
             ++next.scanned;
-            if (entry.token.ownerGeneration != generation)
+            if (entry.token.ownerGeneration != generation || entry.storage.CanDiscard())
             {
+                // Code-only records require no native retirement. Only the
+                // separate creator pump prunes their final released views.
                 records.splice(records.end(), records, at);
                 continue;
             }
@@ -316,13 +466,16 @@ namespace mta::game_de
             const auto current = NativeAnimationAssociationCalls::Retire(image, entry.storage, generation, owner, &receipt);
             if (entry.storage.CanDiscard())
             {
-                records.erase(at);
+                entry.retirement = receipt;
+                entry.retirementRecorded = true;
                 ++next.released;
+                if (!entry.code && CanErase(entry))
+                    records.erase(at);
+                else
+                    records.splice(records.end(), records, at);
             }
             else
                 records.splice(records.end(), records, at);
-            // Entered failures stop the enclosing runtime. Known blocked rows
-            // rotate fairly; they never authorize an unrelated resource free.
             if (current != ClockResult::Ok && result == ClockResult::Ok)
                 result = current;
             if (receipt.entered && current != ClockResult::Ok)
@@ -330,8 +483,12 @@ namespace mta::game_de
         }
         Publish();
         for (const auto& entry : records)
+        {
             if (entry->storage.IsRetained())
                 ++next.retained;
+            if (CodePending(*entry))
+                ++next.codeRetained;
+        }
         output = next;
         return result;
     }

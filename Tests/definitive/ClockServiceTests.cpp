@@ -2716,7 +2716,22 @@ namespace ClockDynamicClumpInvokeTest
     const mta::game_de::NativeAnimationAssociationCalls::ClumpInvocations* Supplier() noexcept;
 }
 #define MTA_DE_ANIMATION_ASSOCIATION_CLUMP_INVOCATIONS() ::ClockDynamicClumpInvokeTest::Supplier()
+#include "../../Client/game_de/NativeImageAccess.h"
+namespace ClockNumericAssociationIssuedTest
+{
+    HMODULE Module(LPCWSTR) noexcept;
+}
+namespace mta::game_de::NativeImageAccess
+{
+    bool NumericClockFixtureExecutable() noexcept;
+}
+// Only this test TU can select its explicit owned MEM_IMAGE after proving
+// default shipping rejection. The next public Begin still issues its epoch.
+#define GetModuleHandleW     ::ClockNumericAssociationIssuedTest::Module
+#define CheckExecutableBuild NumericClockFixtureExecutable
 #include "../../Client/game_de/NativeClockService.cpp"
+#undef CheckExecutableBuild
+#undef GetModuleHandleW
 #undef MTA_DE_ANIMATION_ASSOCIATION_CLUMP_INVOCATIONS
 #pragma pop_macro("_InterlockedCompareExchange")
 #pragma pop_macro("_InterlockedCompareExchange16")
@@ -3799,7 +3814,12 @@ namespace ClockAnimationAssociationNodeArrayTest
 #define MTA_DE_ANIMATION_ASSOCIATION_CONSTRUCTOR_INVOKE ::ClockPrivateAnimationAssociationTest::Construct
 #define MTA_DE_ANIMATION_ASSOCIATION_DESTRUCTOR_INVOKE  ::ClockAnimationAssociationNodeArrayTest::Destroy
 #define MTA_DE_ANIMATION_ASSOCIATION_EXCHANGE           ::ClockPrivateAnimationAssociationTest::Exchange
-#define MTA_DE_ANIMATION_ASSOCIATION_GROUP_COPY_INVOKE  ::ClockGroupCopyAnimationInvokeTest::Invoke
+namespace ClockNumericAssociationIssuedTest
+{
+    mta::game_de::ClockResult Invoke(mta::game_de::NativeAnimationAssociationCalls::GroupCopyFunction, std::int32_t, std::uint32_t, std::uintptr_t&,
+                                     std::uint32_t&) noexcept;
+}
+#define MTA_DE_ANIMATION_ASSOCIATION_GROUP_COPY_INVOKE ::ClockNumericAssociationIssuedTest::Invoke
 #include "../../Client/game_de/NativeAnimationAssociationGroupCreationController.h"
 namespace ClockGroupSourceCreationOwnerTest
 {
@@ -8634,6 +8654,8 @@ namespace
 #include "NativeAnimationAssociationNodeArrayOwnerTests.inl"
 // The combined fixture uses the node-release guard state defined above.
 #include "NativeDynamicClumpOwnerTests.inl"
+#include "AnimationAssociationNumericFactoryFixture.generated.h"
+#include "NativeNumericAssociationOwnerTests.inl"
 
 // The strict receiver must execute production typed tickets and the distinct
 // metadata-only delete route. Deleting an interface acknowledges only its own
@@ -8783,6 +8805,15 @@ int main(int argc, char** argv)
         staticAssociationInitializationUnknown || (argc == 3 && std::strcmp(argv[2], "--static-association-initialization-success") == 0);
     const bool animationStaticAssociationReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-static-association-reads") == 0;
     const bool animationAssociationGroupReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-association-group-reads") == 0;
+    const bool numericAssociationOnly = argc == 3 && std::strncmp(argv[2], "--numeric-association-", 22) == 0;
+    unsigned   numericAssociationScenario = 8;
+    if (numericAssociationOnly)
+    {
+        const char* names[] = {"success", "null", "entered-unknown", "late-owner", "closed", "close-during", "foreign", "cpu-first"};
+        for (unsigned index = 0; index != 8; ++index)
+            if (std::strcmp(argv[2] + 22, names[index]) == 0)
+                numericAssociationScenario = index;
+    }
     const bool dynamicClumpOnly = argc == 3 && std::strncmp(argv[2], "--dynamic-clump-", 16) == 0;
     unsigned   dynamicClumpScenario = 11;
     if (dynamicClumpOnly)
@@ -8962,8 +8993,8 @@ int main(int argc, char** argv)
            freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly || customAnimationCleanupOnly ||
            standaloneSequenceOperationsOnly || animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly ||
            animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly || animationGroupValidityOnly ||
-           animationIdValidityOnly || animationAssociationGroupReadsOnly || dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly ||
-           jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly || groupEmptyInitializationOnly ||
+           animationIdValidityOnly || animationAssociationGroupReadsOnly || numericAssociationOnly || dynamicClumpOnly || groupFactoriesOnly ||
+           groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly || groupEmptyInitializationOnly ||
            animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly || animationStaticAssociationReadsOnly ||
            staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly || privateAssociationsOnly || associationBonesOnly ||
            associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
@@ -9144,6 +9175,16 @@ int main(int argc, char** argv)
         fixture.Create(argv[1]);
         // One real module-pinned lifetime needs one pristine host process.
         NativeAnimationBlocksOwnedSdk(fixture, &AnimationAssociationGroupChildProductsOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (numericAssociationOnly)
+    {
+        Check(numericAssociationScenario < 8, "exact finite numeric association scenario is required");
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NumericAssociationOwnerFixture::scenario = numericAssociationScenario;
+        NumericAssociationOwnerFixture::RunPrepared(fixture);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

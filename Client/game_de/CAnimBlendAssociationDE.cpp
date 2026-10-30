@@ -124,7 +124,12 @@ namespace mta::game_de
             Require(ClockResult::BindingChanged, "GetAnimHierarchy");
         // A CPU allocation grants no new native reference or lifetime. Each
         // later hierarchy operation independently re-admits its bank token.
-        return std::unique_ptr<CAnimBlendHierarchy>(new CAnimBlendHierarchyDE(*hierarchyOwner, hierarchy));
+        NativeAnimationAssociationFacadeView childCode;
+        if (code.IsIssued())
+            Require(code.ForkForHierarchy(token, childCode), "GetAnimHierarchy(code)");
+        // The independent CPU child may outlive this facade. Share only the
+        // same code fence; native H remains a re-admitted borrowed identity.
+        return std::unique_ptr<CAnimBlendHierarchy>(new CAnimBlendHierarchyDE(*hierarchyOwner, hierarchy, std::move(childCode)));
     }
     void CAnimBlendAssociationDE::RestrictToBones(std::bitset<64> mask)
     {

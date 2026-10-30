@@ -13,7 +13,7 @@
 #include "PrivateAnimationAssociationFixture.generated.h"
 using namespace mta::game_de;
 static_assert(!std::is_abstract_v<CAnimBlendAssociationDE> && !std::is_default_constructible_v<CAnimBlendAssociationDE> &&
-              !std::is_destructible_v<CAnimBlendAssociationDE> && !std::has_virtual_destructor_v<CAnimBlendAssociation>);
+              !std::is_destructible_v<CAnimBlendAssociationDE> && std::has_virtual_destructor_v<CAnimBlendAssociation>);
 static_assert(std::is_same_v<decltype(&PrivateAnimationAssociationReceiver::Init), decltype(&CAnimBlendAssociationDE::Init)>);
 static_assert(std::is_same_v<decltype(&PrivateAnimationAssociationReceiver::InitializeForCustomAnimation),
                              decltype(&CAnimBlendAssociationDE::InitializeForCustomAnimation)>);

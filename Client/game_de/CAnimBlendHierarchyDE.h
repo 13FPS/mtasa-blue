@@ -5,6 +5,7 @@
  ****************************************************************************/
 #pragma once
 #include "NativeAnimationHierarchyAccess.h"
+#include "NativeAnimationAssociationIssuedView.h"
 #include <windows.h>
 #include <game/CAnimBlendHierarchy.h>
 #include <type_traits>
@@ -46,10 +47,19 @@ namespace mta::game_de
         {
         }
 
+        CAnimBlendHierarchyDE(NativeAnimationHierarchyAccess& owner, const NativeAnimationHierarchyReferenceToken& token,
+                              NativeAnimationAssociationFacadeView&& borrowedCode) noexcept
+            : native(owner), reference(token), code(std::move(borrowedCode))
+        {
+        }
+
     private:
         NativeAnimationHierarchyValues               Read(const char*) const;
         NativeAnimationHierarchyAccess&              native;
         const NativeAnimationHierarchyReferenceToken reference;
+        // Association children may outlive their parent CPU facade. This
+        // retains backend code only, not native H storage or a bank reference.
+        NativeAnimationAssociationFacadeView code;
     };
     // All actual hierarchy operations dispatch to their qualified owner.
     // The complete method surface does not publish a factory or grant native

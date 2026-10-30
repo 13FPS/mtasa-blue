@@ -10,6 +10,8 @@
 #include <cstdint>
 namespace mta::game_de
 {
+    struct NativeAnimationAssociationGroupReferenceToken;
+    struct NativeAnimationAssociationIssuedCopy;
     struct NativeAnimationAssociationReferenceToken
     {
         std::uint64_t ownerGeneration = 0, serial = 0;
@@ -24,6 +26,13 @@ namespace mta::game_de
     class NativeAnimationAssociationAccess
     {
     public:
+        // The same owner returns its actual issued token and CPU code view
+        // from one qualified original copy; a raw result is never adopted.
+        virtual ClockResult CopyPrivateAnimationAssociationFromGroup(const NativeAnimationAssociationGroupReferenceToken&, std::uint32_t,
+                                                                     NativeAnimationAssociationIssuedCopy&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
         // Raw clump/H tags request one jointly admitted operation on this
         // actual issued receiver. Only the same native owner resolves their
         // origins, resource phases and accepted default/native-call prefix.

@@ -5,6 +5,7 @@
  ****************************************************************************/
 #pragma once
 #include "NativeAnimationManagerAccess.h"
+#include "NativeAnimationAssociationAccess.h"
 #include "NativeAnimationAssociationGroupAccess.h"
 #include "NativeAnimationStaticAssociationAccess.h"
 #include "NativeAnimationSequenceStorageAccess.h"
@@ -24,6 +25,7 @@ namespace mta::game_de
     class CAnimManagerDE : public CAnimManager
     {
     public:
+        AnimBlendAssoc_type                                CreateAnimAssociation(AssocGroupId, AnimationId) override;
         AnimAssocGroup_type                                GetAnimBlendAssoc(AssocGroupId) const override;
         AnimAssocGroup_type                                GetAnimBlendAssocGroup(CAnimBlendAssocGroupSAInterface*) override;
         std::unique_ptr<CCustomAnimationCleanup>           BeginCustomAnimationCleanup(const SCustomAnimationCleanupRequest&) override;
@@ -105,6 +107,7 @@ namespace mta::game_de
         // shared by every constructor; no second manager or CGame is fabricated.
         NativeAnimationStaticAssociationAccess* staticAccess = dynamic_cast<NativeAnimationStaticAssociationAccess*>(&native);
         NativeAnimationAssociationGroupAccess*  groupAccess = dynamic_cast<NativeAnimationAssociationGroupAccess*>(&native);
+        NativeAnimationAssociationAccess*       associationAccess = dynamic_cast<NativeAnimationAssociationAccess*>(&native);
         NativeAnimationBlockAccess*             blockAccess = nullptr;
         CGame*                                  gameProvider = nullptr;
         NativeAnimationSequenceStorageAccess*   storageAccess = nullptr;

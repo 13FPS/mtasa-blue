@@ -5,6 +5,7 @@
  ****************************************************************************/
 #include "CAnimManagerDE.h"
 #include "CAnimBlendAssocGroupDE.h"
+#include "CAnimBlendAssociationDE.h"
 #include "CAnimBlockRequestDE.h"
 #include "CAnimBlendHierarchyDE.h"
 #include "CAnimBlendSequenceDE.h"
@@ -144,6 +145,10 @@ namespace mta::game_de
             NativeCustomAnimationCleanupView              view;
             bool                                          accepted = false;
         };
+        struct DeleteAssociationFacadeStorage
+        {
+            void operator()(void* value) const noexcept { ::operator delete(value); }
+        };
         struct DeleteSequenceFacadeStorage
         {
             void operator()(void* value) const noexcept { ::operator delete(value); }
@@ -204,6 +209,40 @@ namespace mta::game_de
         // observation constructors never silently acquire teardown authority.
         cleanupAccess = dynamic_cast<NativeCustomAnimationCleanupAccess*>(&manager);
         sequenceOperationAccess = dynamic_cast<NativeCustomAnimationSequenceOperationAccess*>(&manager);
+    }
+    CAnimManagerDE::AnimBlendAssoc_type CAnimManagerDE::CreateAnimAssociation(AssocGroupId requestedGroup, AnimationId requestedAnimation)
+    {
+        static_assert(sizeof(AssocGroupId) == sizeof(std::uint32_t) && sizeof(AnimationId) == sizeof(std::uint32_t));
+        const auto group = static_cast<std::uint32_t>(requestedGroup);
+        const auto animation = static_cast<std::uint32_t>(requestedAnimation);
+        const auto generation = ownerGeneration;
+        if (!groupAccess || !associationAccess || !generation)
+            Require(ClockResult::NotInitialized, "CreateAnimAssociation");
+        // This path composes actual group Copy directly. Requiring a CGame or
+        // warming the owning group's block cache would add source policy.
+        // Reserve the CPU product before any original native allocation.
+        std::unique_ptr<void, DeleteAssociationFacadeStorage> memory(::operator new(sizeof(CAnimBlendAssociationDE)));
+        NativeAnimationAssociationGroupReferenceToken         selected;
+        Require(groupAccess->ResolveAnimationAssociationGroup(generation, group, selected), "CreateAnimAssociation");
+        if (selected.ownerGeneration != generation || selected.index != group || !selected.locator)
+            Require(ClockResult::BindingChanged, "CreateAnimAssociation");
+        NativeAnimationAssociationIssuedCopy issued;
+        Require(associationAccess->CopyPrivateAnimationAssociationFromGroup(selected, animation, issued), "CreateAnimAssociation");
+        if (!issued.interfaceAddress)
+        {
+            if (issued.token.ownerGeneration || issued.token.serial || issued.code.IsIssued())
+                Require(ClockResult::BindingChanged, "CreateAnimAssociation");
+            return nullptr;
+        }
+        const auto codeToken = issued.code.Token();
+        if (issued.token.ownerGeneration != generation || !issued.token.serial || !issued.code.IsIssued() ||
+            codeToken.ownerGeneration != issued.token.ownerGeneration || codeToken.serial != issued.token.serial)
+            Require(ClockResult::BindingChanged, "CreateAnimAssociation");
+        // The same-call controller result is the issuance channel. A raw
+        // locator, diagnostic receipt or second lookup cannot adopt storage.
+        auto* facade = ::new (memory.get()) CAnimBlendAssociationDE(*associationAccess, issued.token, std::move(issued.code));
+        memory.release();
+        return AnimBlendAssoc_type(facade);
     }
     CAnimManagerDE::StaticAssocIntface_type CAnimManagerDE::GetAnimStaticAssociation(eAnimGroup requestedGroup, eAnimID requestedAnimation) const
     {

@@ -149,6 +149,9 @@ class CAnimBlendAssociationSA : public CAnimBlendAssociation
 {
 public:
     CAnimBlendAssociationSA(CAnimBlendAssociationSAInterface* pInterface) { m_pInterface = pInterface; }
+    // These are CPU wrappers for both private and engine-visible interfaces;
+    // deleting the wrapper must never run a native association destructor.
+    ~CAnimBlendAssociationSA() override = default;
 
     CAnimBlendAssociationSAInterface*          Constructor(CAnimBlendStaticAssociationSAInterface& StaticAssociationByReference);
     CAnimBlendAssociationSAInterface*          Constructor(RpClump* pClump, CAnimBlendHierarchySAInterface* pAnimHierarchy);

@@ -78,6 +78,7 @@
 #include "NativeModelReferenceMap.h"
 #include "NativeAnimationAssociationAccess.h"
 #include "NativeAnimationAssociationController.h"
+#include "NativeAnimationAssociationIssuedView.h"
 #include "NativeAnimationAssociationGroupCreationController.h"
 #include "NativeAnimationAssociationGroupCopy.h"
 #include "NativeAnimationAssociationClumpOrigin.h"
@@ -245,6 +246,8 @@ namespace mta::game_de
             ClockResult SetAnimationAssociationGroupIdOffset(const NativeAnimationAssociationGroupReferenceToken&, std::int32_t) noexcept override;
             ClockResult InitializeEmptyAnimationAssociationGroup(const NativeAnimationAssociationGroupReferenceToken&, std::uintptr_t) noexcept override;
             ClockResult CopyAnimationAssociationGroup(const NativeAnimationAssociationGroupReferenceToken&, std::uint32_t, std::uintptr_t&) noexcept override;
+            ClockResult CopyPrivateAnimationAssociationFromGroup(const NativeAnimationAssociationGroupReferenceToken&, std::uint32_t,
+                                                                 NativeAnimationAssociationIssuedCopy&) noexcept override;
             ClockResult CreateAnimationAssociationGroup(const NativeAnimationAssociationGroupReferenceToken&, const std::string&,
                                                         NativeAnimationAssociationGroupChildBorrowInvalidator) noexcept override;
             ClockResult InitializeAnimationStaticAssociationWithReceipt(const NativeAnimationStaticAssociationReferenceToken&, std::uintptr_t, std::uintptr_t,
@@ -903,6 +906,10 @@ namespace mta::game_de
 
         void Stop(ClockResult reason) noexcept
         {
+            // Revocation can happen inside a native callback while the same
+            // controller is busy. Its atomic epoch barrier never waits on or
+            // re-enters that operation; later bookends reject public issuance.
+            runtime.privateAssociations.CloseFacadeIssuance(runtime.generation.load());
             runtime.active.store(false);
             runtime.stopping.store(true);
             if (reason != ClockResult::Ok && reason != ClockResult::Stopped)
@@ -4351,6 +4358,18 @@ namespace mta::game_de
 
         void ProgressCustomAnimationCleanup() noexcept
         {
+            if (runtime.active.load() && !runtime.stopping.load() && runtime.privateAssociations.HasPendingFacadeCode() &&
+                CheckTimingOwner() == ClockResult::Ok)
+            {
+                // The last facade destructor only drops CPU bookkeeping.
+                // Prune on a later actual creator callback after it returned;
+                // live native records and foreign-thread quarantine stay held.
+                const auto generation = runtime.generation.load();
+                const auto result = runtime.privateAssociations.PruneFacadeCode(runtime.image, generation, &CheckTimingOwner);
+                PublishCustomAnimationSequenceDebt(generation);
+                if (result != ClockResult::Ok && result != ClockResult::Busy)
+                    Stop(result);
+            }
             if (!runtime.active.load() || runtime.stopping.load() || !runtime.customSequences.HasPendingCleanup() || CheckTimingOwner() != ClockResult::Ok)
                 return;
             // A common destructor may drop its CPU ticket after committing
@@ -4371,6 +4390,14 @@ namespace mta::game_de
                 return true;
             if (CheckCustomAnimationSequenceRecoveryOwner() != ClockResult::Ok)
                 return false;
+            if (runtime.privateAssociations.HasPendingFacadeCode())
+            {
+                const auto generation = runtime.generation.load();
+                const auto result = runtime.privateAssociations.PruneFacadeCode(runtime.image, generation, &CheckCustomAnimationSequenceRecoveryOwner);
+                PublishCustomAnimationSequenceDebt(generation);
+                if (result != ClockResult::Ok)
+                    return false;
+            }
             if (runtime.groupCreations.IsRetained())
             {
                 NativeAnimationAssociationGroupCreationController::DrainProgress creation;
@@ -4385,10 +4412,11 @@ namespace mta::game_de
                 if (result != ClockResult::Ok || creation.ownerStatus != ClockResult::Ok || runtime.groupCreations.IsRetained())
                     return false;
             }
-            // Dynamic destruction consumes its causal node allocation and
-            // bank-H reference. An unknown/published association must retain
-            // the callback before any dependent H/sequence journal can drain.
-            if (runtime.privateAssociations.IsRetained())
+            // Native destruction consumes the causal nodes/bank reference.
+            // A released association's live CPU views still fence this module,
+            // but must not block genuine dependent H/sequence retirement or
+            // cause its already acknowledged destructor to run a second time.
+            if (runtime.privateAssociations.HasPendingNative())
             {
                 NativeAnimationAssociationController::RetireProgress associations;
                 const auto                                           result =
@@ -4396,7 +4424,7 @@ namespace mta::game_de
                 PublishCustomAnimationSequenceDebt(runtime.generation.load());
                 if (result != ClockResult::Ok || runtime.privateAssociations.RecoveryPending())
                     Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
-                if (result != ClockResult::Ok || runtime.privateAssociations.IsRetained())
+                if (result != ClockResult::Ok || runtime.privateAssociations.HasPendingNative())
                     return false;
             }
             if (runtime.customSequences.HasPendingCleanup())
@@ -4427,12 +4455,13 @@ namespace mta::game_de
             // generation. An empty sequence journal has no work left to admit;
             // calling its owner now would reject that already-discharged debt.
             if (!runtime.customSequences.IsRetained())
-                return !runtime.customSequences.HasPendingCleanup();
+                return !runtime.customSequences.HasPendingCleanup() && !runtime.privateAssociations.HasPendingFacadeCode();
             NativeCustomAnimSequenceController::RetireProgress progress;
             const auto                                         result =
                 runtime.customSequences.Retire(runtime.image, runtime.generation.load(), 32, &CheckCustomAnimationSequenceRecoveryOwner, progress);
             PublishCustomAnimationSequenceDebt(runtime.generation.load());
-            return result == ClockResult::Ok && !runtime.customSequences.IsRetained() && !runtime.customSequences.HasPendingCleanup();
+            return result == ClockResult::Ok && !runtime.customSequences.IsRetained() && !runtime.customSequences.HasPendingCleanup() &&
+                   !runtime.privateAssociations.HasPendingFacadeCode();
         }
 
         ClockResult NativeAccess::AcquirePedReference(std::uint32_t handle, NativePedReferenceToken& output) noexcept
@@ -7516,6 +7545,50 @@ namespace mta::game_de
                 Stop(result);
             if (result == ClockResult::Ok)
                 output = next;
+            return result;
+        }
+
+        ClockResult NativeAccess::CopyPrivateAnimationAssociationFromGroup(const NativeAnimationAssociationGroupReferenceToken& source, std::uint32_t requested,
+                                                                           NativeAnimationAssociationIssuedCopy& output) noexcept
+        {
+            const auto group = source;
+            const auto id = requested;
+            if (output.interfaceAddress || output.token.ownerGeneration || output.token.serial || output.code.IsIssued())
+                return ClockResult::InvalidArgument;
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            const auto retained = runtime.customSequenceGeneration.load();
+            if (!group.ownerGeneration || group.ownerGeneration != generation || (retained && retained != generation))
+                return ClockResult::OwnerConflict;
+            runtime.customSequenceGeneration.store(generation);
+            NativeAnimationAssociationCalls::GroupCopyReceipt receipt;
+            NativeAnimationAssociationIssuedCopy              next;
+            result = runtime.privateAssociations.CopyFromGroupIssued(runtime.image, generation, group, id, &CheckTimingOwner, next, &receipt);
+            runtime.animationGroupCopy = receipt;
+            if (result == ClockResult::Ok)
+            {
+                const auto codeToken = next.code.Token();
+                const bool empty = !next.interfaceAddress && !next.token.ownerGeneration && !next.token.serial && !next.code.IsIssued();
+                const bool issued = next.interfaceAddress && next.interfaceAddress == receipt.returnedInterface && next.token.ownerGeneration == generation &&
+                                    next.token.serial && next.code.IsIssued() && codeToken.ownerGeneration == next.token.ownerGeneration &&
+                                    codeToken.serial == next.token.serial;
+                if (!receipt.entered || !receipt.returned || !receipt.verified || (receipt.returnedNull ? !empty : !issued))
+                    result = ClockResult::BindingChanged;
+                if (result == ClockResult::Ok)
+                    result = CheckTimingOwner();
+                if (result == ClockResult::Ok && runtime.generation.load() != generation)
+                    result = ClockResult::OwnerConflict;
+            }
+            // The exact same native Copy owns the issued serial. A late
+            // admission failure drops only this local CPU view, never the
+            // native receiver/ref or its retained retirement command.
+            FinishPrivateAnimationAssociation(generation, result, receipt.resources);
+            if (receipt.entered && result != ClockResult::Ok)
+                Stop(result);
+            if (result == ClockResult::Ok)
+                output = std::move(next);
             return result;
         }
 

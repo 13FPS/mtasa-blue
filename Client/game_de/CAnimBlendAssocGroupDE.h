@@ -26,12 +26,13 @@ namespace mta::game_de
         bool                              IsCreated() override;
         int                               GetNumAnimations() override;
         eAnimGroup                        GetGroupID() override;
+        void                              CreateAssociations(const char*) override;
         bool                              IsLoaded() override;
         void                              SetIDOffset(int) override;
         CAnimBlendAssocGroupSAInterface*  GetInterface() override;
 
     protected:
-        // The future source-order Create composer passes this exact CPU owner
+        // The source-order Create composer receives this exact CPU owner
         // to the replacement ledger; it is not a raw native release callback.
         NativeAnimationAssociationGroupChildBorrowInvalidator ChildBorrowInvalidator() noexcept;
         CAnimBlendAssocGroupDE(NativeAnimationAssociationGroupAccess& owner, const NativeAnimationAssociationGroupReferenceToken& token) noexcept
@@ -68,9 +69,9 @@ namespace mta::game_de
         // still re-admits the native row.
         std::vector<StaticProduct> staticFacades;
     };
-    // Genuine CreateAssociations remains
-    // pure. Child CPU products do not publish a complete group factory or
-    // justify deletion through the still-unmodified common group base.
-    static_assert(std::is_abstract_v<CAnimBlendAssocGroupDE> && std::is_base_of_v<CAnimBlendAssocGroup, CAnimBlendAssocGroupDE>);
+    // All eleven SDK methods use actual owner paths. Protected construction
+    // and the unchanged common deletion ABI still grant no public factory or
+    // permission to delete this concrete CPU facade through the common base.
+    static_assert(!std::is_abstract_v<CAnimBlendAssocGroupDE> && std::is_base_of_v<CAnimBlendAssocGroup, CAnimBlendAssocGroupDE>);
     static_assert(!std::is_default_constructible_v<CAnimBlendAssocGroupDE>);
 }

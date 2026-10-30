@@ -6,8 +6,10 @@
 #pragma once
 #include "NativeAnimationBlockAccess.h"
 #include "NativeAnimationStaticAssociationAccess.h"
+#include "NativeAnimationAssociationGroupChildBorrow.h"
 #include <game/CGameClockService.h>
 #include <cstdint>
+#include <string>
 namespace mta::game_de
 {
     struct NativeAnimationAssociationGroupReferenceToken
@@ -31,6 +33,14 @@ namespace mta::game_de
     {
     public:
         virtual ~NativeAnimationAssociationGroupAccess() = default;
+        // Source Create owns retirement/lookup/publication order. The SDK
+        // copies the full name and lends only its bound CPU-cache invalidator;
+        // a miss/refusal must not invent a frontend rollback or replacement.
+        virtual ClockResult CreateAnimationAssociationGroup(const NativeAnimationAssociationGroupReferenceToken&, const std::string&,
+                                                            NativeAnimationAssociationGroupChildBorrowInvalidator) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
         // Tokens are immediate current-array/generation affinity, not a
         // retained row lease, allocation registry or same-generation ABA ID.
         virtual ClockResult ResolveAnimationAssociationGroup(std::uint64_t, std::uint32_t, NativeAnimationAssociationGroupReferenceToken&) noexcept

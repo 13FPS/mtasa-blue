@@ -78,6 +78,7 @@
 #include "NativeModelReferenceMap.h"
 #include "NativeAnimationAssociationAccess.h"
 #include "NativeAnimationAssociationController.h"
+#include "NativeAnimationAssociationGroupCreationController.h"
 #include "NativeAnimationAssociationGroupCopy.h"
 #include "NativePedVelocityMemory.h"
 #include "NativePedReferenceController.h"
@@ -239,6 +240,8 @@ namespace mta::game_de
             ClockResult SetAnimationAssociationGroupIdOffset(const NativeAnimationAssociationGroupReferenceToken&, std::int32_t) noexcept override;
             ClockResult InitializeEmptyAnimationAssociationGroup(const NativeAnimationAssociationGroupReferenceToken&, std::uintptr_t) noexcept override;
             ClockResult CopyAnimationAssociationGroup(const NativeAnimationAssociationGroupReferenceToken&, std::uint32_t, std::uintptr_t&) noexcept override;
+            ClockResult CreateAnimationAssociationGroup(const NativeAnimationAssociationGroupReferenceToken&, const std::string&,
+                                                        NativeAnimationAssociationGroupChildBorrowInvalidator) noexcept override;
             ClockResult InitializeAnimationStaticAssociationWithReceipt(const NativeAnimationStaticAssociationReferenceToken&, std::uintptr_t, std::uintptr_t,
                                                                         NativeStaticAssociationInitializeCalls::Receipt*) noexcept;
             ClockResult BeginPrivateAnimationCleanup(const NativeCustomAnimationCleanupRequest&, NativeCustomAnimationCleanupBeginReceipt&) noexcept override;
@@ -652,6 +655,12 @@ namespace mta::game_de
             // node storage and a bank-H reference. Retire this causal record
             // before dependent animation storage; CPU destruction never frees it.
             NativeAnimationAssociationController privateAssociations;
+            // Source creation owns unpublished arrays and actual entered
+            // temp/joint uncertainty in the same callback cleanup epoch.
+            NativeAnimationAssociationGroupCreationController groupCreations;
+            // Public summary is diagnostic only; the controller retains the
+            // actual array/group/temp/joint records through native completion.
+            NativeAnimationAssociationGroupCreation::Receipt animationGroupCreation;
             // Last completed command facts are diagnostic only. The actual
             // issued controller/storage record retains every native resource.
             NativeAnimationAssociationCalls::GroupCopyReceipt animationGroupCopy;
@@ -847,7 +856,7 @@ namespace mta::game_de
                    runtime.startupCollisionBusy.load() || runtime.startupCollisionRetained.load() || runtime.pedModelCreationBusy.load() ||
                    runtime.pedModelCreationRetained.load() || runtime.modelBackingReferences.IsRetained() || runtime.pedReferences.IsRetained() ||
                    WorldIgnoreRetained() || runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() ||
-                   runtime.privateAssociations.IsRetained() || runtime.customSequences.HasPendingCleanup();
+                   runtime.privateAssociations.IsRetained() || runtime.groupCreations.IsRetained() || runtime.customSequences.HasPendingCleanup();
         }
 
         bool WeatherOverrideRetained() noexcept
@@ -3131,7 +3140,7 @@ namespace mta::game_de
         void PublishCustomAnimationSequenceDebt(std::uint64_t generation) noexcept
         {
             if (runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained() ||
-                runtime.customSequences.HasPendingCleanup())
+                runtime.groupCreations.IsRetained() || runtime.customSequences.HasPendingCleanup())
             {
                 runtime.customSequenceGeneration.store(generation);
                 runtime.restored.store(false);
@@ -4110,7 +4119,7 @@ namespace mta::game_de
         {
             // Live records and completed CPU views both keep backend code alive.
             return runtime.customSequences.HasPendingCleanup() || runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() ||
-                   runtime.privateAssociations.IsRetained();
+                   runtime.privateAssociations.IsRetained() || runtime.groupCreations.IsRetained();
         }
 
         ClockResult NativeAccess::AllocatePrivateStandaloneAnimationSequence(std::uint64_t generation, NativeAnimationSequenceReferenceToken& output) noexcept
@@ -4285,7 +4294,7 @@ namespace mta::game_de
             // The existing owner includes both command families and every live
             // completed view. Existing active/End pumps and module gates apply.
             return runtime.customSequences.HasPendingCleanup() || runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() ||
-                   runtime.privateAssociations.IsRetained();
+                   runtime.privateAssociations.IsRetained() || runtime.groupCreations.IsRetained();
         }
 
         void ProgressCustomAnimationCleanup() noexcept
@@ -4306,10 +4315,24 @@ namespace mta::game_de
         bool RestoreCustomAnimationSequences() noexcept
         {
             if (!runtime.customSequences.IsRetained() && !runtime.privateHierarchies.IsRetained() && !runtime.privateAssociations.IsRetained() &&
-                !runtime.customSequences.HasPendingCleanup())
+                !runtime.groupCreations.IsRetained() && !runtime.customSequences.HasPendingCleanup())
                 return true;
             if (CheckCustomAnimationSequenceRecoveryOwner() != ClockResult::Ok)
                 return false;
+            if (runtime.groupCreations.IsRetained())
+            {
+                NativeAnimationAssociationGroupCreationController::DrainProgress creation;
+                const auto result = runtime.groupCreations.DrainPrivatePending(runtime.image, runtime.generation.load(),
+                                                                               &CheckCustomAnimationSequenceRecoveryOwner, 32, creation);
+                PublishCustomAnimationSequenceDebt(runtime.generation.load());
+                // Only acknowledged never-published fresh arrays may drain.
+                // Published children and unknown temp/joint/native outcomes
+                // retain their actual owner; End never guesses a native free.
+                if (result != ClockResult::Ok || creation.ownerStatus != ClockResult::Ok || runtime.groupCreations.RecoveryPending())
+                    Stop(creation.ownerStatus != ClockResult::Ok ? creation.ownerStatus : result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+                if (result != ClockResult::Ok || creation.ownerStatus != ClockResult::Ok || runtime.groupCreations.IsRetained())
+                    return false;
+            }
             // Dynamic destruction consumes its causal node allocation and
             // bank-H reference. An unknown/published association must retain
             // the callback before any dependent H/sequence journal can drain.
@@ -7340,6 +7363,46 @@ namespace mta::game_de
                 return Capture(expected, after);
             }
         }
+        ClockResult NativeAccess::CreateAnimationAssociationGroup(const NativeAnimationAssociationGroupReferenceToken& source, const std::string& sourceName,
+                                                                  NativeAnimationAssociationGroupChildBorrowInvalidator invalidator) noexcept
+        {
+            const auto  group = source;
+            std::string name;
+            try
+            {
+                name = sourceName;
+            }
+            catch (...)
+            {
+                return ClockResult::WriteFailure;
+            }
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            const auto retained = runtime.customSequenceGeneration.load();
+            if (!group.ownerGeneration || group.ownerGeneration != generation || (retained && retained != generation))
+                return ClockResult::OwnerConflict;
+            runtime.customSequenceGeneration.store(generation);
+            NativeAnimationAssociationGroupCreationController::Receipt receipt;
+            result = runtime.groupCreations.Create(runtime.image, generation, group, name, &CheckTimingOwner, invalidator, &receipt);
+            // Copy fixed command facts before fallible caller bookends. These
+            // diagnostics never acquire raw row/actor release authority.
+            runtime.animationGroupCreation = receipt;
+            if (result == ClockResult::Ok)
+            {
+                if (!receipt.completed || runtime.groupCreations.IsRetained())
+                    result = ClockResult::BindingChanged;
+                if (result == ClockResult::Ok)
+                    result = CheckTimingOwner();
+                if (result == ClockResult::Ok && runtime.generation.load() != generation)
+                    result = ClockResult::OwnerConflict;
+            }
+            PublishCustomAnimationSequenceDebt(generation);
+            if ((receipt.hadEffects && result != ClockResult::Ok) || runtime.groupCreations.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result;
+        }
         ClockResult NativeAccess::CopyAnimationAssociationGroup(const NativeAnimationAssociationGroupReferenceToken& source, std::uint32_t requested,
                                                                 std::uintptr_t& output) noexcept
         {
@@ -8106,7 +8169,8 @@ namespace mta::game_de
             // bounded work before parking peers for clock patch restoration.
             if (clean && (runtime.pedReferences.IsRetained() || WorldIgnoreRetained()))
                 clean = RestorePedReferences();
-            if (clean && (runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained()))
+            if (clean && (runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained() ||
+                          runtime.groupCreations.IsRetained()))
                 clean = RestoreCustomAnimationSequences();
             if (clean && (runtime.pedModelCreationBusy.load() || runtime.pedModelCreationRetained.load()))
             {

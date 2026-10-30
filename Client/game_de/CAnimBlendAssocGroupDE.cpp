@@ -40,6 +40,18 @@ namespace mta::game_de
                     group.blockIdentity = {};
                 }};
     }
+    void CAnimBlendAssocGroupDE::CreateAssociations(const char* name)
+    {
+        if (!name)
+            throw std::invalid_argument("DE animation association-group CreateAssociations requires a nonnull block name");
+        const auto        token = reference;
+        const std::string copied(name);
+        const auto        invalidator = ChildBorrowInvalidator();
+        // Retirement precedes lookup in the real source. Forward the complete
+        // name and let that owner decide when CPU child borrows expire, even
+        // if a later lookup/allocation step refuses after an accepted effect.
+        Require(native.CreateAnimationAssociationGroup(token, copied, invalidator), "CreateAssociations");
+    }
     CAnimBlendAssociationSAInterface* CAnimBlendAssocGroupDE::CopyAnimation(unsigned int requested)
     {
         static_assert(sizeof(unsigned int) == sizeof(std::uint32_t));

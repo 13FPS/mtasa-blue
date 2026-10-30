@@ -3793,6 +3793,14 @@ namespace ClockAnimationAssociationNodeArrayTest
 #define MTA_DE_ANIMATION_ASSOCIATION_DESTRUCTOR_INVOKE  ::ClockAnimationAssociationNodeArrayTest::Destroy
 #define MTA_DE_ANIMATION_ASSOCIATION_EXCHANGE           ::ClockPrivateAnimationAssociationTest::Exchange
 #define MTA_DE_ANIMATION_ASSOCIATION_GROUP_COPY_INVOKE  ::ClockGroupCopyAnimationInvokeTest::Invoke
+#include "../../Client/game_de/NativeAnimationAssociationGroupCreationController.h"
+namespace ClockGroupSourceCreationOwnerTest
+{
+    const mta::game_de::NativeAnimationAssociationGroupCreation::Invocations* Supplier() noexcept;
+}
+#define MTA_DE_ANIMATION_GROUP_CREATION_INVOCATIONS ::ClockGroupSourceCreationOwnerTest::Supplier
+#include "../../Client/game_de/NativeAnimationAssociationGroupCreationController.cpp"
+#undef MTA_DE_ANIMATION_GROUP_CREATION_INVOCATIONS
 #include "../../Client/game_de/NativeAnimationAssociationGroupReplacement.cpp"
 #include "../../Client/game_de/NativeTemporaryModelClump.cpp"
 #include "../../Client/game_de/NativeTemporaryStaticAssociationInitializeCalls.cpp"
@@ -8610,6 +8618,7 @@ namespace
 #include "NativeAnimationAssociationGroupCopyOwnerTests.inl"
 #include "NativeAnimationAssociationGroupReplacementOwnerTests.inl"
 #include "NativeJointTemporaryStaticInitializerOwnerTests.inl"
+#include "NativeAnimationAssociationGroupSourceCreationOwnerTests.inl"
 #include "NativeAnimationAssociationBonesOwnerTests.inl"
 #include "NativeAnimationAssociationFloatOwnerTests.inl"
 #include "NativeAnimationAssociationProgressOwnerTests.inl"
@@ -8763,6 +8772,15 @@ int main(int argc, char** argv)
         staticAssociationInitializationUnknown || (argc == 3 && std::strcmp(argv[2], "--static-association-initialization-success") == 0);
     const bool animationStaticAssociationReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-static-association-reads") == 0;
     const bool animationAssociationGroupReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-association-group-reads") == 0;
+    const bool groupSourceCreationOnly = argc == 3 && std::strncmp(argv[2], "--group-source-creation-", 24) == 0;
+    unsigned   groupSourceCreationScenario = 0;
+    if (groupSourceCreationOnly)
+    {
+        const char* names[] = {"success", "child-rejected", "initialize-unknown", "initialize-owner-loss", "word-unknown"};
+        for (unsigned n = 0; n != 5; ++n)
+            if (std::strcmp(argv[2] + 24, names[n]) == 0)
+                groupSourceCreationScenario = n;
+    }
     const bool jointTemporaryStaticOnly = argc == 3 && std::strncmp(argv[2], "--joint-temporary-static-", 25) == 0;
     unsigned   jointTemporaryStaticScenario = 0;
     if (jointTemporaryStaticOnly)
@@ -8922,8 +8940,8 @@ int main(int argc, char** argv)
            freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly || customAnimationCleanupOnly ||
            standaloneSequenceOperationsOnly || animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly ||
            animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly || animationGroupValidityOnly ||
-           animationIdValidityOnly || animationAssociationGroupReadsOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
-           groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
+           animationIdValidityOnly || animationAssociationGroupReadsOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly ||
+           groupCopyAnimationOnly || groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
            animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
            privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
@@ -9103,6 +9121,15 @@ int main(int argc, char** argv)
         fixture.Create(argv[1]);
         // One real module-pinned lifetime needs one pristine host process.
         NativeAnimationBlocksOwnedSdk(fixture, &AnimationAssociationGroupChildProductsOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (groupSourceCreationOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        GroupSourceCreationOwnerFixture::scenario = groupSourceCreationScenario;
+        NativeAnimationBlocksOwnedSdk(fixture, &GroupSourceCreationOwnerFixture::RunPrepared);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

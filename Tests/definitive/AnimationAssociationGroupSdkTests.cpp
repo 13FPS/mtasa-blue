@@ -18,7 +18,7 @@ static_assert(std::is_same_v<decltype(&AnimationAssociationGroupReceiver::GetNum
 static_assert(std::is_same_v<decltype(&AnimationAssociationGroupReceiver::GetGroupID), decltype(&CAnimBlendAssocGroupDE::GetGroupID)>);
 static_assert(std::is_same_v<decltype(&AnimationAssociationGroupReceiver::IsLoaded), decltype(&CAnimBlendAssocGroupDE::IsLoaded)>);
 static_assert(std::is_same_v<decltype(&AnimationAssociationGroupReceiver::GetInterface), decltype(&CAnimBlendAssocGroupDE::GetInterface)>);
-static_assert(std::is_abstract_v<CAnimBlendAssocGroupDE> && !std::is_abstract_v<AnimationAssociationGroupReceiver>);
+static_assert(!std::is_abstract_v<CAnimBlendAssocGroupDE> && !std::is_abstract_v<AnimationAssociationGroupReceiver>);
 namespace
 {
     unsigned checks = 0;

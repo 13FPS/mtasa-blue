@@ -114,7 +114,7 @@ void operator delete[](void* value, std::size_t) noexcept
 #include "AnimationAssociationGroupChildGameFixture.generated.h"
 static_assert(std::is_same_v<decltype(&AnimationAssociationGroupReceiver::GetAnimBlock), decltype(&CAnimBlendAssocGroupDE::GetAnimBlock)>);
 static_assert(std::is_same_v<decltype(&AnimationAssociationGroupReceiver::GetAnimation), decltype(&CAnimBlendAssocGroupDE::GetAnimation)>);
-static_assert(std::is_abstract_v<CAnimBlendAssocGroupDE> && !std::is_abstract_v<AnimationAssociationGroupReceiver>);
+static_assert(!std::is_abstract_v<CAnimBlendAssocGroupDE> && !std::is_abstract_v<AnimationAssociationGroupReceiver>);
 namespace group_child_products_tests
 {
     constexpr std::uint64_t Generation = 0xfedcba9876543210ull;

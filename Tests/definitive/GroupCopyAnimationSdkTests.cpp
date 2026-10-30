@@ -16,7 +16,7 @@ using namespace mta::game_de;
 #include "AnimationAssociationGroupFixture.generated.h"
 static_assert(std::is_same_v<decltype(&AnimationAssociationGroupReceiver::CopyAnimation), decltype(&CAnimBlendAssocGroupDE::CopyAnimation)>);
 static_assert(std::is_same_v<decltype(&CAnimBlendAssocGroup::CopyAnimation), CAnimBlendAssociationSAInterface* (CAnimBlendAssocGroup::*)(unsigned int)>);
-static_assert(std::is_abstract_v<CAnimBlendAssocGroupDE> && !std::is_abstract_v<AnimationAssociationGroupReceiver>);
+static_assert(!std::is_abstract_v<CAnimBlendAssocGroupDE> && !std::is_abstract_v<AnimationAssociationGroupReceiver>);
 static_assert(sizeof(unsigned int) == sizeof(std::uint32_t));
 namespace
 {

@@ -28,7 +28,7 @@ namespace group_cache_invalidation_tests
             std::abort();
         }
     };
-    static_assert(!std::is_abstract_v<Receiver> && std::is_abstract_v<CAnimBlendAssocGroupDE>);
+    static_assert(!std::is_abstract_v<Receiver> && !std::is_abstract_v<CAnimBlendAssocGroupDE>);
     using Buffers = std::array<std::array<unsigned char, 32>, 5>;
     Buffers NativeBuffers(const Owner& owner)
     {

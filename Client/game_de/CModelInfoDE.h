@@ -30,6 +30,13 @@ namespace mta::game_de
         bool                       IsCar() override;
         bool                       IsPlane() override;
         bool                       IsHeli() override;
+        bool                       IsTrain() override;
+        bool                       IsBike() override;
+        bool                       IsBmx() override;
+        bool                       IsTrailer() override;
+        bool                       IsMonsterTruck() override;
+        bool                       IsQuadBike() override;
+        bool                       IsFakePlane() override;
         bool                       IsTowableBy(CModelInfo* towingModel) override;
 
     protected:

@@ -168,4 +168,35 @@ namespace mta::game_de
     {
         return Query(NativeModelVehiclePredicate::Heli);
     }
+    // The named IDE producer independently qualifies these policies over
+    // current native type/subtype storage; the existing owner refuses gaps.
+    bool CModelInfoDE::IsTrain()
+    {
+        return Query(NativeModelVehiclePredicate::Train);
+    }
+    bool CModelInfoDE::IsBike()
+    {
+        return Query(NativeModelVehiclePredicate::Bike);
+    }
+    bool CModelInfoDE::IsBmx()
+    {
+        return Query(NativeModelVehiclePredicate::Bmx);
+    }
+    bool CModelInfoDE::IsTrailer()
+    {
+        return Query(NativeModelVehiclePredicate::Trailer);
+    }
+    bool CModelInfoDE::IsMonsterTruck()
+    {
+        return Query(NativeModelVehiclePredicate::MonsterTruck);
+    }
+    bool CModelInfoDE::IsQuadBike()
+    {
+        return Query(NativeModelVehiclePredicate::QuadBike);
+    }
+    bool CModelInfoDE::IsFakePlane()
+    {
+        return Query(NativeModelVehiclePredicate::FakePlane);
+    }
+
 }

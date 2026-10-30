@@ -121,13 +121,6 @@ namespace
         [[noreturn]] static void         Unavailable() { throw std::logic_error("unrelated model SDK method in classification fixture"); }
         class CBaseModelInfoSAInterface* GetInterface() override { Unavailable(); }
         bool                             IsPlayerModel() override { Unavailable(); }
-        bool                             IsTrain() override { Unavailable(); }
-        bool                             IsBike() override { Unavailable(); }
-        bool                             IsFakePlane() override { Unavailable(); }
-        bool                             IsMonsterTruck() override { Unavailable(); }
-        bool                             IsQuadBike() override { Unavailable(); }
-        bool                             IsBmx() override { Unavailable(); }
-        bool                             IsTrailer() override { Unavailable(); }
         char*                            GetNameIfVehicle() override { Unavailable(); }
         void                             Request(EModelRequestType requestType, const char* szTag /* = NULL*/) override
         {
@@ -383,6 +376,20 @@ namespace
                 return model.IsPlane();
             case NativeModelVehiclePredicate::Heli:
                 return model.IsHeli();
+            case NativeModelVehiclePredicate::Train:
+                return model.IsTrain();
+            case NativeModelVehiclePredicate::Bike:
+                return model.IsBike();
+            case NativeModelVehiclePredicate::Bmx:
+                return model.IsBmx();
+            case NativeModelVehiclePredicate::Trailer:
+                return model.IsTrailer();
+            case NativeModelVehiclePredicate::MonsterTruck:
+                return model.IsMonsterTruck();
+            case NativeModelVehiclePredicate::QuadBike:
+                return model.IsQuadBike();
+            case NativeModelVehiclePredicate::FakePlane:
+                return model.IsFakePlane();
         }
         throw std::logic_error("invalid fixture predicate");
     }

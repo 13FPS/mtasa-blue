@@ -25,7 +25,8 @@ namespace mta::game_de::NativeModelClassificationCalls
         std::uint32_t               modelIndex = 0, exceptionCode = 0;
         NativeModelVehiclePredicate predicate = NativeModelVehiclePredicate::Boat;
         unsigned char               nativeResult = 0;
-        bool                        entered = false, returned = false;
+        // A named producer policy performs no native classifier invocation.
+        bool entered = false, returned = false, policyPort = false;
     };
     // Observe only a complete pure constant-return built-in getter body.
     // The shared leaf reader invokes nothing; all bank/context/code facts are

@@ -4,6 +4,7 @@
  * PURPOSE: Reuse genuine model classifier semantics with current owner bookends
  ****************************************************************************/
 #include "NativeModelClassificationCalls.h"
+#include "NativeModelVehicleNamedProfile.h"
 #include "NativeStreamingModelContext.h"
 #include "NativeImageAccess.h"
 #include "NativeModelBankProfile.h"
@@ -63,6 +64,119 @@ namespace mta::game_de::NativeModelClassificationCalls
                 return false;
             output = next;
             return true;
+        }
+        bool NamedProfile(std::uintptr_t image) noexcept
+        {
+            namespace Named = NativeModelVehicleNamedProfile;
+            IMAGE_DOS_HEADER   dos{};
+            IMAGE_NT_HEADERS64 nt{};
+            if (!NativeImageAccess::ReadImage(image, image, &dos, sizeof(dos)) || dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew <= 0 ||
+                static_cast<std::size_t>(dos.e_lfanew) > NativePedPoolProfile::ImageSize - sizeof(nt) ||
+                !NativeImageAccess::ReadImage(image, image + static_cast<std::uintptr_t>(dos.e_lfanew), &nt, sizeof(nt)) ||
+                nt.Signature != IMAGE_NT_SIGNATURE || nt.FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 ||
+                nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC || nt.OptionalHeader.SizeOfImage != NativePedPoolProfile::ImageSize ||
+                nt.FileHeader.SizeOfOptionalHeader < sizeof(IMAGE_OPTIONAL_HEADER64))
+                return false;
+            const auto at = static_cast<std::uintptr_t>(dos.e_lfanew) + offsetof(IMAGE_NT_HEADERS64, OptionalHeader) + nt.FileHeader.SizeOfOptionalHeader;
+            std::array<IMAGE_SECTION_HEADER, 96> sections{};
+            const auto                           bytes = static_cast<std::size_t>(nt.FileHeader.NumberOfSections) * sizeof(IMAGE_SECTION_HEADER);
+            if (!nt.FileHeader.NumberOfSections || nt.FileHeader.NumberOfSections > sections.size() || at > NativePedPoolProfile::ImageSize ||
+                bytes > NativePedPoolProfile::ImageSize - at || !NativeImageAccess::ReadImage(image, image + at, sections.data(), bytes))
+                return false;
+            for (const auto& pin : Named::Pins)
+            {
+                const bool code = pin.rva == Named::ProducerRva;
+                bool       contained = false;
+                for (std::size_t index = 0; index != nt.FileHeader.NumberOfSections; ++index)
+                    if (NativeImageAccess::SectionContains(sections[index], pin.rva, pin.size, IMAGE_SCN_MEM_READ | (code ? IMAGE_SCN_MEM_EXECUTE : 0),
+                                                           IMAGE_SCN_MEM_WRITE | (code ? 0 : IMAGE_SCN_MEM_EXECUTE)))
+                        contained = true;
+                std::array<unsigned char, Named::MaximumPinBytes> actual{};
+                if (!contained || !pin.size || pin.size > actual.size() ||
+                    !NativeImageAccess::ReadImage(image, image + pin.rva, actual.data(), pin.size, false, code) ||
+                    std::memcmp(actual.data(), pin.bytes, pin.size))
+                    return false;
+            }
+            return true;
+        }
+        ClockResult ReadNamed(std::uintptr_t image, std::uint32_t modelIndex, std::uint32_t expectedSubtype, CheckOwner owner, bool& output,
+                              Receipt& receipt) noexcept
+        {
+            receipt.policyPort = true;
+            if (!owner)
+                return ClockResult::NotInitialized;
+            NativeModelBankReader        bank({image}, owner);
+            NativeModelBankReader::Value model;
+            auto                         result = bank.Read(modelIndex, model);
+            if (result != ClockResult::Ok)
+                return result;
+            if (!NamedProfile(image))
+                return ClockResult::UnsupportedBuild;
+            receipt.modelInfo = model.nativeModelInfo;
+            if (!model.nativeModelInfo)
+            {
+                // Actual classic predicates return false for an absent row.
+                // Close the null bank word after all fallible owner callbacks.
+                if ((result = bank.Recheck(model)) != ClockResult::Ok || (result = owner()) != ClockResult::Ok)
+                    return result;
+                std::uintptr_t current = 1;
+                if (!NativeModelBankReader::Revalidate({image}) || !NamedProfile(image) ||
+                    !NativeImageAccess::ReadImage(image, model.slotAddress, &current, sizeof(current), true) || current)
+                    return ClockResult::BindingChanged;
+                std::uint32_t state = 0;
+                if (!NativeGameStateMemory::Read(image, state))
+                    return ClockResult::BindingChanged;
+                if (state != 9)
+                    return ClockResult::NotInitialized;
+                if ((result = NativeStartGameCalls::CheckThread(image)) != ClockResult::Ok)
+                    return result;
+                output = false;
+                return ClockResult::Ok;
+            }
+            NativeStreamingModelContext::Value context;
+            if ((result = NativeStreamingModelContext::Capture(image, model, context)) != ClockResult::Ok)
+                return result;
+            receipt.root = context.root;
+            std::array<unsigned char, 6> before{}, after{};
+            std::uint8_t                 firstType = 0, secondType = 0;
+            if (!NativeModelTypeLeaf::Read(image, context.typeMethod, before, firstType))
+                return ClockResult::UnsupportedBuild;
+            std::uint32_t first = 0, second = 0;
+            // Type AL6 is the source prerequisite for touching DWORD+84.
+            // No archive lookup, loaded check or low-byte conversion belongs
+            // to these named predicate policies.
+            if (firstType == 6 && !VehicleField(model.nativeModelInfo, first))
+                return ClockResult::ReadFailure;
+            if ((result = bank.Recheck(model)) != ClockResult::Ok ||
+                (result = NativeStreamingModelContext::Recheck(image, model, context)) != ClockResult::Ok || (result = owner()) != ClockResult::Ok ||
+                (result = NativeStreamingModelContext::Recheck(image, model, context)) != ClockResult::Ok)
+                return result;
+            // Finish every callback before these final byte/data bookends.
+            // The two observations stay coupled to the very same bank row,
+            // metadata vtable/provider/membership and pure native type leaf.
+            if (!NativeModelBankReader::Revalidate({image}) || !NamedProfile(image) ||
+                !NativeModelTypeLeaf::Read(image, context.typeMethod, after, secondType) || before != after || secondType != firstType)
+                return ClockResult::BindingChanged;
+            if (firstType == 6 && !VehicleField(model.nativeModelInfo, second))
+                return ClockResult::ReadFailure;
+            if (first != second)
+                return ClockResult::BindingChanged;
+            if ((result = NativeStreamingModelContext::Recheck(image, model, context)) != ClockResult::Ok)
+                return result;
+            std::uintptr_t current = 0;
+            if (!NativeImageAccess::ReadImage(image, model.slotAddress, &current, sizeof(current), true) || current != model.nativeModelInfo ||
+                !NativeStreamingModelContext::MembershipUnchanged(image, context) || !NamedProfile(image))
+                return ClockResult::BindingChanged;
+            std::uint32_t state = 0;
+            if (!NativeGameStateMemory::Read(image, state))
+                return ClockResult::BindingChanged;
+            if (state != 9)
+                return ClockResult::NotInitialized;
+            if ((result = NativeStartGameCalls::CheckThread(image)) != ClockResult::Ok)
+                return result;
+            receipt.nativeResult = firstType == 6 && first == expectedSubtype ? 1 : 0;
+            output = receipt.nativeResult != 0;
+            return ClockResult::Ok;
         }
 #if !defined(MTA_DE_MODEL_CLASSIFICATION_NATIVE_INVOKE)
         ClockResult NativeCall(NativeFunction function, std::uint32_t model, unsigned char& result, std::uint32_t& exception) noexcept
@@ -187,7 +301,8 @@ namespace mta::game_de::NativeModelClassificationCalls
         if ((result = NativeStartGameCalls::CheckThread(image)) != ClockResult::Ok)
             return result;
         // Unknown/high subtype bits are still a successful raw observation.
-        // This adds no names for the seven unqualified vehicle predicates.
+        // Named policies use a separate independently qualified producer; this
+        // raw observation itself introduces no enum interpretation.
         output = second;
         return ClockResult::Ok;
     }
@@ -205,6 +320,9 @@ namespace mta::game_de::NativeModelClassificationCalls
         };
         if (modelIndex >= NativeModelBankProfile::ModelCount)
             return finish(ClockResult::InvalidArgument);
+        std::uint32_t namedSubtype = 0;
+        if (NativeModelVehicleNamedProfile::Find(predicate, namedSubtype))
+            return finish(ClassificationDetail::ReadNamed(image, modelIndex, namedSubtype, owner, output, receipt));
         for (const auto& entry : NativeModelClassificationProfile::Entries)
             if (entry.predicate == predicate)
                 receipt.entryRva = entry.rva;

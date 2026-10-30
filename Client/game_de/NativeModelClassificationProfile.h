@@ -14,7 +14,14 @@ namespace mta::game_de
         Boat,
         Car,
         Plane,
-        Heli
+        Heli,
+        Train,
+        Bike,
+        Bmx,
+        Trailer,
+        MonsterTruck,
+        QuadBike,
+        FakePlane
     };
 }
 namespace mta::game_de::NativeModelClassificationProfile

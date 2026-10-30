@@ -224,6 +224,113 @@ namespace mta::game_de
             *receipt = next;
         return result;
     }
+    ClockResult NativeAnimationAssociationController::ResolveIssuedInterface(std::uintptr_t image, std::uint64_t generation, std::uintptr_t candidate,
+                                                                             CheckOwner owner, NativeAnimationAssociationIssuedCopy& output) noexcept
+    {
+        if (!image || !generation || !candidate || !owner || output.token.ownerGeneration || output.token.serial || output.interfaceAddress ||
+            output.code.IsIssued())
+            return ClockResult::InvalidArgument;
+        if (generation <= closedFacadeThrough.load(std::memory_order_acquire))
+            return ClockResult::OwnerConflict;
+        auto result = owner();
+        if (result != ClockResult::Ok)
+            return result;
+        if (!AnimationAssociationControllerDetail::Enter(busy))
+            return ClockResult::Busy;
+        AnimationAssociationControllerDetail::Guard guard{busy};
+        auto                                        finish = [&](ClockResult value)
+        {
+            Publish();
+            return value;
+        };
+        if (generation <= closedFacadeThrough.load(std::memory_order_acquire) || generation < facadeGeneration)
+            return finish(ClockResult::OwnerConflict);
+        if (facadeGeneration != generation)
+        {
+            // Raw Create records may precede their first CPU wrapper in this
+            // epoch. Prior native/code debt must still be fully quiescent.
+            for (const auto& entry : records)
+                if (entry->token.ownerGeneration != generation && (CodePending(*entry) || !CanErase(*entry)))
+                    return finish(ClockResult::OwnerConflict);
+            for (auto at = records.begin(); at != records.end();)
+                if ((*at)->token.ownerGeneration != generation)
+                    at = records.erase(at);
+                else
+                    ++at;
+            facadeGeneration = generation;
+        }
+        Entry* selected = nullptr;
+        for (const auto& entry : records)
+        {
+            if (entry->token.ownerGeneration != generation || !NativeAnimationAssociationCalls::MatchesIssuedInterface(entry->storage, generation, candidate))
+                continue;
+            if (selected)
+                return finish(ClockResult::BindingChanged);
+            selected = entry.get();
+        }
+        if (!selected)
+            return finish(ClockResult::OwnerConflict);
+        std::uintptr_t confirmed = 0;
+        if ((result = NativeAnimationAssociationCalls::ReadInterface(image, selected->storage, generation, owner, confirmed)) != ClockResult::Ok)
+            return finish(result);
+        if (confirmed != candidate)
+            return finish(ClockResult::BindingChanged);
+        if (!selected->code)
+        {
+            try
+            {
+                // This allocates CPU bookkeeping only. The native outer and
+                // serial already belong to this same actual Entry; no source
+                // row, constructor/ref or second native allocation is adopted.
+                selected->code.reset(new NativeAnimationAssociationFacadeLifetime(image, selected->token));
+            }
+            catch (...)
+            {
+                return finish(ClockResult::WriteFailure);
+            }
+        }
+        auto& code = *selected->code;
+        if (code.image != image || code.token.ownerGeneration != generation || code.token.serial != selected->token.serial ||
+            code.creator != std::this_thread::get_id() || code.offCreatorDrop.load(std::memory_order_acquire))
+            return finish(ClockResult::OwnerConflict);
+        if ((result = owner()) != ClockResult::Ok)
+            return finish(result);
+        if (generation <= closedFacadeThrough.load(std::memory_order_acquire))
+            return finish(ClockResult::OwnerConflict);
+        auto views = code.views.load(std::memory_order_acquire);
+        do
+        {
+            if (views == (std::numeric_limits<std::size_t>::max)())
+                return finish(ClockResult::OwnerConflict);
+        } while (!code.views.compare_exchange_weak(views, views + 1, std::memory_order_acq_rel));
+        if (code.offCreatorDrop.load(std::memory_order_acquire) || generation <= closedFacadeThrough.load(std::memory_order_acquire))
+        {
+            code.views.fetch_sub(1, std::memory_order_acq_rel);
+            return finish(ClockResult::OwnerConflict);
+        }
+        output.token = selected->token;
+        output.interfaceAddress = confirmed;
+        output.code = NativeAnimationAssociationFacadeView(selected->code);
+        return finish(ClockResult::Ok);
+    }
+    ClockResult NativeAnimationAssociationController::ReadInterface(std::uintptr_t image, std::uint64_t generation, const Token& requested, CheckOwner owner,
+                                                                    std::uintptr_t& output) noexcept
+    {
+        const auto token = requested;
+        if (!image || !generation || !owner)
+            return ClockResult::InvalidArgument;
+        if (!AnimationAssociationControllerDetail::Enter(busy))
+            return ClockResult::Busy;
+        AnimationAssociationControllerDetail::Guard guard{busy};
+        auto*                                       entry = Find(generation, token);
+        if (!entry)
+            return ClockResult::OwnerConflict;
+        const auto result = NativeAnimationAssociationCalls::ReadInterface(image, entry->storage, generation, owner, output);
+        // Constructed identity reads preserve Snapshot's ability to pin a
+        // changed native record. Publish that real recovery state as Read does.
+        Publish();
+        return result;
+    }
     ClockResult NativeAnimationAssociationController::Create(std::uintptr_t image, std::uint64_t generation, CheckOwner owner, Token& output,
                                                              Receipt* receipt) noexcept
     {

@@ -94,6 +94,10 @@ namespace mta::game_de
                            NativeCustomAnimSequenceStorageCalls::InvokeMalloc = nullptr) noexcept;
         ClockResult Construct(std::uintptr_t, Storage&, std::uint64_t, std::uintptr_t, CheckOwner, std::uintptr_t&, Receipt* = nullptr,
                               InvokeConstructor = nullptr) noexcept;
+        // Serialized ledger selection only, not native admission. In
+        // particular, comparing an unconstructed tag reads no native fields.
+        bool        MatchesIssuedInterface(const Storage&, std::uint64_t, std::uintptr_t) noexcept;
+        ClockResult ReadInterface(std::uintptr_t, const Storage&, std::uint64_t, CheckOwner, std::uintptr_t&) noexcept;
         ClockResult Read(std::uintptr_t, const Storage&, std::uint64_t, CheckOwner, NativeAnimationAssociationValues&) noexcept;
         // Duration is a separate joint bank-H observation. Ordinary receiver
         // metadata does not acquire this extra field/profile dependency.

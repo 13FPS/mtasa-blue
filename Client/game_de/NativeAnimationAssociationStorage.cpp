@@ -1018,6 +1018,50 @@ namespace mta::game_de
             output = d.receiver;
             return finish(ClockResult::Ok);
         }
+        static bool MatchesIssuedInterface(const S& s, std::uint64_t generation, std::uintptr_t candidate) noexcept
+        {
+            const auto state = s.GetState();
+            return candidate && generation && s.data && s.data->generation == generation && s.data->receiver == candidate &&
+                   s.data->outer.IssuedTag() == candidate && !s.data->destructorEntered &&
+                   (state == State::Unconstructed || state == State::LiveUnpublished || state == State::NodesReleased);
+        }
+        static ClockResult ReadInterface(std::uintptr_t image, const S& s, std::uint64_t generation, C owner, std::uintptr_t& output) noexcept
+        {
+            using namespace AnimationAssociationStorageDetail;
+            if (s.GetState() != State::Unconstructed)
+            {
+                // Preserve every existing constructed/node-release snapshot
+                // guard instead of making the raw factory a weaker reader.
+                NativeAnimationAssociationValues next;
+                const auto                       result = Read(image, s, generation, owner, next);
+                if (result == ClockResult::Ok)
+                    output = next.interfaceAddress;
+                return result;
+            }
+            if (!Context::TryEnter())
+                return ClockResult::Busy;
+            Context::Scope gate;
+            if (!s.data || s.GetState() != State::Unconstructed || s.data->constructorEntered || s.data->knownConstructed || s.data->destructorEntered ||
+                !MatchesIssuedInterface(s, generation, s.data->receiver))
+                return ClockResult::OwnerConflict;
+            const auto                      receiver = s.data->receiver;
+            NativeModelReferenceHeap::Value first, last;
+            auto                            result = NativeAnimationAssociationOuterStorageCalls::Qualify(image, s.data->outer, generation, owner, first);
+            if (result != ClockResult::Ok)
+                return result;
+            // The real allocator receipt owns these104 bytes, but none of
+            // their vtable/H/node fields exist yet. Bookend only that outer
+            // identity and its original heap, never an invented constructor.
+            if ((result = NativeAnimationAssociationOuterStorageCalls::Qualify(image, s.data->outer, generation, owner, last)) != ClockResult::Ok)
+                return result;
+            if (!NativeModelReferenceHeap::Same(first, last) || s.GetState() != State::Unconstructed || s.data->constructorEntered ||
+                s.data->knownConstructed || s.data->destructorEntered || !MatchesIssuedInterface(s, generation, receiver))
+                return ClockResult::BindingChanged;
+            if ((result = Context::Owner(image, owner)) != ClockResult::Ok)
+                return result;
+            output = receiver;
+            return ClockResult::Ok;
+        }
         static ClockResult Read(std::uintptr_t image, const S& s, std::uint64_t generation, C owner, NativeAnimationAssociationValues& output) noexcept
         {
             using namespace AnimationAssociationStorageDetail;
@@ -1814,6 +1858,14 @@ namespace mta::game_de
                               InvokeConstructor v) noexcept
         {
             return NativeAnimationAssociationStorageAccess::Construct(i, s, g, source, o, result, r, v);
+        }
+        bool MatchesIssuedInterface(const Storage& storage, std::uint64_t generation, std::uintptr_t candidate) noexcept
+        {
+            return NativeAnimationAssociationStorageAccess::MatchesIssuedInterface(storage, generation, candidate);
+        }
+        ClockResult ReadInterface(std::uintptr_t image, const Storage& storage, std::uint64_t generation, CheckOwner owner, std::uintptr_t& output) noexcept
+        {
+            return NativeAnimationAssociationStorageAccess::ReadInterface(image, storage, generation, owner, output);
         }
         ClockResult Read(std::uintptr_t i, const Storage& s, std::uint64_t g, CheckOwner o, NativeAnimationAssociationValues& result) noexcept
         {

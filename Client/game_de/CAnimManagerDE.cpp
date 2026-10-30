@@ -244,6 +244,32 @@ namespace mta::game_de
         memory.release();
         return AnimBlendAssoc_type(facade);
     }
+    CAnimManagerDE::AnimBlendAssoc_type CAnimManagerDE::GetAnimBlendAssociation(CAnimBlendAssociationSAInterface* source)
+    {
+        const auto locator = reinterpret_cast<std::uintptr_t>(source);
+        // Actual MTA returns null before creating a CPU wrapper. Missing
+        // providers/generation must not turn that source null into a refusal.
+        if (!locator)
+            return nullptr;
+        const auto generation = ownerGeneration;
+        if (!associationAccess || !generation)
+            Require(ClockResult::NotInitialized, "GetAnimBlendAssociation");
+        // Reserve CPU storage before issuing another code-lifetime view. The
+        // resolver may only select a record already issued by this same owner;
+        // it performs no native copy/construction or arbitrary raw adoption.
+        std::unique_ptr<void, DeleteAssociationFacadeStorage> memory(::operator new(sizeof(CAnimBlendAssociationDE)));
+        NativeAnimationAssociationIssuedCopy                  issued;
+        Require(associationAccess->ResolvePrivateAnimationAssociationInterface(generation, locator, issued), "GetAnimBlendAssociation");
+        const auto codeToken = issued.code.Token();
+        if (issued.interfaceAddress != locator || issued.token.ownerGeneration != generation || !issued.token.serial || !issued.code.IsIssued() ||
+            codeToken.ownerGeneration != issued.token.ownerGeneration || codeToken.serial != issued.token.serial)
+            Require(ClockResult::BindingChanged, "GetAnimBlendAssociation");
+        // Base unique_ptr deletion releases this CPU product/view only. The
+        // native ledger retains construction, mutation and retirement authority.
+        auto* facade = ::new (memory.get()) CAnimBlendAssociationDE(*associationAccess, issued.token, std::move(issued.code));
+        memory.release();
+        return AnimBlendAssoc_type(facade);
+    }
     CAnimManagerDE::StaticAssocIntface_type CAnimManagerDE::GetAnimStaticAssociation(eAnimGroup requestedGroup, eAnimID requestedAnimation) const
     {
         const auto group = static_cast<std::uint32_t>(requestedGroup);

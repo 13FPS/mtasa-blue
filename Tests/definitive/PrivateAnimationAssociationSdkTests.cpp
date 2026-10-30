@@ -97,7 +97,7 @@ namespace
         std::uint32_t                                   bits = 0;
         std::int16_t                                    word = 0;
         Field                                           field = Field::None;
-        unsigned                                        creates = 0, constructs = 0, reads = 0, writes = 0, retires = 0;
+        unsigned                                        creates = 0, constructs = 0, reads = 0, identityReads = 0, writes = 0, retires = 0;
         bool                                            aliased = false;
         void                                            Capture(const NativeAnimationAssociationReferenceToken& token) noexcept
         {
@@ -118,6 +118,15 @@ namespace
             Capture(token);
             source = locator;
             output = returned;
+            return status;
+        }
+        // GetInterface observes the issued opaque identity independently of
+        // construction; a scalar snapshot is not an unconstructed fallback.
+        ClockResult ReadPrivateAnimationAssociationInterface(const NativeAnimationAssociationReferenceToken& token, std::uintptr_t& output) noexcept override
+        {
+            ++identityReads;
+            Capture(token);
+            output = value.interfaceAddress;
             return status;
         }
         ClockResult ReadPrivateAnimationAssociation(const NativeAnimationAssociationReferenceToken& token,
@@ -193,7 +202,7 @@ int main()
     CAnimBlendStaticAssociationSAInterface source;
     Check(reinterpret_cast<std::uintptr_t>(sdk.Constructor(source)) == owner.returned);
     Check(owner.constructs == 1 && owner.reads == 0 && owner.source == reinterpret_cast<std::uintptr_t>(&source) && Same(owner.received, original));
-    Check(reinterpret_cast<std::uintptr_t>(sdk.GetInterface()) == owner.value.interfaceAddress);
+    Check(reinterpret_cast<std::uintptr_t>(sdk.GetInterface()) == owner.value.interfaceAddress && owner.identityReads == 1 && owner.reads == 0);
     for (const auto value :
          {std::int16_t{0}, std::int16_t{-1}, std::int16_t{12345}, (std::numeric_limits<std::int16_t>::min)(), (std::numeric_limits<std::int16_t>::max)()})
     {
@@ -241,7 +250,7 @@ int main()
                                ClockResult::BindingChanged, ClockResult::OwnerConflict, ClockResult::Busy, ClockResult::InvalidArgument})
     {
         owner.status = failure;
-        const auto constructs = owner.constructs, reads = owner.reads, writes = owner.writes;
+        const auto constructs = owner.constructs, reads = owner.reads, identityReads = owner.identityReads, writes = owner.writes;
         Refuses([&] { sdk.Constructor(source); }, failure, "Constructor");
         Refuses([&] { sdk.GetInterface(); }, failure, "GetInterface");
         Refuses([&] { sdk.GetAnimID(); }, failure, "GetAnimID");
@@ -253,7 +262,8 @@ int main()
         Refuses([&] { sdk.SetAnimID(-1); }, failure, "SetAnimID");
         Refuses([&] { sdk.SetAnimGroup(-32768); }, failure, "SetAnimGroup");
         Refuses([&] { sdk.SetFlags(0); }, failure, "SetFlags");
-        Check(owner.constructs == constructs + 1 && owner.reads == reads + 5 && owner.writes == writes + 5 && Same(owner.received, original));
+        Check(owner.constructs == constructs + 1 && owner.reads == reads + 4 && owner.identityReads == identityReads + 1 && owner.writes == writes + 5 &&
+              Same(owner.received, original));
     }
     Missing                             missing;
     PrivateAnimationAssociationReceiver unavailable(missing, original);
@@ -276,11 +286,12 @@ int main()
     other.value.animId = 73;
     PrivateAnimationAssociationReceiver isolated(other, otherToken);
     Check(static_cast<int>(isolated.GetAnimID()) == 73 && Same(other.received, otherToken));
-    const auto lastReads = owner.reads, lastWrites = owner.writes, lastConstructs = owner.constructs;
+    const auto lastReads = owner.reads, lastIdentityReads = owner.identityReads, lastWrites = owner.writes, lastConstructs = owner.constructs;
     {
         PrivateAnimationAssociationReceiver unused(owner, original);
     }
-    Check(owner.reads == lastReads && owner.writes == lastWrites && owner.constructs == lastConstructs && owner.creates == 0 && owner.retires == 0);
+    Check(owner.reads == lastReads && owner.identityReads == lastIdentityReads && owner.writes == lastWrites && owner.constructs == lastConstructs &&
+          owner.creates == 0 && owner.retires == 0);
     std::puts("Actual private animation association SDK fixture completed");
     std::printf("Passed %u private association SDK checks (%zu-bit; dispatch only, no native engine code)\n", checks, sizeof(void*) * 8);
     return 0;

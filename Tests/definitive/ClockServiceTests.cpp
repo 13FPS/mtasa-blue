@@ -8654,7 +8654,7 @@ namespace
 #include "NativeAnimationAssociationNodeArrayOwnerTests.inl"
 // The combined fixture uses the node-release guard state defined above.
 #include "NativeDynamicClumpOwnerTests.inl"
-#include "AnimationAssociationNumericFactoryFixture.generated.h"
+#include "AnimationAssociationRawFactoryFixture.generated.h"
 #include "NativeNumericAssociationOwnerTests.inl"
 
 // The strict receiver must execute production typed tickets and the distinct

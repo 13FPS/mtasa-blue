@@ -211,11 +211,11 @@ namespace NumericAssociationOwnerFixture
                       "numeric factory uses a real current physical group1 with unchanged Created0 and row0 extent");
                 Hook::group = group;
             });
-        AnimationAssociationNumericFactoryManagerReceiver manager(runtime.access, generation);
-        CAnimManager&                                     sdk = manager;
-        std::unique_ptr<CAnimBlendAssociation>            product;
-        std::unique_ptr<CAnimBlendHierarchy>              child;
-        const auto                                        refuses = [&](const auto& operation, const char* label)
+        AnimationAssociationRawFactoryManagerReceiver manager(runtime.access, generation);
+        CAnimManager&                                 sdk = manager;
+        std::unique_ptr<CAnimBlendAssociation>        product;
+        std::unique_ptr<CAnimBlendHierarchy>          child;
+        const auto                                    refuses = [&](const auto& operation, const char* label)
         {
             bool rejected = false;
             try
@@ -238,6 +238,69 @@ namespace NumericAssociationOwnerFixture
             }
             return done;
         };
+        if (scenario == 0)
+        {
+            // Raw static construction needs one unambiguous parent interval.
+            // The numeric regression below deliberately exposes two aliases
+            // and selects its group explicitly; restore that source afterward.
+            saved.Global(NativeAnimationGroupArrayProfile::CountRva, std::int32_t{1});
+            NativeAnimationAssociationReferenceToken rawToken;
+            std::uintptr_t                           rawAddress = 0;
+            std::unique_ptr<CAnimBlendAssociation>   firstRaw, secondRaw;
+            const auto                               freesBeforeRaw = host.freeCalls;
+            action(
+                [&]
+                {
+                    Check(!sdk.GetAnimBlendAssociation(nullptr), "raw factory preserves source null without native entry");
+                    Check(runtime.access.CreatePrivateAnimationAssociation(generation, rawToken) == ClockResult::Ok && rawToken.serial,
+                          "actual owner issues one acknowledged unconstructed receiver before raw factory use");
+                    Check(runtime.access.ReadPrivateAnimationAssociationInterface(rawToken, rawAddress) == ClockResult::Ok && rawAddress,
+                          "identity channel returns the acknowledged unconstructed outer allocation");
+                    // Uninitialized native bytes are not a vptr or metadata
+                    // contract. The ledger's allocation ACK supplies identity.
+                    PrivateHook::Store(rawAddress, std::uintptr_t{0xbad00bad});
+                    const auto mallocs = host.mallocCalls;
+                    firstRaw = sdk.GetAnimBlendAssociation(reinterpret_cast<CAnimBlendAssociationSAInterface*>(rawAddress));
+                    secondRaw = sdk.GetAnimBlendAssociation(reinterpret_cast<CAnimBlendAssociationSAInterface*>(rawAddress));
+                    Check(firstRaw && secondRaw && firstRaw.get() != secondRaw.get() &&
+                              reinterpret_cast<std::uintptr_t>(firstRaw->GetInterface()) == rawAddress &&
+                              reinterpret_cast<std::uintptr_t>(secondRaw->GetInterface()) == rawAddress && host.mallocCalls == mallocs && !Hook::calls,
+                          "two actual raw facades share the unconstructed Entry without native allocation or copy");
+                    refuses([&] { (void)firstRaw->GetAnimID(); }, "unconstructed identity does not authorize scalar reads");
+                    refuses([&] { (void)sdk.GetAnimBlendAssociation(reinterpret_cast<CAnimBlendAssociationSAInterface*>(std::uintptr_t{1})); },
+                            "unreadable foreign raw tag refuses without dereference or adoption");
+                    NativeAnimationAssociationIssuedCopy occupied;
+                    occupied.interfaceAddress = 0x76543210;
+                    Check(runtime.access.ResolvePrivateAnimationAssociationInterface(generation, rawAddress, occupied) == ClockResult::InvalidArgument &&
+                              occupied.interfaceAddress == 0x76543210 && !occupied.token.serial && !occupied.code.IsIssued(),
+                          "occupied caller output is preserved without another code view");
+                    NativeAnimationAssociationIssuedCopy stale;
+                    Check(runtime.access.ResolvePrivateAnimationAssociationInterface(generation - 1, rawAddress, stale) == ClockResult::OwnerConflict &&
+                              !stale.interfaceAddress && !stale.token.serial && !stale.code.IsIssued(),
+                          "current allocation cannot renew an obsolete runtime generation");
+                    const auto returned = firstRaw->Constructor(*reinterpret_cast<CAnimBlendStaticAssociationSAInterface*>(source.children));
+                    Check(reinterpret_cast<std::uintptr_t>(returned) == rawAddress && static_cast<short>(secondRaw->GetAnimID()) == 17 &&
+                              PrivateHook::Load<std::uint16_t>(source.counter) == 18,
+                          "real copied constructor initializes the same Entry observed through the second facade");
+                    Check(runtime.access.RetirePrivateAnimationAssociation(rawToken) == ClockResult::Ok && host.freeCalls == freesBeforeRaw + 2 &&
+                              PrivateHook::Load<std::uint16_t>(source.counter) == 17 && !runtime.privateAssociations.HasPendingNative() &&
+                              runtime.privateAssociations.HasPendingFacadeCode(),
+                          "explicit retirement frees native resources once while raw facades retain code");
+                    refuses([&] { (void)firstRaw->GetInterface(); }, "retired facade cannot reuse its old serial as current identity");
+                    refuses([&] { (void)sdk.GetAnimBlendAssociation(reinterpret_cast<CAnimBlendAssociationSAInterface*>(rawAddress)); },
+                            "retired outer address cannot issue a new facade");
+                });
+            const auto freesAfterRaw = host.freeCalls;
+            firstRaw.reset();
+            secondRaw.reset();
+            Check(host.freeCalls == freesAfterRaw && runtime.privateAssociations.HasPendingFacadeCode(),
+                  "raw destructors drop code counts only, without pruning active destructor frames");
+            action([] {});
+            Check(!runtime.privateAssociations.HasPendingFacadeCode() && !runtime.privateAssociations.HasPendingNative() && host.freeCalls == freesAfterRaw,
+                  "later creator callback prunes raw code debt without another native destructor");
+            saved.Global(NativeAnimationGroupArrayProfile::CountRva, std::int32_t{2});
+            std::puts("Production issued raw association actual factory and unconstructed lifetime fixture completed");
+        }
         if (scenario == 0 || scenario == 6 || scenario == 7)
         {
             action(
@@ -247,6 +310,11 @@ namespace NumericAssociationOwnerFixture
                     Check(product && dynamic_cast<CAnimBlendAssociationDE*>(product.get()) && static_cast<short>(product->GetAnimID()) == 17,
                           "actual MTA numeric factory returns its real concrete facade for the same whole-copy issued record");
                     const auto address = reinterpret_cast<std::uintptr_t>(product->GetInterface());
+                    const auto aliasesBefore = host.mallocCalls;
+                    auto       alias = sdk.GetAnimBlendAssociation(reinterpret_cast<CAnimBlendAssociationSAInterface*>(address));
+                    Check(alias && alias.get() != product.get() && alias->GetInterface() == product->GetInterface() &&
+                              static_cast<short>(alias->GetAnimID()) == 17 && host.mallocCalls == aliasesBefore && Hook::calls == 1,
+                          "raw factory aliases the numeric product's existing Entry without copy or native reference");
                     Check(address && host.Contains(address) && runtime.animationGroupCopy.returnedInterface == address &&
                               runtime.animationGroupCopy.rawIdOffset == Hook::Animation && runtime.animationGroupCopy.animationId == Hook::Animation,
                           "full32 animation request reaches original copy while independent source WORD metadata remains17");
@@ -322,6 +390,8 @@ namespace NumericAssociationOwnerFixture
                 [&]
                 {
                     refuses([&] { product = sdk.CreateAnimAssociation(1, Hook::Animation); }, "closed generation refuses public factory before original entry");
+                    refuses([&] { (void)sdk.GetAnimBlendAssociation(reinterpret_cast<CAnimBlendAssociationSAInterface*>(std::uintptr_t{1})); },
+                            "closed generation cannot mint a raw alias");
                 });
             Check(!product && !Hook::calls && !host.mallocCalls && !runtime.privateAssociations.IsRetained(),
                   "monotonic issuance closure has no allocation, token adoption or native side effect");

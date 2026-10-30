@@ -195,6 +195,8 @@ namespace mta::game_de
                                    public NativeAnimationAssociationAccess
         {
         public:
+            ClockResult ResolvePrivateAnimationAssociationInterface(std::uint64_t, std::uintptr_t, NativeAnimationAssociationIssuedCopy&) noexcept override;
+            ClockResult ReadPrivateAnimationAssociationInterface(const NativeAnimationAssociationReferenceToken&, std::uintptr_t&) noexcept override;
             ClockResult CreatePrivateAnimationAssociation(std::uint64_t, NativeAnimationAssociationReferenceToken&) noexcept override;
             ClockResult ApplyPrivateAnimationAssociationClump(const NativeAnimationAssociationReferenceToken&, NativeAnimationAssociationClumpOperation,
                                                               std::uintptr_t, std::uintptr_t, std::uintptr_t&) noexcept override;
@@ -3181,6 +3183,65 @@ namespace mta::game_de
             const bool knownEffect = receipt.entered || receipt.returned || receipt.accepted || receipt.allocated || receipt.constructed || receipt.retired;
             if ((knownEffect && result != ClockResult::Ok) || runtime.privateAssociations.RecoveryPending())
                 Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+        }
+
+        ClockResult NativeAccess::ResolvePrivateAnimationAssociationInterface(std::uint64_t requestedGeneration, std::uintptr_t requestedInterface,
+                                                                              NativeAnimationAssociationIssuedCopy& output) noexcept
+        {
+            const auto generation = requestedGeneration;
+            const auto candidate = requestedInterface;
+            if (output.interfaceAddress || output.token.ownerGeneration || output.token.serial || output.code.IsIssued())
+                return ClockResult::InvalidArgument;
+            auto result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto retained = runtime.customSequenceGeneration.load();
+            if (!generation || generation != runtime.generation.load() || (retained && retained != generation))
+                return ClockResult::OwnerConflict;
+            NativeAnimationAssociationIssuedCopy next;
+            result = runtime.privateAssociations.ResolveIssuedInterface(runtime.image, generation, candidate, &CheckTimingOwner, next);
+            if (result == ClockResult::Ok)
+            {
+                const auto codeToken = next.code.Token();
+                if (!candidate || next.interfaceAddress != candidate || next.token.ownerGeneration != generation || !next.token.serial ||
+                    !next.code.IsIssued() || codeToken.ownerGeneration != generation || codeToken.serial != next.token.serial)
+                    result = ClockResult::BindingChanged;
+                if (result == ClockResult::Ok)
+                    result = CheckPrivateAnimationAssociationRequest(next.token);
+            }
+            // The controller publishes its existing Entry's code debt before
+            // returning. A lost final admission drops only this local view;
+            // it never adopts the candidate or retires the native receiver.
+            PublishCustomAnimationSequenceDebt(generation);
+            if (runtime.privateAssociations.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            if (result == ClockResult::Ok)
+                output = std::move(next);
+            return result;
+        }
+
+        ClockResult NativeAccess::ReadPrivateAnimationAssociationInterface(const NativeAnimationAssociationReferenceToken& source,
+                                                                           std::uintptr_t&                                 output) noexcept
+        {
+            const auto request = source;
+            auto       result = CheckPrivateAnimationAssociationRequest(request);
+            if (result != ClockResult::Ok)
+                return result;
+            std::uintptr_t next = 0;
+            result = runtime.privateAssociations.ReadInterface(runtime.image, request.ownerGeneration, request, &CheckTimingOwner, next);
+            if (result == ClockResult::Ok && !next)
+                result = ClockResult::BindingChanged;
+            if (result == ClockResult::Ok)
+                result = CheckPrivateAnimationAssociationRequest(request);
+            // An unconstructed allocation has no native vptr or scalar
+            // snapshot yet. Its same-owner tag comes from the allocation ACK,
+            // independently of the later Constructor/InitializeCustom entry.
+            PublishCustomAnimationSequenceDebt(request.ownerGeneration);
+            if (runtime.privateAssociations.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            if (result == ClockResult::Ok)
+                output = next;
+            return result;
         }
 
         ClockResult NativeAccess::CreatePrivateAnimationAssociation(std::uint64_t generation, NativeAnimationAssociationReferenceToken& output) noexcept

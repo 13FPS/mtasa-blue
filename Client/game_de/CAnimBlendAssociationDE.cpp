@@ -97,9 +97,15 @@ namespace mta::game_de
     }
     CAnimBlendAssociationSAInterface* CAnimBlendAssociationDE::GetInterface()
     {
-        // Only a Ready private record may publish this immediate opaque tag.
-        // A CPU observer does not own or extend its native allocation lifetime.
-        return reinterpret_cast<CAnimBlendAssociationSAInterface*>(Read("GetInterface").interfaceAddress);
+        const auto     token = reference;
+        std::uintptr_t interfaceAddress = 0;
+        // Actual MTA exposes its stored interface even before construction.
+        // The same causal owner validates allocation identity without reading
+        // uninitialized scalar fields or extending native resource lifetime.
+        Require(native.ReadPrivateAnimationAssociationInterface(token, interfaceAddress), "GetInterface");
+        if (!interfaceAddress)
+            Require(ClockResult::BindingChanged, "GetInterface");
+        return reinterpret_cast<CAnimBlendAssociationSAInterface*>(interfaceAddress);
     }
     eAnimGroup CAnimBlendAssociationDE::GetAnimGroup()
     {

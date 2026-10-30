@@ -31,6 +31,11 @@ namespace mta::game_de
                                   std::uintptr_t&, NativeAnimationAssociationCalls::GroupCopyReceipt* = nullptr) noexcept;
         ClockResult CopyFromGroupIssued(std::uintptr_t, std::uint64_t, const NativeAnimationAssociationGroupReferenceToken&, std::uint32_t, CheckOwner,
                                         NativeAnimationAssociationIssuedCopy&, NativeAnimationAssociationCalls::GroupCopyReceipt* = nullptr) noexcept;
+        // A raw tag can select only an allocation already issued by this
+        // exact ledger. The returned alias shares its existing CPU code fence;
+        // neither readable bytes nor a native vtable can create an Entry.
+        ClockResult ResolveIssuedInterface(std::uintptr_t, std::uint64_t, std::uintptr_t, CheckOwner, NativeAnimationAssociationIssuedCopy&) noexcept;
+        ClockResult ReadInterface(std::uintptr_t, std::uint64_t, const Token&, CheckOwner, std::uintptr_t&) noexcept;
         void        CloseFacadeIssuance(std::uint64_t generation) noexcept;
         ClockResult PruneFacadeCode(std::uintptr_t image, std::uint64_t generation, CheckOwner) noexcept;
         ClockResult Create(std::uintptr_t, std::uint64_t, CheckOwner, Token&, Receipt* = nullptr) noexcept;

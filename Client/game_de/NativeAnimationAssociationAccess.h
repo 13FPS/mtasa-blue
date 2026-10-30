@@ -33,6 +33,19 @@ namespace mta::game_de
         {
             return ClockResult::NotInitialized;
         }
+        // Raw factory candidates may only resolve an existing causal record
+        // in this same owner. A successful view fences CPU code independently;
+        // it neither adopts the raw address nor extends native allocation life.
+        virtual ClockResult ResolvePrivateAnimationAssociationInterface(std::uint64_t, std::uintptr_t, NativeAnimationAssociationIssuedCopy&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
+        // Interface identity is valid for a genuine unconstructed allocation.
+        // Do not read scalar fields/vptr merely to return its issued opaque tag.
+        virtual ClockResult ReadPrivateAnimationAssociationInterface(const NativeAnimationAssociationReferenceToken&, std::uintptr_t&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
         // Raw clump/H tags request one jointly admitted operation on this
         // actual issued receiver. Only the same native owner resolves their
         // origins, resource phases and accepted default/native-call prefix.

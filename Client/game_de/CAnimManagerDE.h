@@ -26,6 +26,7 @@ namespace mta::game_de
     {
     public:
         AnimBlendAssoc_type                                CreateAnimAssociation(AssocGroupId, AnimationId) override;
+        AnimBlendAssoc_type                                GetAnimBlendAssociation(CAnimBlendAssociationSAInterface*) override;
         AnimAssocGroup_type                                GetAnimBlendAssoc(AssocGroupId) const override;
         AnimAssocGroup_type                                GetAnimBlendAssocGroup(CAnimBlendAssocGroupSAInterface*) override;
         std::unique_ptr<CCustomAnimationCleanup>           BeginCustomAnimationCleanup(const SCustomAnimationCleanupRequest&) override;

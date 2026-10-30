@@ -1483,7 +1483,7 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         # One exact binary runs fresh native-debt lifetimes in task-owned
         # directories; no process can reset an ambiguous entered operation.
         $record['testRuns']=@();$record['testScenarioExecutables']=@();$texts=@();$compiledHash=Sha $executable
-        foreach($scenario in @('success','refusals','entered-before','entered-after','late-owner','effect-mismatch')){
+        foreach($scenario in @('success','refusals','entered-before','entered-after','late-owner','effect-mismatch','cache-before','cache-after','cache-mismatch')){
             $scenarioRoot=Join-Path $scratchRoot ('hierarchy-uncompress-'+$scenario)
             [IO.Directory]::CreateDirectory($scenarioRoot)|Out-Null
             $copy=Join-Path $scenarioRoot ([IO.Path]::GetFileName($executable))
@@ -2194,12 +2194,14 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         $record.productionNativeCallbackTested=$true
     } elseif($Scope -eq 'AnimationHierarchyUncompress'){
         $record['nativePrivateHierarchyWarmUncompressTested']=$text.Contains('Production private hierarchy Uncompress source no-effect fixture completed')
+        $record['nativeHierarchyExistingCacheMoveTested']=$text.Contains('Production hierarchy Uncompress existing cache LRU fixture completed')
+        $record['nativeHierarchyExistingCacheDebtTested']=$text.Contains('Production hierarchy Uncompress cache entered-before debt fixture completed') -and $text.Contains('Production hierarchy Uncompress cache entered-after debt fixture completed') -and $text.Contains('Production hierarchy Uncompress cache mismatch debt fixture completed')
         $record.nativeHierarchyUncompressActualSdkTested=$text.Contains('Production hierarchy Uncompress actual SDK original compressed conversion fixture completed')
         $record.nativeHierarchyUncompressCoupledRefusalsTested=$text.Contains('Production hierarchy Uncompress actual owner coupled refusal fixture completed')
         $record.nativeHierarchyUncompressUnknownRetained=$text.Contains('Production hierarchy Uncompress entered before acknowledgement debt fixture completed') -and $text.Contains('Production hierarchy Uncompress entered after original debt fixture completed')
         $record.nativeHierarchyUncompressPostOwnerLossTested=$text.Contains('Production hierarchy Uncompress post original owner loss fixture completed')
         $record.nativeHierarchyUncompressEffectMismatchTested=$text.Contains('Production hierarchy Uncompress post original effect mismatch fixture completed')
-        if(-not($record.nativePrivateHierarchyWarmUncompressTested -and $record.nativeHierarchyUncompressActualSdkTested -and $record.nativeHierarchyUncompressCoupledRefusalsTested -and $record.nativeHierarchyUncompressUnknownRetained -and $record.nativeHierarchyUncompressPostOwnerLossTested -and $record.nativeHierarchyUncompressEffectMismatchTested)){throw 'Actual hierarchy Uncompress selected owner/original/debt scope incomplete'}
+        if(-not($record.nativeHierarchyExistingCacheMoveTested -and $record.nativeHierarchyExistingCacheDebtTested -and $record.nativePrivateHierarchyWarmUncompressTested -and $record.nativeHierarchyUncompressActualSdkTested -and $record.nativeHierarchyUncompressCoupledRefusalsTested -and $record.nativeHierarchyUncompressUnknownRetained -and $record.nativeHierarchyUncompressPostOwnerLossTested -and $record.nativeHierarchyUncompressEffectMismatchTested)){throw 'Actual hierarchy Uncompress selected owner/original/debt scope incomplete'}
         $record.productionNativeCallbackTested=$true
         $record.originalHierarchyUncompressInstructionsExecuted=$true
     } elseif($Scope -eq 'NumericAssociationOwner'){

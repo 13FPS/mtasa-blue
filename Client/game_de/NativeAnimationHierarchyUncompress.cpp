@@ -15,6 +15,7 @@
 #include <cstring>
 #include <limits>
 #include <vector>
+#include <initializer_list>
 #include <xmmintrin.h>
 
 namespace mta::game_de
@@ -121,6 +122,19 @@ namespace mta::game_de
                 return ClockResult::OriginalException;
             }
         }
+        struct CacheNode
+        {
+            std::uintptr_t                address = 0;
+            std::array<unsigned char, 24> before{}, expected{}, observed{};
+        };
+        bool ReadCacheNode(std::uintptr_t image, std::uintptr_t address, std::array<unsigned char, 24>& bytes) noexcept
+        {
+            // Native list sentinels live in writable image data. Ordinary
+            // nodes may use the engine's private allocation; neither route
+            // grants this command authority to release or adopt their storage.
+            return Map::PrivateWritable(address, bytes.size()) ? Map::Copy(address, bytes.data(), bytes.size())
+                                                               : Image::ReadImage(image, address, bytes.data(), bytes.size(), true);
+        }
         struct Frame
         {
             std::uintptr_t             address = 0;
@@ -141,17 +155,18 @@ namespace mta::game_de
     struct NativeAnimationHierarchyUncompress::Data
     {
         using Detail = AnimationHierarchyUncompressDetail::Observation;
-        NativeAnimationHierarchyReferenceToken                    token{};
-        NativeAnimationHierarchyOrigin::Location                  location{};
-        Detail                                                    before{}, observed{};
-        AnimationHierarchyUncompressDetail::Hierarchy             expected{};
-        std::uintptr_t                                            sequenceFirst = 0, cookieAddress = 0, blockAddress = 0;
-        std::uint64_t                                             capacity = 0;
-        std::size_t                                               sequenceBytes = 0, preparedBytes = 0;
-        unsigned char                                             loaded = 0;
-        bool                                                      payload = false;
-        std::vector<AnimationHierarchyUncompressDetail::Sequence> sequences;
-        std::vector<AnimationHierarchyUncompressDetail::Frame>    frames;
+        NativeAnimationHierarchyReferenceToken                     token{};
+        NativeAnimationHierarchyOrigin::Location                   location{};
+        Detail                                                     before{}, observed{};
+        AnimationHierarchyUncompressDetail::Hierarchy              expected{};
+        std::uintptr_t                                             sequenceFirst = 0, cookieAddress = 0, blockAddress = 0;
+        std::uint64_t                                              capacity = 0;
+        std::size_t                                                sequenceBytes = 0, preparedBytes = 0;
+        unsigned char                                              loaded = 0;
+        bool                                                       payload = false, cache = false;
+        std::vector<AnimationHierarchyUncompressDetail::CacheNode> cacheNodes;
+        std::vector<AnimationHierarchyUncompressDetail::Sequence>  sequences;
+        std::vector<AnimationHierarchyUncompressDetail::Frame>     frames;
     };
     namespace AnimationHierarchyUncompressDetail
     {
@@ -185,12 +200,107 @@ namespace mta::game_de
                     else if (frame.observed != (after ? frame.expected : frame.before))
                         return ClockResult::BindingChanged;
             }
+            if (plan.cache)
+                for (auto& node : plan.cacheNodes)
+                    if (!ReadCacheNode(image, node.address, node.observed))
+                        return ClockResult::ReadFailure;
+                    else if (node.observed != (after ? node.expected : node.before))
+                        return ClockResult::BindingChanged;
             Observation final;
             if ((result = Capture(image, owner, plan.location, final)) != ClockResult::Ok)
                 return result;
             if (!Origin::Same(plan.before.origin, final.origin) || final.payload != plan.observed.payload)
                 return ClockResult::BindingChanged;
             return Origin::Owner({image}, owner);
+        }
+        template <class Plan>
+        ClockResult PrepareCache(std::uintptr_t image, Plan& plan, Calls& receipt)
+        {
+            constexpr std::size_t MaximumCacheNodes = 256;
+            const auto            head = image + 0x53c08a0;
+            // FF0F11 reads the last-node slot at53C08C0. The same native
+            // node's prev field is+8, hence its terminal anchor is53C08B8.
+            // Membership below proves that relationship in the current list;
+            // it supplies no allocation, free or lasting cache-node authority.
+            const auto tail = image + 0x53c08b8;
+            const auto selected = At<std::uintptr_t>(plan.before.payload, 0x20);
+            const auto append = [&](std::uintptr_t address) -> ClockResult
+            {
+                if (!address || address % alignof(std::uintptr_t) || address > (std::numeric_limits<std::uintptr_t>::max)() - 24 ||
+                    !Map::Disjoint(address, 24, plan.token.locator, plan.expected.size()))
+                    return ClockResult::BindingChanged;
+                for (const auto& node : plan.cacheNodes)
+                    if (!Map::Disjoint(address, 24, node.address, node.before.size()))
+                        return ClockResult::OwnerConflict;
+                CacheNode node;
+                node.address = address;
+                if (!ReadCacheNode(image, address, node.before))
+                    return ClockResult::ReadFailure;
+                node.expected = node.before;
+                plan.cacheNodes.push_back(node);
+                return ClockResult::Ok;
+            };
+            auto result = append(head);
+            if (result != ClockResult::Ok || (result = append(tail)) != ClockResult::Ok)
+                return result;
+            auto previous = head;
+            auto current = At<std::uintptr_t>(plan.cacheNodes[0].before, 0x10);
+            bool found = false;
+            for (std::size_t count = 0; current != tail; ++count)
+            {
+                if (count == MaximumCacheNodes)
+                    return ClockResult::Busy;
+                if ((result = append(current)) != ClockResult::Ok)
+                    return result;
+                const auto& node = plan.cacheNodes.back();
+                if (At<std::uintptr_t>(node.before, 8) != previous)
+                    return ClockResult::BindingChanged;
+                if (current == selected)
+                {
+                    if (At<std::uintptr_t>(node.before, 0) != plan.token.locator)
+                        return ClockResult::BindingChanged;
+                    found = true;
+                }
+                previous = current;
+                current = At<std::uintptr_t>(node.before, 0x10);
+            }
+            if (!found || At<std::uintptr_t>(plan.cacheNodes[1].before, 8) != previous)
+                return ClockResult::BindingChanged;
+            bool       modelValid = true;
+            const auto word = [&](std::uintptr_t address, std::uintptr_t* written) -> std::uintptr_t
+            {
+                for (auto& node : plan.cacheNodes)
+                    if (address >= node.address && address - node.address <= 16 && (address - node.address) % 8 == 0)
+                    {
+                        const auto offset = static_cast<std::size_t>(address - node.address);
+                        if (written)
+                            Put(node.expected, offset, *written);
+                        return At<std::uintptr_t>(node.expected, offset);
+                    }
+                modelValid = false;
+                return 0;
+            };
+            const auto load = [&](std::uintptr_t address) { return word(address, nullptr); };
+            const auto store = [&](std::uintptr_t address, std::uintptr_t value) { (void)word(address, &value); };
+            // Model the original six stores in order, including aliases when
+            // the selected entry is already first or is the only live entry.
+            // Predicted snapshots are CPU evidence, never replacement writes.
+            store(load(selected + 0x10) + 8, load(selected + 8));
+            store(load(selected + 8) + 0x10, load(selected + 0x10));
+            store(selected + 0x10, load(head + 0x10));
+            store(load(head + 0x10) + 8, selected);
+            store(selected + 8, head);
+            store(head + 0x10, selected);
+            if (!modelValid)
+                return ClockResult::BindingChanged;
+            receipt.cachePath = true;
+            receipt.cacheNodes = static_cast<std::uint32_t>(plan.cacheNodes.size() - 2);
+            for (const auto& node : plan.cacheNodes)
+                for (std::size_t offset : {std::size_t{8}, std::size_t{16}})
+                    if (At<std::uintptr_t>(node.before, offset) != At<std::uintptr_t>(node.expected, offset))
+                        ++receipt.modifiedCacheWords;
+            plan.cache = true;
+            return ClockResult::Ok;
         }
         template <class Plan>
         ClockResult Prepare(std::uintptr_t image, CheckOwner owner, Plan& plan, Calls& receipt)
@@ -205,10 +315,13 @@ namespace mta::game_de
                 return ClockResult::InvalidArgument;
             if (plan.before.payload[0x13] == 0)
             {
-                // Original cache insert/LRU movement/decompression are not
-                // granted by readable cache pointers or a compressed flag.
-                if (plan.before.payload[0x12] != 0 || At<std::uintptr_t>(plan.before.payload, 0x20) != 0)
+                // An existing linked entry moves through the source LRU
+                // branch only. Cache allocation/decompression still needs its
+                // own returned-allocation and eviction journal.
+                if (plan.before.payload[0x12] != 0)
                     return ClockResult::NotInitialized;
+                if (At<std::uintptr_t>(plan.before.payload, 0x20) != 0 && (result = PrepareCache(image, plan, receipt)) != ClockResult::Ok)
+                    return result;
             }
             else if (Float(timeBits) == 0.0f)
             {
@@ -300,7 +413,7 @@ namespace mta::game_de
             // These are planned target facts until effectsVerified confirms
             // the original returned and every current payload bookend agrees.
             receipt.afterTimeBits = At<std::uint32_t>(plan.expected, 0x18);
-            receipt.noOp = plan.expected == plan.before.payload && receipt.modifiedFrames == 0;
+            receipt.noOp = plan.expected == plan.before.payload && receipt.modifiedFrames == 0 && receipt.modifiedCacheWords == 0;
             return Verify(image, owner, plan, false);
         }
     }

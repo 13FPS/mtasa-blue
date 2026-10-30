@@ -43,6 +43,11 @@ namespace ClockHierarchyUncompressOwnerTest
         }
         if (mode == 3)
             Bytes::Store(image + NativeBorrowedGcProfile::markerRva, LONG{1});
+        if (mode == 5)
+        {
+            const auto node = Bytes::Load<std::uintptr_t>(requested + 0x20);
+            Bytes::Store(node + 8, std::uintptr_t{0});
+        }
         if (mode == 4)
         {
             const auto sequences = Bytes::Load<std::uintptr_t>(requested + 8);
@@ -60,6 +65,71 @@ namespace AnimationHierarchyUncompressOwnerFixture
     namespace Host = NativeCustomAnimSequenceStorageFixture;
     namespace Profile = NativeAnimationAssociationProgressProfile;
     unsigned scenario = 0;
+    struct CacheFixture
+    {
+        std::uintptr_t                image, hierarchy, nodes = 0;
+        unsigned                      count, selected;
+        std::array<unsigned char, 40> originalHierarchy{};
+        std::array<unsigned char, 48> originalSentinels{};
+        std::uintptr_t                Head() const { return image + 0x53c08a0; }
+        std::uintptr_t                Tail() const { return image + 0x53c08b8; }
+        std::uintptr_t                Node(unsigned index) const { return nodes + index * 24; }
+        CacheFixture(WorldGroundOwnerFixture::Writes& saved, std::uintptr_t image, std::uintptr_t hierarchy, unsigned count, unsigned selected)
+            : image(image), hierarchy(hierarchy), count(count), selected(selected)
+        {
+            std::memcpy(originalHierarchy.data(), reinterpret_cast<const void*>(hierarchy), originalHierarchy.size());
+            std::memcpy(originalSentinels.data(), reinterpret_cast<const void*>(Head()), originalSentinels.size());
+            nodes = reinterpret_cast<std::uintptr_t>(VirtualAlloc(nullptr, count * 24, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+            Check(nodes != 0, "cache fixture owns a bounded row allocation");
+            std::array<unsigned char, 48> sentinels{};
+            WorldGroundOwnerFixture::Writes::Apply(&saved, 0x53c08a0, sentinels.data(), sentinels.size(), PAGE_READWRITE);
+            Bytes::Store(Head(), std::uintptr_t{0x11112222});
+            Bytes::Store(Head() + 8, std::uintptr_t{0x33334444});
+            Bytes::Store(Head() + 16, Node(0));
+            Bytes::Store(Tail(), std::uintptr_t{0x55556666});
+            Bytes::Store(Tail() + 8, Node(count - 1));
+            Bytes::Store(Tail() + 16, std::uintptr_t{0x77778888});
+            for (unsigned index = 0; index != count; ++index)
+            {
+                Bytes::Store(Node(index), index == selected ? hierarchy : std::uintptr_t{0xabc000} + index);
+                Bytes::Store(Node(index) + 8, index ? Node(index - 1) : Head());
+                Bytes::Store(Node(index) + 16, index + 1 == count ? Tail() : Node(index + 1));
+            }
+            Bytes::Store(hierarchy + 0x12, static_cast<unsigned char>(0));
+            Bytes::Store(hierarchy + 0x13, static_cast<unsigned char>(0));
+            Bytes::Store(hierarchy + 0x20, Node(selected));
+        }
+        void CheckMoved() const
+        {
+            auto       previous = Head();
+            auto       current = Bytes::Load<std::uintptr_t>(Head() + 16);
+            const auto visit = [&](unsigned index, std::uintptr_t& prior, std::uintptr_t& cursor)
+            {
+                Check(cursor == Node(index) && Bytes::Load<std::uintptr_t>(cursor + 8) == prior &&
+                          Bytes::Load<std::uintptr_t>(cursor) == (index == selected ? hierarchy : std::uintptr_t{0xabc000} + index),
+                      "original cache LRU preserves node data and moves the selected row before the remaining source order");
+                prior = cursor;
+                cursor = Bytes::Load<std::uintptr_t>(cursor + 16);
+            };
+            visit(selected, previous, current);
+            for (unsigned index = 0; index != count; ++index)
+                if (index != selected)
+                    visit(index, previous, current);
+            Check(current == Tail() && Bytes::Load<std::uintptr_t>(Tail() + 8) == previous && Bytes::Load<std::uintptr_t>(Head()) == 0x11112222 &&
+                      Bytes::Load<std::uintptr_t>(Head() + 8) == 0x33334444 && Bytes::Load<std::uintptr_t>(Tail()) == 0x55556666 &&
+                      Bytes::Load<std::uintptr_t>(Tail() + 16) == 0x77778888,
+                  "cache terminal links agree and unrelated sentinel fields remain opaque and unchanged");
+        }
+        ~CacheFixture()
+        {
+            // Dispose only this child's synthetic image/data. This is never
+            // a native recovery acknowledgement or a cache-node release API.
+            std::memcpy(reinterpret_cast<void*>(hierarchy), originalHierarchy.data(), originalHierarchy.size());
+            std::memcpy(reinterpret_cast<void*>(Head()), originalSentinels.data(), originalSentinels.size());
+            if (nodes)
+                VirtualFree(reinterpret_cast<void*>(nodes), 0, MEM_RELEASE);
+        }
+    };
     struct FrameStorage
     {
         std::array<std::uintptr_t, 2>                pointers{};
@@ -311,6 +381,24 @@ namespace AnimationHierarchyUncompressOwnerFixture
                           "actual owner retires the private record after CPU-only no-effect calls without leaking bank or conversion debt");
                 });
             std::puts("Production private hierarchy Uncompress source no-effect fixture completed");
+            for (const auto& spec : std::array<std::array<unsigned, 2>, 4>{{{3, 1}, {3, 2}, {3, 0}, {1, 0}}})
+            {
+                seed(0);
+                CacheFixture                  cache(saved, fixture.image, source.hierarchy, spec[0], spec[1]);
+                std::array<unsigned char, 40> before{}, after{};
+                std::memcpy(before.data(), reinterpret_cast<const void*>(source.hierarchy), before.size());
+                const auto calls = Hook::calls;
+                action([&] { sdk.UncompressAnimation(hierarchy.get()); });
+                cache.CheckMoved();
+                std::memcpy(after.data(), reinterpret_cast<const void*>(source.hierarchy), after.size());
+                Check(before == after && Hook::calls == calls + 1 && Hook::targetsValid && Hook::nestedBusy && Hook::gateBusy && Hook::lifetimeBusy &&
+                          runtime.hierarchyUncompressReceipt.cachePath && runtime.hierarchyUncompressReceipt.cacheNodes == spec[0] &&
+                          runtime.hierarchyUncompressReceipt.modifiedCacheWords == (spec[1] ? 6u : 0u) &&
+                          runtime.hierarchyUncompressReceipt.noOp == (spec[1] == 0) && runtime.hierarchyUncompressReceipt.effectsVerified &&
+                          !runtime.hierarchyUncompress.IsRetained(),
+                      "whole native entry moves existing middle/last cache rows and handles already-first/single aliases without touching H or frames");
+            }
+            std::puts("Production hierarchy Uncompress existing cache LRU fixture completed");
             float scale = 0;
             std::memcpy(&scale, Profile::TimeScaleBytes.data(), sizeof(scale));
             for (unsigned which = 0; which != 3; ++which)
@@ -395,7 +483,7 @@ namespace AnimationHierarchyUncompressOwnerFixture
                       "pre-entry source refusal creates no native debt or stop condition");
             };
             rejectCurrent([&] { saved.Global(source.hierarchy - fixture.image + 0x13, static_cast<unsigned char>(0)); },
-                          "cache/LRU mutation branch remains unqualified");
+                          "compressed cache miss still requires allocation and decompression authority");
             rejectCurrent([&] { saved.Global(source.hierarchy - fixture.image + 0x10, std::uint16_t{3}); },
                           "actual hierarchy count cannot exceed its current row cookie");
             rejectCurrent([&]
@@ -419,10 +507,54 @@ namespace AnimationHierarchyUncompressOwnerFixture
                 "changed last byte of the whole saved native entry refuses before execution");
             WorldGroundOwnerFixture::Writes::Apply(&saved, Profile::HierarchyTimeRva, Profile::HierarchyTimeBytes.data(), Profile::HierarchyTimeBytes.size(),
                                                    PAGE_EXECUTE_READ);
+            for (unsigned malformed = 0; malformed != 3; ++malformed)
+            {
+                seed(0);
+                CacheFixture cache(saved, fixture.image, source.hierarchy, 3, 1);
+                if (malformed == 0)
+                    Bytes::Store(cache.Node(1) + 8, cache.Head());
+                else if (malformed == 1)
+                    Bytes::Store(cache.Node(2) + 16, cache.Node(0));
+                else
+                    Bytes::Store(cache.Node(1), source.hierarchy + 40);
+                action(
+                    [&]
+                    { refuses([&] { sdk.UncompressAnimation(hierarchy.get()); }, "malformed cache backlink/cycle/H identity refuses before native entry"); });
+                Check(!Hook::calls && !runtime.hierarchyUncompress.IsRetained() && !runtime.stopping.load(),
+                      "cache shape refusal creates no entered journal or speculative linked-list repair");
+            }
             seed(0);
             hierarchy.reset();
             Check(finish() && !service.IsRetained() && !Hook::calls, "all typed pre-entry refusals leave the actual module owner releasable");
             std::puts("Production hierarchy Uncompress actual owner coupled refusal fixture completed");
+        }
+        else if (scenario >= 6)
+        {
+            seed(0);
+            CacheFixture cache(saved, fixture.image, source.hierarchy, 3, 1);
+            Hook::mode = scenario == 6 ? 1 : scenario == 7 ? 2 : 5;
+            action([&]
+                   { refuses([&] { sdk.UncompressAnimation(hierarchy.get()); }, "cache entered uncertainty cannot acknowledge a successful manager call"); });
+            const auto receipt = runtime.hierarchyUncompressReceipt;
+            Check(receipt.cachePath && receipt.cacheNodes == 3 && receipt.modifiedCacheWords == 6 && receipt.entered && !receipt.effectsVerified &&
+                      receipt.debt && runtime.hierarchyUncompress.RecoveryPending() && NativeLifetimeRetained() && Hook::calls == 1,
+                  "actual cache operation retains its prepared link journal after missing or mismatched acknowledgement");
+            if (scenario == 7)
+                cache.CheckMoved();
+            std::array<unsigned char, 72> nodeBytes{}, afterNodes{};
+            std::array<unsigned char, 48> sentinelBytes{}, afterSentinels{};
+            std::memcpy(nodeBytes.data(), reinterpret_cast<const void*>(cache.nodes), nodeBytes.size());
+            std::memcpy(sentinelBytes.data(), reinterpret_cast<const void*>(cache.Head()), sentinelBytes.size());
+            hierarchy.reset();
+            Check(!finish() && service.IsRetained() && runtime.hierarchyUncompress.RecoveryPending() && Hook::calls == 1 &&
+                      Hook::executed == (scenario == 6 ? 0u : 1u),
+                  "End retains entered cache debt without replaying the original or guessing node ownership");
+            std::memcpy(afterNodes.data(), reinterpret_cast<const void*>(cache.nodes), afterNodes.size());
+            std::memcpy(afterSentinels.data(), reinterpret_cast<const void*>(cache.Head()), afterSentinels.size());
+            Check(afterNodes == nodeBytes && afterSentinels == sentinelBytes, "unknown cache links are neither rolled back nor repaired by callback shutdown");
+            std::puts(scenario == 6   ? "Production hierarchy Uncompress cache entered-before debt fixture completed"
+                      : scenario == 7 ? "Production hierarchy Uncompress cache entered-after debt fixture completed"
+                                      : "Production hierarchy Uncompress cache mismatch debt fixture completed");
         }
         else
         {

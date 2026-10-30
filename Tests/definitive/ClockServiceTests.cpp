@@ -8816,11 +8816,12 @@ int main(int argc, char** argv)
     const bool animationStaticAssociationReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-static-association-reads") == 0;
     const bool animationAssociationGroupReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-association-group-reads") == 0;
     const bool hierarchyUncompressOnly = argc == 3 && std::strncmp(argv[2], "--hierarchy-uncompress-", 23) == 0;
-    unsigned   hierarchyUncompressScenario = 6;
+    unsigned   hierarchyUncompressScenario = 9;
     if (hierarchyUncompressOnly)
     {
-        const char* names[] = {"success", "refusals", "entered-before", "entered-after", "late-owner", "effect-mismatch"};
-        for (unsigned index = 0; index != 6; ++index)
+        const char* names[] = {"success",         "refusals",     "entered-before", "entered-after", "late-owner",
+                               "effect-mismatch", "cache-before", "cache-after",    "cache-mismatch"};
+        for (unsigned index = 0; index != 9; ++index)
             if (std::strcmp(argv[2] + 23, names[index]) == 0)
                 hierarchyUncompressScenario = index;
     }
@@ -9199,7 +9200,7 @@ int main(int argc, char** argv)
     }
     if (hierarchyUncompressOnly)
     {
-        Check(hierarchyUncompressScenario < 6, "exact finite hierarchy Uncompress scenario is required");
+        Check(hierarchyUncompressScenario < 9, "exact finite hierarchy Uncompress scenario is required");
         ClockImageFixture fixture;
         fixture.Create(argv[1]);
         // Each entered-debt journal requires its own ordinary host process;

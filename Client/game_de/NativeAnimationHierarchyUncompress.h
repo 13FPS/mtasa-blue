@@ -19,8 +19,8 @@ namespace mta::game_de
             std::uintptr_t hierarchy = 0, entryRva = 0xff0d10;
             std::uint64_t  generation = 0;
             std::uint32_t  exceptionCode = 0, beforeTimeBits = 0, afterTimeBits = 0;
-            std::uint32_t  sequences = 0, preparedFrames = 0, modifiedFrames = 0;
-            bool           entered = false, returned = false, effectsVerified = false, noOp = false, debt = false;
+            std::uint32_t  sequences = 0, preparedFrames = 0, modifiedFrames = 0, cacheNodes = 0, modifiedCacheWords = 0;
+            bool           entered = false, returned = false, effectsVerified = false, noOp = false, debt = false, cachePath = false;
             ClockResult    result = ClockResult::NotInitialized;
         };
     }

@@ -8676,6 +8676,7 @@ namespace
 #include "NativeNumericAssociationOwnerTests.inl"
 #include "AnimationManagerUncompressFixture.generated.h"
 #include "NativeAnimationHierarchyUncompressOwnerTests.inl"
+#include "NativeBankDecompressionOwnerTests.inl"
 #include "ApplicationTimingOwnerTests.inl"
 
 // The strict receiver must execute production typed tickets and the distinct
@@ -8834,6 +8835,16 @@ int main(int argc, char** argv)
         for (unsigned index = 0; index != 4; ++index)
             if (std::strcmp(argv[2] + 21, names[index]) == 0)
                 applicationTimingScenario = index;
+    }
+    const bool bankDecompressionOnly = argc == 3 && std::strncmp(argv[2], "--bank-decompression-", 21) == 0;
+    unsigned   bankDecompressionScenario = 9;
+    if (bankDecompressionOnly)
+    {
+        const char* names[] = {"success",    "refusals",        "timer-owner",         "entered-before", "entered-after",
+                               "late-owner", "effect-mismatch", "allocation-fallback", "no-output"};
+        for (unsigned index = 0; index != 9; ++index)
+            if (std::strcmp(argv[2] + 21, names[index]) == 0)
+                bankDecompressionScenario = index;
     }
     const bool hierarchyUncompressOnly = argc == 3 && std::strncmp(argv[2], "--hierarchy-uncompress-", 23) == 0;
     unsigned   hierarchyUncompressScenario = 15;
@@ -9034,9 +9045,9 @@ int main(int argc, char** argv)
            freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly || customAnimationCleanupOnly ||
            standaloneSequenceOperationsOnly || animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly ||
            animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly || animationGroupValidityOnly ||
-           animationIdValidityOnly || animationAssociationGroupReadsOnly || applicationTimingOnly || hierarchyUncompressOnly || numericAssociationOnly ||
-           dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
-           groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
+           animationIdValidityOnly || animationAssociationGroupReadsOnly || applicationTimingOnly || bankDecompressionOnly || hierarchyUncompressOnly ||
+           numericAssociationOnly || dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly ||
+           groupCopyAnimationOnly || groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
            animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
            privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
@@ -9245,6 +9256,18 @@ int main(int argc, char** argv)
             fixture.Create(argv[1]);
             ApplicationTimingOwnerFixture::Run(fixture, applicationTimingScenario);
         }
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (bankDecompressionOnly)
+    {
+        Check(bankDecompressionScenario < 9, "exact finite bank decompression scenario required");
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        // Each ambiguous entered conversion owns an independent process;
+        // neither the epoch nor freed source addresses are reset for replay.
+        BankDecompressionOwnerFixture::scenario = bankDecompressionScenario;
+        BankDecompressionOwnerFixture::RunPrepared(fixture);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

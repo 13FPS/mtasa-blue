@@ -16,12 +16,18 @@ namespace mta::game_de
         using Invoke = ClockResult (*)(Function, std::uintptr_t, std::uint32_t&) noexcept;
         struct Receipt
         {
-            std::uintptr_t hierarchy = 0, entryRva = 0xff0d10;
+            std::uintptr_t hierarchy = 0, entryRva = 0xff0d10, outputBase = 0;
             std::uint64_t  generation = 0;
             std::uint32_t  exceptionCode = 0, beforeTimeBits = 0, afterTimeBits = 0;
             std::uint32_t  sequences = 0, preparedFrames = 0, modifiedFrames = 0, cacheNodes = 0, modifiedCacheWords = 0;
-            bool           entered = false, returned = false, effectsVerified = false, noOp = false, debt = false, cachePath = false;
-            ClockResult    result = ClockResult::NotInitialized;
+            // Output addresses are observations of the original's publication,
+            // never private allocation tickets or adapter cleanup authority.
+            // Byte/store counts describe the prepared plan; convertedFrames
+            // and outputBase publish only after the complete effects verify.
+            std::uint32_t convertedFrames = 0, encodedBytes = 0, outputBytes = 0, cacheStores = 0;
+            bool          entered = false, returned = false, effectsVerified = false, noOp = false, debt = false, cachePath = false;
+            bool          decompressionPath = false, sharedInput = false;
+            ClockResult   result = ClockResult::NotInitialized;
         };
     }
     class NativeAnimationHierarchyUncompress final
@@ -34,14 +40,17 @@ namespace mta::game_de
         ~NativeAnimationHierarchyUncompress();
         NativeAnimationHierarchyUncompress(const NativeAnimationHierarchyUncompress&) = delete;
         NativeAnimationHierarchyUncompress& operator=(const NativeAnimationHierarchyUncompress&) = delete;
-        ClockResult Uncompress(std::uintptr_t, const NativeAnimationHierarchyReferenceToken&, CheckOwner, Receipt* = nullptr, Invoke = nullptr) noexcept;
+        // Only destructive bank conversion requires the final post-original
+        // frame owner. Existing time/LRU/no-effect branches keep their owner.
+        ClockResult Uncompress(std::uintptr_t, const NativeAnimationHierarchyReferenceToken&, CheckOwner, Receipt* = nullptr, Invoke = nullptr,
+                               CheckOwner afterApplicationFrameOwner = nullptr) noexcept;
         bool        IsRetained() const noexcept { return busy.load() || debt.load(); }
         bool        RecoveryPending() const noexcept { return debt.load(); }
 
     private:
         // The prepared current bank/frame journal survives an entered call
         // whose effects cannot be verified. Destruction performs no rollback,
-        // native free, retry or guessed restoration of compressed timestamps.
+        // native free, retry or guessed restoration of timestamps or buffers.
         struct Data;
         std::unique_ptr<Data> data;
         std::atomic<bool>     busy{false}, debt{false};

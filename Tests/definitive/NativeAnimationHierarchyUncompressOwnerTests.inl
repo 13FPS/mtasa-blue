@@ -13,8 +13,11 @@ namespace ClockHierarchyUncompressOwnerTest
     unsigned                               calls = 0, executed = 0, mode = 0;
     bool                                   targetsValid = true, nestedBusy = false, gateBusy = false, lifetimeBusy = false;
     NativeAnimationHierarchyReferenceToken token;
+    Calls::Invoke                          bankInvoke = nullptr;
     ClockResult                            Invoke(Calls::Function function, std::uintptr_t requested, std::uint32_t& exception) noexcept
     {
+        if (bankInvoke)
+            return bankInvoke(function, requested, exception);
         ++calls;
         targetsValid = targetsValid && reinterpret_cast<std::uintptr_t>(function) == image + Profile::HierarchyTimeRva && requested == hierarchy;
         nestedBusy = runtime.access.UncompressAnimationHierarchy(token) == ClockResult::Busy;

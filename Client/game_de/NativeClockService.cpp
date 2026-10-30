@@ -4162,7 +4162,11 @@ namespace mta::game_de
                 return result;
             }
             NativeAnimationHierarchyUncompressCalls::Receipt receipt;
-            result = runtime.hierarchyUncompress.Uncompress(runtime.image, request, &CheckTimingOwner, &receipt);
+            // Replacing engine-owned bank frames requires the actual
+            // post-original application owner. The lower component consults
+            // this extra guard only for that destructive branch; its existing
+            // compressed-time/cache/no-effect paths keep their timer policy.
+            result = runtime.hierarchyUncompress.Uncompress(runtime.image, request, &CheckTimingOwner, &receipt, nullptr, &CheckApplicationTimingOwner);
             runtime.hierarchyUncompressReceipt = receipt;
             if (result == ClockResult::Ok)
                 result = CheckAnimationHierarchyRequest(request);

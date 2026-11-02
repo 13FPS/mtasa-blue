@@ -28,6 +28,7 @@
 #include "NativeStatsWriteCalls.h"
 #include "CStatsDE.h"
 #include "NativePlayerInfoMemory.h"
+#include "NativePlayerInfoProfile.h"
 #include "NativeWantedMemory.h"
 #include "CWantedDE.h"
 #include "CPlayerInfoDE.h"
@@ -50,6 +51,18 @@
 #include "NativePedRebuildCalls.h"
 #include "NativePedMoveAnimReader.h"
 #include "NativePlayerMoveAnimReapply.h"
+#include "NativePlayerMoveAnimHookController.h"
+// The shared policy includes CPed's existing unscoped enum forward declaration.
+// Match the other DE SDK boundaries without changing the common SDK or hiding
+// diagnostics from the native hook implementation below this include.
+#if defined(_MSC_VER)
+    #pragma warning(push)
+    #pragma warning(disable : 4471)
+#endif
+#include <game/CPlayerMoveAnimPolicy.h>
+#if defined(_MSC_VER)
+    #pragma warning(pop)
+#endif
 #include "NativeClothesDescriptorCalls.h"
 #include "NativeStreamingSpecialModelCalls.h"
 #include "NativeWorldGroundCalls.h"
@@ -76,6 +89,9 @@
 #include "NativeAnimationSequenceAccess.h"
 #include "NativeAnimationHierarchyAccess.h"
 #include "NativeAnimationHierarchyMemory.h"
+// The new read-only group seal uses the qualified prefix without relying on
+// another aggregated test CPP to provide this production declaration.
+#include "NativeAnimationHierarchyReadProfile.h"
 #include "NativeAnimationHierarchyUncompress.h"
 #include "NativeAnimationBlockRegistration.h"
 #include "NativeAnimationBlockRemoval.h"
@@ -86,6 +102,8 @@
 #include "NativeCustomAnimationCleanupAccess.h"
 #include "NativeCustomAnimationSequenceOperationAccess.h"
 #include "NativeAnimationManagerMemory.h"
+#include "NativeAnimationGroupArrayProfile.h"
+#include "NativeAnimationStaticAssociationProfile.h"
 #include "NativeAnimationAssociationGroupAccess.h"
 #include "NativeAnimationAssociationGroupInitialization.h"
 #include "NativeAnimationStaticAssociationAccess.h"
@@ -320,6 +338,10 @@ namespace mta::game_de
             ClockResult ReadPedRender(const NativePedReferenceToken&, std::uintptr_t&) noexcept override;
             ClockResult ReadPedMoveAnim(const NativePedReferenceToken&, std::int32_t&) noexcept override;
             ClockResult ReapplyCurrentPlayerMoveAnim(const NativePedReferenceToken&) noexcept override;
+            ClockResult EnablePlayerMoveAnimHooks() noexcept override;
+            ClockResult PublishPlayerMoveAnimOverride(const NativePedReferenceToken&, std::int32_t) noexcept override;
+            ClockResult WithdrawPlayerMoveAnimOverride(const NativePedReferenceToken&) noexcept override;
+            ClockResult RetirePlayerMoveAnimHooks() noexcept override;
             ClockResult InitializePedClothesDescriptor(NativeClothesDescriptorStorage&) noexcept override;
             ClockResult ReadReferencedPedIntelligence(const NativePedReferenceToken&, NativePedIntelligenceReader::Value&) noexcept override;
             ClockResult ReadTaskPoolEntry(std::uintptr_t, NativeTaskPoolReader::Value&) noexcept override;
@@ -741,8 +763,14 @@ namespace mta::game_de
             NativeCameraWidescreenCalls::Receipt   cameraWidescreenReceipt;
             // A whole native effect cannot be replayed or rolled back after
             // uncertain acknowledgement, even after its weak ped cell retires.
-            NativePlayerMoveAnimReapply::Controller           playerMoveAnimReapply;
-            NativePlayerMoveAnimReapply::Receipt              playerMoveAnimReapplyReceipt;
+            NativePlayerMoveAnimReapply::Controller playerMoveAnimReapply;
+            NativePlayerMoveAnimReapply::Receipt    playerMoveAnimReapplyReceipt;
+            // Exact call-site patches retain their own code, unwind table and
+            // controlled CPU publications. Stop revokes decisions immediately;
+            // producer retirement still requires genuine peer-IP exclusion.
+            NativePlayerMoveAnimHookController                playerMoveAnimHooks;
+            std::atomic<std::uint64_t>                        playerMoveAnimHookGeneration{0};
+            std::atomic<bool>                                 playerMoveAnimHookPeersParked{false};
             NativeAnimationHierarchyUncompress                hierarchyUncompress;
             NativeAnimationHierarchyUncompressCalls::Receipt  hierarchyUncompressReceipt;
             NativeAnimationBlockRegistration                  blockRegistration;
@@ -848,6 +876,7 @@ namespace mta::game_de
             // Destroy the hold before the shared peer recovery vector/gates.
             // Its normal lifetime is explicitly retired by Reset/End.
             PeerHold weatherOverridePeers;
+            PeerHold playerMoveAnimHookPeers;
         };
 
         // A failed code/data restoration cannot discard its owner on DLL
@@ -865,6 +894,23 @@ namespace mta::game_de
         // General timing/service APIs never consult this private sub-scope.
         thread_local bool constructorWeaponScope = false;
         thread_local bool constructorWeaponReadScope = false;
+        struct MoveAnimOriginalScope
+        {
+            enum class Origin
+            {
+                None,
+                NaturalFrame,
+                ExplicitClothes
+            } origin = Origin::None;
+            std::uint64_t                           generation = 0, admissionSerial = 0;
+            std::uintptr_t                          image = 0, nativePed = 0;
+            void*                                   receiver = nullptr;
+            NativeStreamingCompletionContext::Value world;
+            bool                                    worldQualified = false;
+        };
+        // This scope authorizes only the read-only decision callbacks below.
+        // General timing/frame writers stay retired through the native original.
+        thread_local MoveAnimOriginalScope moveAnimOriginalScope;
 
         bool ApplicationTimingMode() noexcept
         {
@@ -951,7 +997,8 @@ namespace mta::game_de
                    runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained() || runtime.groupCreations.IsRetained() ||
                    runtime.hierarchyUncompress.IsRetained() || runtime.cameraRestore.IsRetained() || runtime.cameraTargetSetter.IsRetained() ||
                    runtime.cameraFovWrite.IsRetained() || runtime.cameraDirection.IsRetained() || runtime.cameraWidescreen.IsRetained() ||
-                   runtime.playerMoveAnimReapply.IsRetained() || runtime.hierarchyCacheRemove.IsRetained() || runtime.blockRegistration.IsRetained() ||
+                   runtime.playerMoveAnimReapply.IsRetained() || runtime.playerMoveAnimHooks.IsRetained() || runtime.playerMoveAnimHookPeers.Held() ||
+                   runtime.playerMoveAnimHookPeers.PresentationHeld() || runtime.hierarchyCacheRemove.IsRetained() || runtime.blockRegistration.IsRetained() ||
                    runtime.blockRemoval.IsRetained() || runtime.customSequences.HasPendingCleanup();
         }
 
@@ -998,6 +1045,7 @@ namespace mta::game_de
             // re-enters that operation; later bookends reject public issuance.
             runtime.preparedGameBorrow.CloseIssuance();
             runtime.cameraRowBorrows.CloseIssuance();
+            runtime.playerMoveAnimHooks.Close();
             runtime.privateAssociations.CloseFacadeIssuance(runtime.generation.load());
             runtime.active.store(false);
             runtime.stopping.store(true);
@@ -1253,6 +1301,11 @@ namespace mta::game_de
         }
 
         ClockResult CheckApplicationTimingOwner() noexcept;
+        ClockResult CheckMoveAnimReadOwner() noexcept;
+        ClockResult CheckMoveAnimDecisionScope(NativePlayerMoveAnimHookBridge::Kind, std::uintptr_t) noexcept;
+        ClockResult ResolveMoveAnimDecision(const NativePedReferenceToken&, NativePedPoolReader::Value&) noexcept;
+        ClockResult QualifyMoveAnimHookGroup(std::int32_t) noexcept;
+        ClockResult RetireMoveAnimHooks() noexcept;
 
         ClockResult CheckOwner() noexcept
         {
@@ -4949,6 +5002,12 @@ namespace mta::game_de
                     return cleared;
                 }
             }
+            if (runtime.playerMoveAnimHookGeneration.load())
+            {
+                const auto withdrawn = runtime.playerMoveAnimHooks.Withdraw(selected);
+                if (withdrawn != ClockResult::Ok)
+                    return withdrawn;
+            }
             NativePedReferenceMemory::Receipt receipt;
             const auto                        result = runtime.pedReferences.Release(PedReferenceMemory(), runtime.generation.load(), selected, &receipt);
             if (!runtime.pedReferences.IsRetained())
@@ -4963,6 +5022,10 @@ namespace mta::game_de
             if (!runtime.pedReferences.IsRetained())
                 return true;
             if (CheckPedReferenceRecoveryOwner() != ClockResult::Ok)
+                return false;
+            // Withdrawal is CPU-only and precedes every native cell cleanup,
+            // including stopped-generation bulk retirement.
+            if (runtime.playerMoveAnimHookGeneration.load() && runtime.playerMoveAnimHooks.WithdrawAll() != ClockResult::Ok)
                 return false;
             NativePedReferenceController::RetireProgress progress;
             const auto                                   result = runtime.pedReferences.Retire(PedReferenceMemory(), runtime.generation.load(), 32, progress);
@@ -7096,6 +7159,67 @@ namespace mta::game_de
             return ClockResult::Ok;
         }
 
+        struct MoveAnimClothesCallContext
+        {
+            NativePedReferenceToken    token;
+            NativePedPoolReader::Value ped;
+            MoveAnimOriginalScope      previous;
+            std::uint64_t              timing = 0, frame = 0, serial = 0;
+            bool                       timer = false, entered = false;
+            void*                      receiver = nullptr;
+        };
+        ClockResult EnterMoveAnimClothes(void* opaque) noexcept
+        {
+            auto* context = static_cast<MoveAnimClothesCallContext*>(opaque);
+            if (!context || context->entered || moveAnimOriginalScope.origin != MoveAnimOriginalScope::Origin::None)
+                return ClockResult::OwnerConflict;
+            auto result = CheckApplicationTimingOwner();
+            if (result != ClockResult::Ok || !runtime.playerMoveAnimHooks.Ready())
+                return result == ClockResult::Ok ? ClockResult::NotInitialized : result;
+            NativePedPoolReader::Value current;
+            result = runtime.access.ResolvePedReference(context->token, current);
+            if (result != ClockResult::Ok || !SameRegisteredPed(current, context->ped))
+                return result == ClockResult::Ok ? ClockResult::OwnerConflict : result;
+            NativeStreamingCompletionContext::Value world;
+            result = NativeStreamingCompletionContext::Capture(runtime.image, world);
+            if (result != ClockResult::Ok || (result = CheckApplicationTimingOwner()) != ClockResult::Ok)
+                return result;
+            context->previous = moveAnimOriginalScope;
+            context->timing = timingCallbackGeneration;
+            context->timer = timingTimerScope;
+            context->frame = frameCallbackGeneration;
+            context->receiver = frameCallbackReceiver;
+            context->serial = frameCallbackSerial;
+            moveAnimOriginalScope = {MoveAnimOriginalScope::Origin::ExplicitClothes,
+                                     runtime.generation.load(),
+                                     runtime.admissionSerial.load(),
+                                     runtime.image,
+                                     current.nativePed,
+                                     frameCallbackReceiver};
+            moveAnimOriginalScope.world = world;
+            moveAnimOriginalScope.worldQualified = true;
+            timingCallbackGeneration = 0;
+            timingTimerScope = false;
+            frameCallbackGeneration = 0;
+            frameCallbackReceiver = nullptr;
+            frameCallbackSerial = 0;
+            context->entered = true;
+            return ClockResult::Ok;
+        }
+        void LeaveMoveAnimClothes(void* opaque) noexcept
+        {
+            auto* context = static_cast<MoveAnimClothesCallContext*>(opaque);
+            if (!context || !context->entered)
+                return;
+            moveAnimOriginalScope = context->previous;
+            timingCallbackGeneration = context->timing;
+            timingTimerScope = context->timer;
+            frameCallbackGeneration = context->frame;
+            frameCallbackReceiver = context->receiver;
+            frameCallbackSerial = context->serial;
+            context->entered = false;
+        }
+
         ClockResult NativeAccess::RebuildPed(const NativePedReferenceToken& token) noexcept
         {
             // Keep MTA's separate rebuild operation on this same registered
@@ -7109,7 +7233,12 @@ namespace mta::game_de
             if ((result = ResolvePedReference(selected, before)) != ClockResult::Ok)
                 return result;
             NativePedRebuildCalls::Receipt receipt;
-            result = NativePedRebuildCalls::Rebuild(runtime.image, before, runtime.playerInfo, &CheckPlayerInfoOwner, &receipt);
+            MoveAnimClothesCallContext     clothes;
+            clothes.token = selected;
+            clothes.ped = before;
+            NativePlayerMoveAnimHookCall hookCall{&runtime.playerMoveAnimHooks, &EnterMoveAnimClothes, &LeaveMoveAnimClothes, &clothes};
+            const auto*                  call = runtime.playerMoveAnimHooks.Ready() ? &hookCall : nullptr;
+            result = NativePedRebuildCalls::Rebuild(runtime.image, before, runtime.playerInfo, &CheckPlayerInfoOwner, &receipt, nullptr, call);
             if (result == ClockResult::Ok)
             {
                 result = ResolvePedReference(selected, after);
@@ -9450,6 +9579,383 @@ namespace mta::game_de
             return thread != ClockResult::Ok ? thread : ApplicationTimingScope(false) ? ClockResult::Ok : ClockResult::BindingChanged;
         }
 
+        ClockResult QualifyMoveAnimHookGroup(std::int32_t group) noexcept
+        {
+            if (group < 0)
+                return ClockResult::UnsupportedBuild;
+            const auto image = runtime.image;
+            auto       result = CheckMoveAnimReadOwner();
+            if (result != ClockResult::Ok)
+                return result;
+
+            using Source = NativeAnimationManagerMemory::AssociationGroupCopySource;
+            struct Identity
+            {
+                std::uintptr_t                                                               hierarchy = 0;
+                std::array<unsigned char, NativeAnimationStaticAssociationProfile::RowBytes> row{};
+                std::array<unsigned char, NativeAnimationHierarchyReadProfile::PrefixBytes>  prefix{};
+            };
+            std::array<Source, 5>                  sources{};
+            std::array<Identity, 5>                identities{};
+            NativeAnimationManagerMemory           memory({image}, &CheckMoveAnimReadOwner);
+            NativeAnimationHierarchyMemory         hierarchies({image}, &CheckMoveAnimReadOwner);
+            constexpr std::array<std::uint32_t, 5> ids{0, 1, 2, 3, 5};
+            for (std::size_t index = 0; index != ids.size(); ++index)
+            {
+                NativeAnimationAssociationGroupReferenceToken token;
+                result = memory.ResolveAssociationGroup(static_cast<std::uint32_t>(group), token);
+                if (result != ClockResult::Ok || (result = memory.ReadAssociationGroupCopySource(token, ids[index], sources[index])) != ClockResult::Ok)
+                    return result;
+                const auto& source = sources[index];
+                if (index)
+                {
+                    const auto& first = sources[0];
+                    // Five independently admitted IDs must still belong to one current
+                    // parent/child array, not a mixture observed across owner callbacks.
+                    if (source.group.index != first.group.index || source.group.locator != first.group.locator || source.groups != first.groups ||
+                        source.children != first.children || source.groupCapacity != first.groupCapacity || source.childCapacity != first.childCapacity ||
+                        source.groupCount != first.groupCount || source.rawIdOffset != first.rawIdOffset || source.parent32 != first.parent32)
+                        return ClockResult::BindingChanged;
+                }
+
+                NativeAnimationStaticAssociationValues selected;
+                NativeAnimationHierarchyValues         hierarchy;
+                if ((result = memory.ReadStaticAssociation(source.selected, selected)) != ClockResult::Ok)
+                    return result;
+                if (!selected.hierarchyAddress)
+                    return ClockResult::NotInitialized;
+                if ((result = hierarchies.Read(selected.hierarchyAddress, hierarchy)) != ClockResult::Ok)
+                    return result;
+                if (hierarchy.interfaceAddress != selected.hierarchyAddress)
+                    return ClockResult::BindingChanged;
+                auto& identity = identities[index];
+                identity.hierarchy = selected.hierarchyAddress;
+                if (!NativeModelReferenceMap::Copy(source.selected.locator, identity.row.data(), identity.row.size()) ||
+                    !NativeImageAccess::ReadImage(image, identity.hierarchy, identity.prefix.data(), identity.prefix.size(), true))
+                    return ClockResult::ReadFailure;
+                std::uintptr_t rowHierarchy = 0;
+                std::uint32_t  hash = 0, totalTime = 0;
+                std::int32_t   block = 0;
+                std::uint16_t  count = 0;
+                std::memcpy(&rowHierarchy, identity.row.data() + 0x18, sizeof(rowHierarchy));
+                std::memcpy(&hash, identity.prefix.data(), sizeof(hash));
+                std::memcpy(&count, identity.prefix.data() + 0x10, sizeof(count));
+                std::memcpy(&block, identity.prefix.data() + 0x14, sizeof(block));
+                std::memcpy(&totalTime, identity.prefix.data() + 0x18, sizeof(totalTime));
+                if (rowHierarchy != identity.hierarchy || hash != hierarchy.hash || count != hierarchy.sequenceCount || block != hierarchy.blockId ||
+                    totalTime != hierarchy.totalTimeBits || identity.prefix[0x12] != hierarchy.runningCompressed)
+                    return ClockResult::BindingChanged;
+            }
+
+            // This is the LAST owner callback. Its scope checks actual AfterApp or the
+            // separately admitted original/clothes context; no general writer authority
+            // is acquired here. All remaining source bookends are callback-free.
+            if ((result = CheckMoveAnimReadOwner()) != ClockResult::Ok)
+                return result;
+            if (runtime.image != image)
+                return ClockResult::BindingChanged;
+            const auto& first = sources[0];
+            auto        currentRoots = [&]() noexcept
+            {
+                std::uintptr_t groups = 0;
+                std::int32_t   groupCount = 0;
+                std::uint64_t  groupCapacity = 0, childCapacity = 0;
+                return first.groups >= NativeAnimationGroupArrayProfile::CookieBytes &&
+                       first.children >= NativeAnimationStaticAssociationProfile::CookieBytes &&
+                       NativeImageAccess::ReadImage(image, image + NativeAnimationGroupArrayProfile::GlobalRva, &groups, sizeof(groups), true) &&
+                       groups == first.groups &&
+                       NativeImageAccess::ReadImage(image, image + NativeAnimationGroupArrayProfile::CountRva, &groupCount, sizeof(groupCount), true) &&
+                       groupCount == first.groupCount &&
+                       NativeModelReferenceMap::Copy(first.groups - NativeAnimationGroupArrayProfile::CookieBytes, &groupCapacity, sizeof(groupCapacity)) &&
+                       groupCapacity == first.groupCapacity &&
+                       NativeModelReferenceMap::Copy(first.children - NativeAnimationStaticAssociationProfile::CookieBytes, &childCapacity,
+                                                     sizeof(childCapacity)) &&
+                       childCapacity == first.childCapacity;
+            };
+            if (!currentRoots())
+                return ClockResult::BindingChanged;
+            for (std::size_t index = 0; index != sources.size(); ++index)
+            {
+                std::array<unsigned char, NativeAnimationGroupArrayProfile::RowBytes>        parent{};
+                std::array<unsigned char, NativeAnimationStaticAssociationProfile::RowBytes> row{};
+                std::array<unsigned char, NativeAnimationHierarchyReadProfile::PrefixBytes>  prefix{};
+                if (!NativeModelReferenceMap::Copy(sources[index].group.locator, parent.data(), parent.size()) || parent != sources[index].parent32 ||
+                    !NativeModelReferenceMap::Copy(sources[index].selected.locator, row.data(), row.size()) || row != identities[index].row ||
+                    !NativeImageAccess::ReadImage(image, identities[index].hierarchy, prefix.data(), prefix.size(), true) || prefix != identities[index].prefix)
+                    return ClockResult::BindingChanged;
+            }
+            return runtime.image == image && currentRoots() ? ClockResult::Ok : ClockResult::BindingChanged;
+        }
+
+        ClockResult CheckMoveAnimOriginalOwner() noexcept
+        {
+            const auto& scope = moveAnimOriginalScope;
+            if (scope.origin == MoveAnimOriginalScope::Origin::None || !ApplicationTimingMode() || !runtime.bound.load() || !runtime.frameHooked.load() ||
+                !runtime.ready.load() || !runtime.playerMoveAnimHooks.Ready())
+                return ClockResult::NotInitialized;
+            if (callbackDepth != 1 || GetCurrentThreadId() != runtime.engineThread.load())
+                return ClockResult::WrongThread;
+            if (!scope.generation || scope.generation != runtime.generation.load() || scope.generation != runtime.admissionGeneration.load() ||
+                scope.admissionSerial != runtime.admissionSerial.load() || !scope.admissionSerial || scope.image != runtime.image ||
+                scope.generation != runtime.playerMoveAnimHookGeneration.load() || timingCallbackGeneration || timingTimerScope || frameCallbackGeneration ||
+                frameCallbackReceiver || frameCallbackSerial)
+                return ClockResult::OwnerConflict;
+            if (!runtime.active.load() || runtime.stopping.load() || !Fresh())
+                return ClockResult::Expired;
+            if (runtime.patchRecovery.load() || runtime.playerMoveAnimHooks.RecoveryPending())
+                return ClockResult::PatchFailure;
+            if (runtime.peersRetained.load() || !scope.receiver || !scope.worldQualified ||
+                !NativeStreamingCompletionContext::Fence(runtime.image, scope.world) || !FrameReceiver(scope.receiver) || !CheckBinding() ||
+                !CheckTimingBinding())
+                return ClockResult::BindingChanged;
+            const auto result = NativeStartGameCalls::CheckThread(runtime.image);
+            return result == ClockResult::Ok && NativeStreamingCompletionContext::Fence(runtime.image, scope.world) && FrameReceiver(scope.receiver) &&
+                           CheckBinding() && CheckTimingBinding()
+                       ? ClockResult::Ok
+                   : result == ClockResult::Ok ? ClockResult::BindingChanged
+                                               : result;
+        }
+        ClockResult CheckMoveAnimReadOwner() noexcept
+        {
+            // This private callback is passed only to existing typed readers.
+            // It never expands CheckTimingOwner or any SDK writer's authority.
+            return moveAnimOriginalScope.origin == MoveAnimOriginalScope::Origin::None ? CheckApplicationTimingOwner() : CheckMoveAnimOriginalOwner();
+        }
+        ClockResult CheckMoveAnimDecisionScope(NativePlayerMoveAnimHookBridge::Kind kind, std::uintptr_t nativePed) noexcept
+        {
+            const auto result = CheckMoveAnimOriginalOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (!nativePed || (moveAnimOriginalScope.origin == MoveAnimOriginalScope::Origin::ExplicitClothes &&
+                               (kind != NativePlayerMoveAnimHookBridge::Kind::ClothesCall || nativePed != moveAnimOriginalScope.nativePed)))
+                return ClockResult::OwnerConflict;
+            return ClockResult::Ok;
+        }
+        ClockResult ResolveMoveAnimPublication(const NativePedReferenceToken& token, NativePedPoolReader::Value& output) noexcept
+        {
+            return runtime.access.ResolvePedReference(token, output);
+        }
+        ClockResult ResolveMoveAnimDecision(const NativePedReferenceToken& token, NativePedPoolReader::Value& output) noexcept
+        {
+            auto result = CheckMoveAnimOriginalOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedReferenceMemory   memory({runtime.image}, &CheckMoveAnimOriginalOwner, &CheckMoveAnimOriginalOwner, runtime.generation.load());
+            NativePedPoolReader::Value current;
+            result = runtime.pedReferences.Resolve(memory, runtime.generation.load(), token, current);
+            if (result != ClockResult::Ok)
+                return result;
+            result = CheckMoveAnimOriginalOwner();
+            if (result == ClockResult::Ok)
+                output = current;
+            return result;
+        }
+        ClockResult QualifyMoveAnimHookPlayer(const NativePedReferenceToken& token, NativePedPoolReader::Value& output) noexcept
+        {
+            auto result = CheckApplicationTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedPoolReader::Value before, after;
+            if ((result = runtime.access.ResolvePedReference(token, before)) != ClockResult::Ok)
+                return result;
+            NativePedMetadata metadata;
+            if ((result = NativePedMetadataMemory({runtime.image}, &CheckApplicationTimingOwner).Read(before, metadata)) != ClockResult::Ok)
+                return result;
+            if (metadata.entityType != 3 || before.vtable != runtime.image + NativePlayerInfoProfile::PlayerVtableRva)
+                return ClockResult::UnsupportedBuild;
+            std::int32_t   selector = -1;
+            std::uintptr_t data = 0, published = 0;
+            if (!NativeStreamingCompletionContext::At(before.nativePed, 0x7e0, selector) ||
+                !NativeStreamingCompletionContext::At(before.nativePed, 0x5f0, data))
+                return ClockResult::ReadFailure;
+            if (selector != 0 && selector != 1)
+                return ClockResult::UnsupportedBuild;
+            const auto row = runtime.image + NativePlayerInfoProfile::BankRva + static_cast<std::uintptr_t>(selector) * NativePlayerInfoProfile::RowBytes;
+            if (!Image::ReadImage(runtime.image, row, &published, sizeof(published), true) || published != before.nativePed || data != row + 8)
+                return ClockResult::BindingChanged;
+            if ((result = runtime.access.ResolvePedReference(token, after)) != ClockResult::Ok)
+                return result;
+            if (!SameRegisteredPed(before, after))
+                return ClockResult::OwnerConflict;
+            if ((result = CheckApplicationTimingOwner()) != ClockResult::Ok)
+                return result;
+            std::int32_t   selectorAfter = -1;
+            std::uintptr_t dataAfter = 0, publishedAfter = 0;
+            if (!NativeStreamingCompletionContext::At(before.nativePed, 0x7e0, selectorAfter) || selectorAfter != selector ||
+                !NativeStreamingCompletionContext::At(before.nativePed, 0x5f0, dataAfter) || dataAfter != data ||
+                !Image::ReadImage(runtime.image, row, &publishedAfter, sizeof(publishedAfter), true) || publishedAfter != published)
+                return ClockResult::BindingChanged;
+            output = after;
+            return ClockResult::Ok;
+        }
+        ClockResult CheckMoveAnimParkedOwner() noexcept
+        {
+            const auto generation = runtime.generation.load();
+            if (!generation || runtime.playerMoveAnimHookGeneration.load() != generation || runtime.admissionGeneration.load() != generation ||
+                !runtime.admissionSerial.load() || !runtime.playerMoveAnimHookPeers.Held() || !runtime.playerMoveAnimHookPeersParked.load() ||
+                !runtime.peerBusy.load() || runtime.peersRetained.load())
+                return ClockResult::OwnerConflict;
+            const bool installing = callbackDepth == 1 && GetCurrentThreadId() == runtime.engineThread.load() && runtime.active.load() &&
+                                    !runtime.stopping.load() && timingCallbackGeneration == generation && frameCallbackGeneration == generation &&
+                                    frameCallbackSerial && frameCallbackSerial == runtime.counters.qualified.load() && Fresh();
+            const bool retiring = !callbackDepth && GetCurrentThreadId() == runtime.producerThread && runtime.apiBusy.load() && !runtime.active.load() &&
+                                  runtime.stopping.load() && !runtime.inFlight.load();
+            if (!installing && !retiring)
+                return ClockResult::WrongThread;
+            return CheckBinding(false, retiring) && CheckTimingBinding() ? ClockResult::Ok : ClockResult::BindingChanged;
+        }
+        ClockResult CheckMoveAnimQuiescentProducer() noexcept
+        {
+            if (callbackDepth || GetCurrentThreadId() != runtime.producerThread)
+                return ClockResult::WrongThread;
+            if (!runtime.apiBusy.load() || runtime.active.load() || !runtime.stopping.load() || runtime.inFlight.load() || runtime.peersRetained.load() ||
+                runtime.playerMoveAnimHookPeersParked.load() || runtime.playerMoveAnimHookPeers.Held() || runtime.playerMoveAnimHookPeers.PresentationHeld())
+                return ClockResult::Busy;
+            if (!runtime.generation.load() || runtime.playerMoveAnimHookGeneration.load() != runtime.generation.load() ||
+                runtime.admissionGeneration.load() != runtime.generation.load() || !runtime.admissionSerial.load())
+                return ClockResult::OwnerConflict;
+            return CheckBinding(false, true) && CheckTimingBinding() ? ClockResult::Ok : ClockResult::BindingChanged;
+        }
+        bool MoveAnimPatchRanges(std::array<PeerPatchRange, 4>& ranges) noexcept
+        {
+            std::array<NativeFunctionRange, 4> native;
+            if (!runtime.playerMoveAnimHooks.Exclusions(native))
+                return false;
+            for (std::size_t i = 0; i != native.size(); ++i)
+            {
+                if (!native[i].begin || native[i].begin >= native[i].end)
+                    return false;
+                ranges[i] = {native[i].begin, native[i].end};
+            }
+            return true;
+        }
+        ClockResult NativeAccess::EnablePlayerMoveAnimHooks() noexcept
+        {
+            auto result = CheckApplicationTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (runtime.playerMoveAnimHooks.Ready())
+                return runtime.playerMoveAnimHookGeneration.load() == runtime.generation.load() ? ClockResult::Ok : ClockResult::OwnerConflict;
+            if (runtime.playerMoveAnimHooks.IsRetained() || runtime.playerMoveAnimHookPeers.Held())
+                return ClockResult::Busy;
+            runtime.playerMoveAnimHookGeneration.store(runtime.generation.load());
+            const NativePlayerMoveAnimHookController::Identity identity{runtime.image, runtime.generation.load(), runtime.admissionSerial.load(),
+                                                                        runtime.engineThread.load()};
+            const NativePlayerMoveAnimHookController::Owners   owners{&CheckApplicationTimingOwner, &ResolveMoveAnimPublication, &CheckMoveAnimDecisionScope,
+                                                                    &ResolveMoveAnimDecision, &QualifyMoveAnimHookGroup};
+            result = runtime.playerMoveAnimHooks.Prepare(identity, owners);
+            if (result == ClockResult::Ok)
+            {
+                std::array<PeerPatchRange, 4> ranges;
+                if (!MoveAnimPatchRanges(ranges))
+                    result = ClockResult::BindingChanged;
+                else if (!runtime.playerMoveAnimHookPeers.Prepare() || !runtime.playerMoveAnimHookPeers.Suspend(ranges.data(), ranges.size()))
+                    result = runtime.playerMoveAnimHookPeers.PresentationRefusal() == ClockResult::Ok ? ClockResult::Busy
+                                                                                                      : runtime.playerMoveAnimHookPeers.PresentationRefusal();
+                else
+                {
+                    runtime.playerMoveAnimHookPeersParked.store(true);
+                    result = runtime.playerMoveAnimHooks.Install(&CheckMoveAnimParkedOwner);
+                }
+                runtime.playerMoveAnimHookPeersParked.store(false);
+                if (!runtime.playerMoveAnimHookPeers.Release())
+                    result = ClockResult::RestoreFailure;
+            }
+            if (result != ClockResult::Ok)
+            {
+                runtime.playerMoveAnimHooks.Close();
+                if (runtime.playerMoveAnimHooks.IsRetained() || runtime.playerMoveAnimHookPeers.Held() || runtime.playerMoveAnimHookPeers.PresentationHeld())
+                    Stop(result);
+                else
+                    runtime.playerMoveAnimHookGeneration.store(0);
+            }
+            return result;
+        }
+        ClockResult NativeAccess::PublishPlayerMoveAnimOverride(const NativePedReferenceToken& token, std::int32_t custom) noexcept
+        {
+            if (custom < 0 || (custom && MtaGame::CPlayerMoveAnimPolicy::SelectRequest(static_cast<std::uint32_t>(custom)).kind ==
+                                             MtaGame::CPlayerMoveAnimPolicy::Kind::Invalid))
+                return ClockResult::InvalidArgument;
+            NativePedPoolReader::Value current;
+            auto                       result = QualifyMoveAnimHookPlayer(token, current);
+            return result == ClockResult::Ok ? runtime.playerMoveAnimHooks.Publish(token, current, custom) : result;
+        }
+        ClockResult NativeAccess::WithdrawPlayerMoveAnimOverride(const NativePedReferenceToken& token) noexcept
+        {
+            const auto result = CheckPedReferenceRecoveryOwner();
+            return result == ClockResult::Ok ? runtime.playerMoveAnimHooks.Withdraw(token) : result;
+        }
+        ClockResult RetireMoveAnimHooks() noexcept
+        {
+            runtime.playerMoveAnimHooks.Close();
+            if (!runtime.playerMoveAnimHooks.IsRetained())
+            {
+                if (runtime.playerMoveAnimHookPeers.Held() || runtime.playerMoveAnimHookPeers.PresentationHeld())
+                {
+                    if (!runtime.playerMoveAnimHookPeers.Release())
+                        return ClockResult::RestoreFailure;
+                }
+                runtime.playerMoveAnimHookGeneration.store(0);
+                return ClockResult::Ok;
+            }
+            // A prior failed Release may still own handles or a presentation
+            // fence even after global resume recovery. Discharge only that
+            // existing hold before checking the unparked producer boundary.
+            if (runtime.playerMoveAnimHookPeers.Held() || runtime.playerMoveAnimHookPeers.PresentationHeld())
+            {
+                if (!runtime.playerMoveAnimHookPeers.Release())
+                    return ClockResult::RestoreFailure;
+            }
+            auto result = CheckMoveAnimQuiescentProducer();
+            if (result != ClockResult::Ok)
+                return result;
+            if (runtime.playerMoveAnimHooks.RecoveryPending())
+                return ClockResult::RestoreFailure;
+            NativePlayerMoveAnimHookController::Receipt receipt;
+            if (!runtime.playerMoveAnimHooks.Read(receipt))
+                return ClockResult::Busy;
+            if (receipt.sites[0].installed || receipt.sites[1].installed)
+            {
+                std::array<PeerPatchRange, 4> ranges;
+                if (!MoveAnimPatchRanges(ranges))
+                    return ClockResult::BindingChanged;
+                if (!runtime.playerMoveAnimHookPeers.Prepare() || !runtime.playerMoveAnimHookPeers.Suspend(ranges.data(), ranges.size()))
+                    result = ClockResult::Busy;
+                else
+                {
+                    runtime.playerMoveAnimHookPeersParked.store(true);
+                    // The counter does not cover stub prologue/restore. The
+                    // genuine peer contexts above exclude the ENTIRE allocation
+                    // and original transfer windows before either patch changes.
+                    result = runtime.playerMoveAnimHooks.Detach(&CheckMoveAnimParkedOwner);
+                }
+                runtime.playerMoveAnimHookPeersParked.store(false);
+                if (!runtime.playerMoveAnimHookPeers.Release())
+                    return ClockResult::RestoreFailure;
+                if (result != ClockResult::Ok)
+                    return result;
+            }
+            // RtlDeleteFunctionTable/VirtualFree run only after every suspended
+            // peer resumes; an unwinder's OS lock may be owned by such a peer.
+            result = runtime.playerMoveAnimHooks.Retire(&CheckMoveAnimQuiescentProducer);
+            if (result == ClockResult::Ok)
+                runtime.playerMoveAnimHookGeneration.store(0);
+            return result;
+        }
+        ClockResult NativeAccess::RetirePlayerMoveAnimHooks() noexcept
+        {
+            ApiOperation operation;
+            if (!operation.acquired)
+                return ClockResult::Busy;
+            if (callbackDepth || GetCurrentThreadId() != runtime.producerThread)
+                return ClockResult::WrongThread;
+            if (runtime.active.load() || !runtime.stopping.load())
+                return ClockResult::Busy;
+            if (runtime.peersRetained.load() && !RetryPeerHoldsBounded())
+                return ClockResult::RestoreFailure;
+            return RetireMoveAnimHooks();
+        }
+
         bool UiMapHeapRead(std::uintptr_t address, void* output, std::size_t bytes) noexcept
         {
             if (!address || !bytes || bytes > (std::numeric_limits<std::uintptr_t>::max)() - address)
@@ -9979,6 +10485,8 @@ namespace mta::game_de
             const auto previousFrameGeneration = frameCallbackGeneration;
             const auto previousFrameReceiver = frameCallbackReceiver;
             const auto previousFrameSerial = frameCallbackSerial;
+            const auto previousMoveAnim = moveAnimOriginalScope;
+            moveAnimOriginalScope = {};
             // Scope remains retired through the WHOLE original. A timer or
             // loader reached inside it cannot borrow the later post-frame
             // writer, even when it uses the same thread and generation.
@@ -9998,13 +10506,25 @@ namespace mta::game_de
                 // Preserve the actual Windows x64 this/float ABI and finish
                 // the original frame exactly once before any MTA observation.
                 // Loading-loop and unknown origins forward without admission.
+                if (before && callbackDepth == 1 && std::isfinite(delta) && runtime.active.load() && runtime.ready.load() && Fresh() &&
+                    runtime.playerMoveAnimHooks.Ready() && runtime.admissionGeneration.load() == runtime.generation.load() && runtime.admissionSerial.load())
+                {
+                    moveAnimOriginalScope = {
+                        MoveAnimOriginalScope::Origin::NaturalFrame, runtime.generation.load(), runtime.admissionSerial.load(), runtime.image, 0, receiver};
+                    if (NativeStreamingCompletionContext::Capture(runtime.image, moveAnimOriginalScope.world) == ClockResult::Ok)
+                        moveAnimOriginalScope.worldQualified = true;
+                    else
+                        moveAnimOriginalScope = {};
+                }
                 runtime.originalFrame(receiver, delta);
+                moveAnimOriginalScope = {};
                 FrameBody(receiver, delta, returnAddress, before);
             }
             __finally
             {
                 if (AbnormalTermination())
                     Stop(ClockResult::OriginalException);
+                moveAnimOriginalScope = previousMoveAnim;
                 timingCallbackGeneration = previousTimingGeneration;
                 timingTimerScope = previousTimerScope;
                 frameCallbackGeneration = previousFrameGeneration;
@@ -10526,6 +11046,8 @@ namespace mta::game_de
         // A failed resume may retain the very callback counted inFlight.
         // Retire that suspend debt first so its finally block can finish.
         if ((runtime.peersRetained.load() && !RetryPeerHoldsBounded()) || runtime.inFlight.load())
+            return false;
+        if (RetireMoveAnimHooks() != ClockResult::Ok)
             return false;
         // Stop has revoked SDK entry and no callback remains in flight.
         // Only no-effect CPU records may disappear; serials never reset.

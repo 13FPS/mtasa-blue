@@ -6,6 +6,10 @@
 #pragma once
 #include "NativePedPoolReader.h"
 #include "NativePlayerInfoMemory.h"
+namespace mta::game_de
+{
+    struct NativePlayerMoveAnimHookCall;
+}
 namespace mta::game_de::NativePedRebuildCalls
 {
     using Ped = NativePedPoolReader::Value;
@@ -23,5 +27,8 @@ namespace mta::game_de::NativePedRebuildCalls
     // DE's proved entry consumes only the ped; classic's false parameter must
     // not become an invented second DE argument. Native effects are accepted
     // after exactly one entry, with no replay or whole-object rollback.
-    ClockResult Rebuild(std::uintptr_t image, const Ped&, const NativePlayerInfoMemory&, CheckOwner, Receipt* = nullptr, Invoke = nullptr) noexcept;
+    // Existing callers remain stock-only. An explicit admitted call scope is
+    // optional and brackets only the final original, never profile/admission.
+    ClockResult Rebuild(std::uintptr_t image, const Ped&, const NativePlayerInfoMemory&, CheckOwner, Receipt* = nullptr, Invoke = nullptr,
+                        const NativePlayerMoveAnimHookCall* = nullptr) noexcept;
 }

@@ -2932,6 +2932,28 @@ namespace mta::game_de::NativeImageAccess
 {
     bool NumericClockFixtureExecutable() noexcept;
 }
+// Keep all owner effects in the actual implementation. Only final OS/module
+// identity and the terminal clothes consumer refer to explicitly owned fixtures.
+#include "../../Client/game_de/NativePlayerMoveAnimHookController.h"
+namespace ClockMoveAnimHookOwnerTest
+{
+    std::uintptr_t ClothesConsumer(std::uintptr_t) noexcept;
+    BOOLEAN        DeleteFunctions(PRUNTIME_FUNCTION) noexcept;
+    BOOL           Protect(LPVOID, SIZE_T, DWORD, PDWORD) noexcept;
+    bool           Range(const void*, mta::game_de::NativeFunctionRange&) noexcept;
+}
+#define MTA_DE_PLAYER_MOVEANIM_HOOK_CLOTHES_CONSUMER(image) ClockMoveAnimHookOwnerTest::ClothesConsumer(image)
+#define RtlDeleteFunctionTable                              ClockMoveAnimHookOwnerTest::DeleteFunctions
+#define FindNativeFunctionRange                             ClockMoveAnimHookOwnerTest::Range
+#pragma push_macro("VirtualProtect")
+#undef VirtualProtect
+#define VirtualProtect ClockMoveAnimHookOwnerTest::Protect
+#include "../../Client/game_de/NativePlayerMoveAnimHookController.cpp"
+#undef FindNativeFunctionRange
+#undef RtlDeleteFunctionTable
+#undef VirtualProtect
+#pragma pop_macro("VirtualProtect")
+#undef MTA_DE_PLAYER_MOVEANIM_HOOK_CLOTHES_CONSUMER
 // Only this test TU can select its explicit owned MEM_IMAGE after proving
 // default shipping rejection. The next public Begin still issues its epoch.
 #define GetModuleHandleW     ::ClockNumericAssociationIssuedTest::Module
@@ -9131,6 +9153,7 @@ namespace
 #include "BuildingPoolDefaultOwnerTests.inl"
 #include "PreparedGameBorrowOwnerTests.inl"
 #include "NativePlayerMoveAnimReapplyOwnerTests.inl"
+#include "NativePlayerMoveAnimHookOwnerTests.inl"
 // The model fixture consumes the shared byte helpers defined by the earlier
 // private-association fixture; keep its consumer after those definitions.
 #include "../../Client/game_de/CModelInfoDE.h"
@@ -9239,6 +9262,18 @@ int main(int argc, char** argv)
                 playerMoveAnimReapplyScenario = index;
     }
     const bool playerMoveAnimReapplyOnly = playerMoveAnimReapplyScenario != 4;
+    unsigned   playerMoveAnimHookOwnerScenario = 6;
+    if (argc == 3)
+    {
+        constexpr std::array<const char*, 6> flags{"--player-moveanim-hook-owner-success",         "--player-moveanim-hook-owner-foreign-site",
+                                                   "--player-moveanim-hook-owner-token-loss",      "--player-moveanim-hook-owner-unwind-loss",
+                                                   "--player-moveanim-hook-owner-partial-install", "--player-moveanim-hook-owner-explicit-rebuild"};
+        for (unsigned index = 0; index != flags.size(); ++index)
+            if (std::strcmp(argv[2], flags[index]) == 0)
+                playerMoveAnimHookOwnerScenario = index;
+    }
+    const bool playerMoveAnimHookOwnerOnly = playerMoveAnimHookOwnerScenario != 6;
+
     const bool preparedGameBorrowOnly = argc == 3 && std::strcmp(argv[2], "--prepared-game-borrow") == 0;
     const bool buildingPoolDefaultOnly = argc == 3 && std::strcmp(argv[2], "--building-pool-default") == 0;
     const bool startupLifecycleOnly = argc == 3 && std::strcmp(argv[2], "--startup-lifecycle") == 0;
@@ -9651,35 +9686,44 @@ int main(int argc, char** argv)
     const bool waterOnly = orientationWithWater || (argc == 3 && std::strcmp(argv[2], "--ped-water") == 0);
     const bool poseOnly = argc == 3 && std::strcmp(argv[2], "--ped-pose") == 0;
     const bool poolRegistryOnly = argc == 3 && std::strcmp(argv[2], "--ped-pool-registry") == 0;
-    Check((argc == 2 || presentTransitionClockOnly || preparedGameBorrowOnly || buildingPoolDefaultOnly || startupLifecycleOnly ||
-           startupInitializationReadinessOnly || startupStreamingReceiverOnly || startupNumericGaragesOnly || startupPreparationReadinessOnly ||
-           startupMenuOnly || startupCollisionOnly || pedCreationLifecycleOnly || constructorOnly || vehiclePredicatesOnly || modelTimeGetterOnly ||
-           pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly || waterOnly || animationOnly ||
-           animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly || fireCollisionOnly || fireOnly ||
-           collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly || worldLineOnly ||
-           worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly || cameraSphereOnly ||
-           pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || playerMoveAnimReapplyOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly ||
-           animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly ||
-           animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly ||
-           customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly ||
-           privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly ||
-           privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly ||
-           sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly ||
-           animationDefinitionBlockNamesOnly || animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly ||
-           cameraBasicsOnly || cameraJumpCutOnly || cameraFovWriteOnly || cameraDirectionOnly || cameraRowBorrowOnly || cameraHistoryOnly || cameraTargetOnly ||
-           cameraTargetSetterOnly || cameraGetCamOnly || cameraWidescreenOnly || cameraMainTargetOnly || applicationTimingOnly || emptyBlockRemovalOnly ||
-           blockRegistrationOnly || bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly ||
-           dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
-           groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
-           animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
-           privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
-              std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
-          "durable fixture evidence is restricted to the explicit owned executable output directory");
+    Check(
+        (argc == 2 || presentTransitionClockOnly || preparedGameBorrowOnly || buildingPoolDefaultOnly || startupLifecycleOnly ||
+         startupInitializationReadinessOnly || startupStreamingReceiverOnly || startupNumericGaragesOnly || startupPreparationReadinessOnly ||
+         startupMenuOnly || startupCollisionOnly || pedCreationLifecycleOnly || constructorOnly || vehiclePredicatesOnly || modelTimeGetterOnly ||
+         pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly || waterOnly || animationOnly ||
+         animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly || fireCollisionOnly || fireOnly ||
+         collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly || worldLineOnly || worldAreaOnly ||
+         worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly || cameraSphereOnly || pedWeaponClearOnly ||
+         pedClothesOnly || pedRebuildOnly || playerMoveAnimHookOwnerOnly || playerMoveAnimReapplyOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly ||
+         animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly ||
+         animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly ||
+         customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly ||
+         privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly ||
+         privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly ||
+         sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly ||
+         animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly || cameraBasicsOnly || cameraJumpCutOnly ||
+         cameraFovWriteOnly || cameraDirectionOnly || cameraRowBorrowOnly || cameraHistoryOnly || cameraTargetOnly || cameraTargetSetterOnly ||
+         cameraGetCamOnly || cameraWidescreenOnly || cameraMainTargetOnly || applicationTimingOnly || emptyBlockRemovalOnly || blockRegistrationOnly ||
+         bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly || dynamicClumpOnly ||
+         groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
+         groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
+         animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
+         privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
+            std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
+        "durable fixture evidence is restricted to the explicit owned executable output directory");
     if (presentTransitionClockOnly)
     {
         ClockImageFixture fixture;
         fixture.Create(argv[1]);
         PresentTransitionClockFixture::Run(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (playerMoveAnimHookOwnerOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        PlayerMoveAnimHookOwnerFixture::Run(fixture, playerMoveAnimHookOwnerScenario);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

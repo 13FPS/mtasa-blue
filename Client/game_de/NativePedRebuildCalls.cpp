@@ -5,6 +5,7 @@
  ****************************************************************************/
 #include "NativePedRebuildCalls.h"
 #include "NativePedRebuildProfile.h"
+#include "NativePlayerMoveAnimHookController.h"
 #include "NativePedMetadataMemory.h"
 #include "NativePedIntelligenceReader.h"
 #include "NativeTaskPoolReader.h"
@@ -30,13 +31,23 @@ namespace mta::game_de::NativePedRebuildCalls
         namespace H = NativeModelReferenceHeap;
         namespace Image = NativeImageAccess;
 
-        bool Profile(std::uintptr_t image) noexcept
+        bool Profile(std::uintptr_t image, const NativePlayerMoveAnimHookCall* hookCall) noexcept
         {
             std::array<unsigned char, P::MaximumPinBytes> bytes{};
             for (const auto& pin : P::Pins)
-                if (!pin.size || pin.size > bytes.size() || !Image::ReadImage(image, image + pin.rva, bytes.data(), pin.size, false, true) ||
-                    std::memcmp(bytes.data(), pin.bytes, pin.size))
+            {
+                if (!pin.size || pin.size > bytes.size() || !Image::ReadImage(image, image + pin.rva, bytes.data(), pin.size, false, true))
                     return false;
+                if (std::memcmp(bytes.data(), pin.bytes, pin.size))
+                {
+                    // Only the exact whole-entry mismatch may use the current
+                    // controller's acknowledged five-byte overlay. Every other
+                    // pin and every remaining entry byte keeps stock authority.
+                    if (pin.rva != P::EntryRva || pin.bytes != P::Entry.data() || pin.size != P::Entry.size() || !hookCall || !hookCall->controller ||
+                        !hookCall->controller->MatchesRebuild(image, bytes.data(), pin.size))
+                        return false;
+                }
+            }
             std::uintptr_t group = 0;
             std::uint32_t  branch = 0;
             if (!Image::ReadImage(image, image + P::GroupSlotRva, &group, sizeof(group)) || group != image + P::GroupRva ||
@@ -80,13 +91,14 @@ namespace mta::game_de::NativePedRebuildCalls
                    a.outerAddress == b.outerAddress && a.itemAddress == b.itemAddress && a.index == b.index && a.serial == b.serial;
         }
 
-        ClockResult Capture(std::uintptr_t image, const Ped& ped, const NativePlayerInfoMemory& playerInfo, CheckOwner owner, Value& output)
+        ClockResult Capture(std::uintptr_t image, const Ped& ped, const NativePlayerInfoMemory& playerInfo, CheckOwner owner, Value& output,
+                            const NativePlayerMoveAnimHookCall* hookCall)
         {
             Value value;
             auto  result = D::Owner(image, owner);
             if (result != ClockResult::Ok)
                 return result;
-            if (!Profile(image))
+            if (!Profile(image, hookCall))
                 return ClockResult::BindingChanged;
             if ((result = NativePedPoolReader({image}, owner).Recheck(ped)) != ClockResult::Ok ||
                 (result = NativePedMetadataMemory({image}, owner).Read(ped, value.metadata)) != ClockResult::Ok ||
@@ -181,7 +193,7 @@ namespace mta::game_de::NativePedRebuildCalls
                 return ClockResult::BindingChanged;
             if ((result = D::Capture(image, value.world)) != ClockResult::Ok || (result = NativePedPoolReader({image}, owner).Recheck(ped)) != ClockResult::Ok)
                 return result;
-            if (!D::Fence(image, value.world) || !Profile(image))
+            if (!D::Fence(image, value.world) || !Profile(image, hookCall))
                 return ClockResult::BindingChanged;
             if ((result = D::Owner(image, owner)) != ClockResult::Ok)
                 return result;
@@ -225,10 +237,32 @@ namespace mta::game_de::NativePedRebuildCalls
             }
         }
 #endif
+
+        ClockResult ScopedNativeCall(Invoke invoke, NativeFunction function, std::uintptr_t ped, std::uint32_t& exception,
+                                     const NativePlayerMoveAnimHookCall& input, bool& entered) noexcept
+        {
+            // Keep this helper POD-only: the caller owns RAII admission state,
+            // while SEH finally must restore its suspended timing authority even
+            // when the selected native invocation raises an exception.
+            const NativePlayerMoveAnimHookCall call = input;
+            auto                               result = call.enter(call.context);
+            if (result != ClockResult::Ok)
+                return result;
+            __try
+            {
+                entered = true;
+                result = invoke(function, ped, exception);
+            }
+            __finally
+            {
+                call.leave(call.context);
+            }
+            return result;
+        }
     }
 
-    ClockResult Rebuild(std::uintptr_t image, const Ped& input, const NativePlayerInfoMemory& playerInfo, CheckOwner owner, Receipt* output,
-                        Invoke invoke) noexcept
+    ClockResult Rebuild(std::uintptr_t image, const Ped& input, const NativePlayerInfoMemory& playerInfo, CheckOwner owner, Receipt* output, Invoke invoke,
+                        const NativePlayerMoveAnimHookCall* hookCall) noexcept
     {
         const Ped ped = input;
         Receipt   receipt;
@@ -241,7 +275,7 @@ namespace mta::game_de::NativePedRebuildCalls
                 *output = receipt;
             return result;
         };
-        if (!owner)
+        if (!owner || (hookCall && (!hookCall->controller || !hookCall->enter || !hookCall->leave)))
             return finish(ClockResult::NotInitialized);
         if (!D::TryEnter())
             return finish(ClockResult::Busy);
@@ -249,7 +283,7 @@ namespace mta::game_de::NativePedRebuildCalls
         try
         {
             Value before, confirmed;
-            auto  result = Capture(image, ped, playerInfo, owner, before);
+            auto  result = Capture(image, ped, playerInfo, owner, before, hookCall);
             if (result != ClockResult::Ok)
                 return finish(result);
             receipt.playerData = image + NativePlayerInfoProfile::BankRva + 8;
@@ -262,7 +296,7 @@ namespace mta::game_de::NativePedRebuildCalls
             receipt.beforeRender = before.render;
             receipt.beforeContainer = before.container;
             receipt.preservedHead = before.head;
-            if ((result = Capture(image, ped, playerInfo, owner, confirmed)) != ClockResult::Ok)
+            if ((result = Capture(image, ped, playerInfo, owner, confirmed, hookCall)) != ClockResult::Ok)
                 return finish(result);
             if (!SameBefore(before, confirmed))
                 return finish(ClockResult::BindingChanged);
@@ -273,12 +307,20 @@ namespace mta::game_de::NativePedRebuildCalls
 #else
             const auto entry = invoke ? invoke : &NativeCall;
 #endif
-            receipt.entered = true;
-            result = entry(reinterpret_cast<NativeFunction>(image + P::EntryRva), ped.nativePed, receipt.exceptionCode);
+            if (hookCall)
+                result = ScopedNativeCall(entry, reinterpret_cast<NativeFunction>(image + P::EntryRva), ped.nativePed, receipt.exceptionCode, *hookCall,
+                                          receipt.entered);
+            else
+            {
+                // nullptr deliberately retains the exact stock invoke path;
+                // it neither accepts overlays nor grants a clothes lookup scope.
+                receipt.entered = true;
+                result = entry(reinterpret_cast<NativeFunction>(image + P::EntryRva), ped.nativePed, receipt.exceptionCode);
+            }
             if (result != ClockResult::Ok)
                 return finish(result);
             receipt.returned = true;
-            if ((result = Capture(image, ped, playerInfo, owner, confirmed)) != ClockResult::Ok)
+            if ((result = Capture(image, ped, playerInfo, owner, confirmed, hookCall)) != ClockResult::Ok)
                 return finish(result);
             receipt.afterRender = confirmed.render;
             receipt.afterContainer = confirmed.container;

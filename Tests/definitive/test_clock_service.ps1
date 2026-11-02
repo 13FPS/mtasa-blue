@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('PlayerMoveAnimReapply','PreparedGameBorrow','BuildingPoolDefault','StartupLifecycle','CameraMainTarget','CameraWidescreen','CameraGetCam','CameraTargetSetter','CameraTarget','CameraHistory','CameraRowBorrow','CameraDirection','CameraFovWrite','CameraJumpCut','CameraBasics','ModelTimeGetter','VehiclePredicates','EmptyBlockRemoval','BlockRegistration','BankPostprocess','BankEviction','BankDecompression','ApplicationTiming','AnimationHierarchyUncompress','NumericAssociationOwner','DynamicClumpOwner','AnimationAssociationGroupFactories','GroupSourceCreationOwner','JointTemporaryStaticInitializerOwner','GroupReplacementOwner','GroupCopyAnimationOwner','GroupEmptyInitialization','AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','PresentTransitionClock','StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
+    [ValidateSet('PlayerMoveAnimHookOwner','PlayerMoveAnimReapply','PreparedGameBorrow','BuildingPoolDefault','StartupLifecycle','CameraMainTarget','CameraWidescreen','CameraGetCam','CameraTargetSetter','CameraTarget','CameraHistory','CameraRowBorrow','CameraDirection','CameraFovWrite','CameraJumpCut','CameraBasics','ModelTimeGetter','VehiclePredicates','EmptyBlockRemoval','BlockRegistration','BankPostprocess','BankEviction','BankDecompression','ApplicationTiming','AnimationHierarchyUncompress','NumericAssociationOwner','DynamicClumpOwner','AnimationAssociationGroupFactories','GroupSourceCreationOwner','JointTemporaryStaticInitializerOwner','GroupReplacementOwner','GroupCopyAnimationOwner','GroupEmptyInitialization','AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','PresentTransitionClock','StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -23,6 +23,12 @@ $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;a
 # Historical markers start false and are set only by the branch that actually
 # executed. Focus mode must never inherit the cumulative suite's claims.
 $record['runScope'] = $Scope
+$record['nativePlayerMoveAnimHookActualRuntimeTested']=$false
+$record['nativePlayerMoveAnimHookSameTokenTested']=$false
+$record['nativePlayerMoveAnimHookRetirementTested']=$false
+$record['nativePlayerMoveAnimHookRefusalsTested']=$false
+$record['nativePlayerMoveAnimHookPartialPrefixTested']=$false
+$record['nativePlayerMoveAnimHookOwnerTested']=$false
 $record['nativePlayerMoveAnimReapplyActualRuntimeTested']=$false
 $record['nativePlayerMoveAnimReapplySameTokenTested']=$false
 $record['nativePlayerMoveAnimReapplyRefusalsTested']=$false
@@ -826,6 +832,16 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
     $sourceNames += @('Client/game_de/NativeClothesDescriptorProfile.h','Client/game_de/NativeClothesDescriptorCalls.h','Client/game_de/NativeClothesDescriptorCalls.cpp','Tests/definitive/NativeClothesDescriptorFixture.h','Tests/definitive/NativeModuleClothesInitializerOwnerTests.inl')
     $sourceNames += @('Client/game_de/NativePedMoveAnimAccess.h','Client/game_de/NativePedMoveAnimReader.h','Client/game_de/NativePedMoveAnimReader.cpp','Client/game_de/NativePedMoveAnimProfile.h','Client/game_de/CPlayerPedMoveAnimDE.h','Client/game_de/CPlayerPedMoveAnimDE.cpp','Client/game_de/CPlayerPedWantedDE.h','Tests/definitive/NativePedMoveAnimOwnerTests.inl','Tests/definitive/Write-PlayerMoveAnimFixture.ps1')
     $sourceNames += @('Client/game_de/NativePlayerMoveAnimReapply.h','Client/game_de/NativePlayerMoveAnimReapply.cpp','Client/game_de/NativePlayerMoveAnimReapplyProfile.h','Tests/definitive/NativePlayerMoveAnimReapplyOwnerTests.inl')
+
+    # The cumulative runtime now references the controller in every scope.
+    # Pin its aggregate source graph even when the owned MASM probe is disabled.
+    $sourceNames += @('Client/game_de/NativePlayerMoveAnimHookController.h','Client/game_de/NativePlayerMoveAnimHookController.cpp',
+        'Client/game_de/NativePlayerMoveAnimHookOverlay.h','Client/game_de/NativePlayerMoveAnimHookOverlay.cpp',
+        'Client/game_de/NativePlayerMoveAnimHookBridge.h','Client/game_de/NativePlayerMoveAnimHookBridge.cpp','Client/game_de/NativePlayerMoveAnimHookProfile.h',
+        'Client/game_de/NativeFunctionRange.h','Client/game_de/NativeFunctionRange.cpp',
+        'Client/game_de/NativePedRebuildCalls.h','Client/game_de/NativePedRebuildCalls.cpp',
+        'Tests/definitive/NativePlayerMoveAnimHookOwnerTests.inl','Tests/definitive/NativePlayerMoveAnimHookRangeFixture.h')
+    if($Scope -eq 'PlayerMoveAnimHookOwner'){$sourceNames += 'Tests/definitive/PlayerMoveAnimHookBridgeFixture.asm'}
     $sourceNames += @('Client/game_de/NativePedRebuildAccess.h','Client/game_de/CPedRebuildDE.h','Client/game_de/CPedRebuildDE.cpp','Client/game_de/NativePedRebuildCalls.h','Client/game_de/NativePedRebuildCalls.cpp','Client/game_de/NativePedRebuildProfile.h','Tests/definitive/NativePedRebuildFixture.h','Tests/definitive/NativePedRebuildOwnerTests.inl','Tests/definitive/Write-PedRebuildFixture.ps1')
     $sourceNames += @('Tests/definitive/NativePedModelCreationRuntimeOwnerTests.inl','Tests/definitive/NativeStartupModelCollisionRuntimeOwnerTests.inl',
         'Build/definitive-recovery/mta-startup-model-collision-20261028/startup-model-collision-runtime-admission-ready.json',
@@ -1221,6 +1237,11 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         # The composed renderer's real STexInfo constructor needs the existing
         # exact SString::ToLower definition, also linked by the SDK fixture.
         (Join-Path $PSScriptRoot 'TextureRegistrySStringSupport.cpp'),
+        # Controller.cpp is aggregated under the host's narrow effect seams.
+        # Bridge/overlay remain ordinary production TUs, each linked once.
+        (Join-Path $taskRoot 'Client/game_de/NativePlayerMoveAnimHookBridge.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativePlayerMoveAnimHookOverlay.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeFunctionRange.cpp'),
         # These real source-only readers/policy hooks are each linked once;
         # NativeClock* discovery deliberately does not collect other helpers.
         (Join-Path $taskRoot 'Client/game_de/NativeBuildingPoolDefaultMemory.cpp'),
@@ -1407,6 +1428,25 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         $record['presentTransitionWeatherPlatformOnceWithOsFlushSeam']=$true
         $record['presentTransitionGateOnceWithOwnedModuleSeam']=$true
     }
+    if($Scope -eq 'PlayerMoveAnimHookOwner'){
+        # Only the owner scope references the real owned-frame MASM probe.
+        # Controller.cpp stays in the host; Bridge/Overlay are linked once above.
+        $assembler=Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64/ml64.exe'
+        $asmSource=Join-Path $PSScriptRoot 'PlayerMoveAnimHookBridgeFixture.asm'
+        $asmObject=Join-Path $scratchRoot 'PlayerMoveAnimHookBridgeFixture.obj'
+        $asmArguments=@('/nologo','/c','/W3','/WX',('/Fo'+$asmObject),$asmSource)
+        $asmCommand=Join-Path $outputRoot 'hook-owner-assemble-command.json'
+        [ordered]@{assembler=$assembler;sha256=(Sha $assembler);arguments=$asmArguments;
+            workingDirectory=$outputRoot;temporaryDirectory=$scratchRoot;deadlineMs=60000} |
+            ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $asmCommand -Encoding utf8NoBOM
+        $assembly=RunBounded $assembler $asmArguments 'hook-owner-assemble' 60000
+        $record.compileRuns+=$assembly
+        $record['hookOwnerMasmFixture']=[ordered]@{source=$asmSource;sourceSha256=(Sha $asmSource);
+            command=$asmCommand;commandSha256=(Sha $asmCommand);assembly=$assembly;
+            object=$asmObject;objectRemovedWithOwnedScratch=$true}
+        if($assembly.exitCode -ne 0 -or $assembly.timedOut){throw 'Owned hook-owner fixture assembly failed'}
+        $arguments=@('/DMTA_DE_PLAYER_MOVEANIM_HOOK_OWNER_FIXTURE')+$arguments+@($asmObject)
+    }
     [ordered]@{compiler=$record.compiler;detoursArguments=$detoursArguments;arguments=$arguments} | ConvertTo-Json -Depth 5 |
         Set-Content -LiteralPath (Join-Path $outputRoot 'compile-command.json') -Encoding utf8NoBOM
     # Every selected scope compiles the cumulative fixture/native source graph.
@@ -1491,7 +1531,31 @@ namespace ClockPrivateHierarchyParentWriteFixture {
     if ($Scope -eq 'GarageNamed') { $fixtureArguments += '--garage-named' }
     if ($Scope -eq 'GaragePools') { $fixtureArguments += '--garage-pools' }
     if ($Scope -eq 'PedPoolRegistry') { $fixtureArguments += '--ped-pool-registry' }
-    if($Scope -eq 'PlayerMoveAnimReapply'){
+    if($Scope -eq 'PlayerMoveAnimHookOwner'){
+        # Six pristine owner lifetimes share one compiled scratch executable.
+        # Only each exact owned PE is removed after its process/handles close.
+        $record['testRuns']=@();$texts=@();$compiledHash=Sha $executable
+        $copy=Join-Path $scratchRoot ([IO.Path]::GetFileName($executable))
+        if(Test-Path -LiteralPath $copy){throw 'Fresh hook-owner execution copy already exists'}
+        Copy-Item -LiteralPath $executable -Destination $copy
+        if((Sha $copy) -cne $compiledHash){throw 'Hook-owner copy differs from the once-compiled executable'}
+        $record['hookOwnerExecutionCopy']=@{path=$copy;sha256=$compiledHash;removedWithOwnedScratch=$true}
+        foreach($name in @('success','foreign-site','token-loss','unwind-loss','partial-install','explicit-rebuild')){
+            $run=RunBounded $copy @($scratchRoot,('--player-moveanim-hook-owner-'+$name)) ('test-player-moveanim-hook-owner-'+$name) 60000
+            $record.testRuns+=$run
+            $part=[IO.File]::ReadAllText($run.stdout)+[IO.File]::ReadAllText($run.stderr)
+            if($run.exitCode -ne 0 -or $run.timedOut -or $part -notmatch 'Passed (\d+) production clock service checks'){throw ('Hook owner '+$name+' failed')}
+            $record.checks+=[int]$Matches[1];$texts+=$part
+            if((Sha $copy) -cne $compiledHash){throw 'Hook-owner executable changed between lifetimes'}
+            $ownedImage=Join-Path $scratchRoot 'owned-clock-image.bin'
+            if(-not(Test-Path -LiteralPath $ownedImage) -or ((Get-Item -LiteralPath $ownedImage -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)){
+                throw 'Expected exact owned hook image is missing or linked'
+            }
+            Remove-Item -LiteralPath $ownedImage -Force
+        }
+        if($record.testRuns.Count -ne 6){throw 'Hook owner requires exactly six new processes'}
+        $record.testRun=$record.testRuns[-1];$text=$texts -join [Environment]::NewLine
+    } elseif($Scope -eq 'PlayerMoveAnimReapply'){
         # One scratch executable, four pristine processes. Keep the existing
         # executable-directory admission guard and remove only each owned PE
         # after its handles close; no four-way EXE or large-image archive.
@@ -2575,7 +2639,20 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if($Scope -eq 'PlayerMoveAnimReapply'){
+    if($Scope -eq 'PlayerMoveAnimHookOwner'){
+        $record.nativePlayerMoveAnimHookActualRuntimeTested=$text.Contains('Production player move animation hook actual runtime completed')
+        $record['nativePlayerMoveAnimHookExplicitRebuildTested']=$text.Contains('Production player move animation hook explicit rebuild completed')
+        $record.nativePlayerMoveAnimHookSameTokenTested=$text.Contains('Production player move animation hook same token completed')
+        $record.nativePlayerMoveAnimHookRetirementTested=$text.Contains('Production player move animation hook retirement completed')
+        $record.nativePlayerMoveAnimHookRefusalsTested=$text.Contains('Production player move animation hook refusals completed')
+        # A second-site refusal after the first ACK must retain its unknown prefix.
+        $record.nativePlayerMoveAnimHookPartialPrefixTested=$text.Contains('Production player move animation hook partial prefix completed')
+        $record.nativePlayerMoveAnimHookOwnerTested=$record.nativePlayerMoveAnimHookActualRuntimeTested -and $record.nativePlayerMoveAnimHookSameTokenTested -and
+            $record.nativePlayerMoveAnimHookRetirementTested -and $record.nativePlayerMoveAnimHookRefusalsTested -and $record.nativePlayerMoveAnimHookPartialPrefixTested -and
+            $text.Contains('Production player move animation hook owner completed') -and $record.nativePlayerMoveAnimHookExplicitRebuildTested -and $record.testRuns.Count -eq 6
+        if(-not $record.nativePlayerMoveAnimHookOwnerTested){throw 'Actual player move-animation hook owner fixture incomplete'}
+        $record.productionNativeCallbackTested=$true
+    } elseif($Scope -eq 'PlayerMoveAnimReapply'){
         $record.nativePlayerMoveAnimReapplyActualRuntimeTested=$text.Contains('Production player move animation reapply actual runtime completed')
         $record.nativePlayerMoveAnimReapplySameTokenTested=$text.Contains('Production player move animation reapply same token completed')
         $record.nativePlayerMoveAnimReapplyRefusalsTested=$text.Contains('Production player move animation reapply refusals completed')

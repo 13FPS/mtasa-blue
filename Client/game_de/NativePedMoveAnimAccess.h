@@ -16,6 +16,13 @@ namespace mta::game_de
         // It writes no requested group or CPU override and grants neither
         // block references, persistent hooks nor a complete SetMoveAnim.
         virtual ClockResult ReapplyCurrentPlayerMoveAnim(const NativePedReferenceToken&) noexcept { return ClockResult::NotInitialized; }
+        // Internal persistent call-site ownership is independent of a complete
+        // player facade or setter. Only the existing admitted Runtime may
+        // install it, publish a controlled token, or drain it after Stop.
+        virtual ClockResult EnablePlayerMoveAnimHooks() noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult PublishPlayerMoveAnimOverride(const NativePedReferenceToken&, std::int32_t) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult WithdrawPlayerMoveAnimOverride(const NativePedReferenceToken&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult RetirePlayerMoveAnimHooks() noexcept { return ClockResult::NotInitialized; }
 
     protected:
         ~NativePedMoveAnimAccess() = default;

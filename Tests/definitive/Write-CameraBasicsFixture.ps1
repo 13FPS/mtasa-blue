@@ -121,3 +121,21 @@ function Write-CamTargetSetterFixture([string]$RepositoryRoot,[string]$OutputPat
         inheritedProductionMethods=@($all|ForEach-Object {$_.signature});source=$source;sourceSha256=(Get-FileHash -LiteralPath (Join-Path $RepositoryRoot $source) -Algorithm SHA256).Hash.ToLowerInvariant();
         nativeFactoryClaimed=$false;sharedSdkEdited=$false;polymorphicBaseDeletionExecuted=$false;productionConstructionProtected=$true}
 }
+
+function Write-CameraCamsFixture([string]$RepositoryRoot,[string]$OutputPath) {
+    $source='Client/sdk/game/CCamera.h'
+    $all=@(Get-CameraBasicsSdkMethods $RepositoryRoot $source)
+    $names=@('IsSphereVisible','GetActiveCam','Restore','RestoreWithJumpCut','GetCam')
+    $provided=@($all|Where-Object {$_.name -in $names})
+    $rejected=@($all|Where-Object {$_.name -notin $names})
+    if($all.Count -ne 35 -or $provided.Count -ne 5 -or $rejected.Count -ne 30){throw 'Actual camera products35-method partition changed'}
+    $lines=@('#pragma once','#include <cstdlib>','#pragma warning(push)','#pragma warning(disable : 4100)',
+        'class CameraCamsObserver final : public mta::game_de::CCameraCamsDE {public:',
+        'CameraCamsObserver(mta::game_de::CPoolsDE& pools,mta::game_de::NativeGameTimingAccess& owner) : CCameraCamsDE(pools,owner) {}')
+    $lines+=@($rejected|ForEach-Object {$_.signature+' override {std::abort();}'})
+    $lines+=@('};','#pragma warning(pop)')
+    [IO.File]::WriteAllLines($OutputPath,$lines,[Text.UTF8Encoding]::new($false))
+    [ordered]@{path=$OutputPath;sha256=(Get-FileHash -LiteralPath $OutputPath -Algorithm SHA256).Hash.ToLowerInvariant();rejectingMethods=$rejected.Count;
+        inheritedProductionMethods=@($provided|ForEach-Object {$_.signature});source=$source;sourceSha256=(Get-FileHash -LiteralPath (Join-Path $RepositoryRoot $source) -Algorithm SHA256).Hash.ToLowerInvariant();
+        productionCameraConcrete=$false;nativeFactoryClaimed=$false;sharedSdkEdited=$false;polymorphicBaseDeletionExecuted=$false}
+}

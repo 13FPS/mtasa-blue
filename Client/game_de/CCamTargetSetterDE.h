@@ -24,6 +24,9 @@ namespace mta::game_de
         }
 
     private:
+        friend class CCameraCamsDE;
+        ClockResult ValidatePublication() const noexcept;
+        ClockResult CheckProducerDrain() const noexcept;
         static void Require(ClockResult);
         // These are the identical references already checked by the base
         // before row acquisition, not a second owner or an owned pool.

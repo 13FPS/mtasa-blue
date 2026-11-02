@@ -44,6 +44,10 @@ namespace mta::game_de
         // lease grants retention, not operation authority or copied vectors.
         virtual ClockResult AcquireCameraRowBorrow(std::uint32_t, NativeCameraRowBorrow::Token&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult ReleaseCameraRowBorrow(NativeCameraRowBorrow::Token&) noexcept { return ClockResult::NotInitialized; }
+        // A cached row product still needs a fresh current native admission.
+        // Older providers cannot publish a stale pointer or grant CPU drain.
+        virtual ClockResult ValidateCameraRowBorrow(const NativeCameraRowBorrow::Token&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult CheckCameraRowBorrowDrain(const NativeCameraRowBorrow::Token&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult ReadCameraRowVector(const NativeCameraRowBorrow::Token&, CameraRowVectorKind, CVector*&) noexcept
         {
             return ClockResult::NotInitialized;

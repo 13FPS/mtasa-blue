@@ -10,6 +10,14 @@
 #include <string>
 namespace mta::game_de
 {
+    ClockResult CCamTargetSetterDE::ValidatePublication() const noexcept
+    {
+        return setterOwner.ValidateCameraRowBorrow(RowBorrowToken());
+    }
+    ClockResult CCamTargetSetterDE::CheckProducerDrain() const noexcept
+    {
+        return setterOwner.CheckCameraRowBorrowDrain(RowBorrowToken());
+    }
     void CCamTargetSetterDE::Require(ClockResult result)
     {
         if (result != ClockResult::Ok)

@@ -338,6 +338,8 @@ namespace mta::game_de
             ClockResult WriteCameraDirection(std::uint32_t, std::uint32_t, std::uint32_t) noexcept override;
             ClockResult AcquireCameraRowBorrow(std::uint32_t, NativeCameraRowBorrow::Token&) noexcept override;
             ClockResult ReleaseCameraRowBorrow(NativeCameraRowBorrow::Token&) noexcept override;
+            ClockResult ValidateCameraRowBorrow(const NativeCameraRowBorrow::Token&) noexcept override;
+            ClockResult CheckCameraRowBorrowDrain(const NativeCameraRowBorrow::Token&) noexcept override;
             ClockResult ReadCameraRowVector(const NativeCameraRowBorrow::Token&, CameraRowVectorKind, CVector*&) noexcept override;
             ClockResult ReadCameraRowTarget(const NativeCameraRowBorrow::Token&, std::uintptr_t&) noexcept override;
             ClockResult SetCameraRowTarget(const NativeCameraRowBorrow::Token&, const NativePedReferenceToken*) noexcept override;
@@ -6173,6 +6175,38 @@ namespace mta::game_de
             if (GetCurrentThreadId() != runtime.producerThread)
                 return ClockResult::WrongThread;
             return runtime.cameraRowBorrows.Release(token);
+        }
+        ClockResult NativeAccess::ValidateCameraRowBorrow(const NativeCameraRowBorrow::Token& token) noexcept
+        {
+            // Cached publication still needs this current row/source/world
+            // admission. Target bits are observed only and never interpreted.
+            std::uintptr_t discarded = 0;
+            return NativeCameraDataMemory::ReadRowTarget(runtime.image, runtime.cameraRowBorrows, CameraRowBorrowIdentity(), token, &CheckTimingOwner,
+                                                         &CheckApplicationTimingOwner, discarded);
+        }
+        ClockResult NativeAccess::CheckCameraRowBorrowDrain(const NativeCameraRowBorrow::Token& token) noexcept
+        {
+            // This is a CPU drain check after the enclosing owner has closed
+            // publication and quiesced borrowers. It grants no engine lease.
+            ApiOperation operation;
+            if (!operation.acquired)
+                return ClockResult::Busy;
+            const auto generation = runtime.generation.load();
+            if (!generation || !runtime.image || !runtime.producerThread || !runtime.admissionSerial.load())
+                return ClockResult::NotInitialized;
+            if (GetCurrentThreadId() != runtime.producerThread)
+                return ClockResult::WrongThread;
+            if (callbackDepth || runtime.inFlight.load() || runtime.peersRetained.load())
+                return ClockResult::Busy;
+            if (runtime.admissionGeneration.load() != generation)
+                return ClockResult::OwnerConflict;
+            if (runtime.active.load() || !runtime.stopping.load() || !runtime.cameraRowBorrows.IssuanceClosed())
+                return ClockResult::Busy;
+            // Validate checks the exact retained slot and owner before its
+            // closed-issuance result. Only that matching Stopped is admission;
+            // an open, foreign or stale token never becomes drain authority.
+            const auto result = runtime.cameraRowBorrows.Validate(token, CameraRowBorrowIdentity());
+            return result == ClockResult::Stopped ? ClockResult::Ok : result == ClockResult::Ok ? ClockResult::OwnerConflict : result;
         }
         ClockResult NativeAccess::ReadCameraRowVector(const NativeCameraRowBorrow::Token& token, CameraRowVectorKind kind, CVector*& output) noexcept
         {

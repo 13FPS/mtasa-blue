@@ -4,6 +4,7 @@
  * PURPOSE: Actual camera Restore/selector and Cam finite FOV SDK policies
  ****************************************************************************/
 #include "../../Client/game_de/CCameraSphereVisibleDE.h"
+#include "../../Client/game_de/CCameraCamsDE.h"
 #include "../../Client/game_de/CCamFovDE.h"
 #include "../../Client/game_de/CCamRowDE.h"
 #include "../../Client/game_de/CCamTargetDE.h"
@@ -26,7 +27,9 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <thread>
 #include "CameraBasicsFixture.generated.h"
+#include "CameraCamsFixture.generated.h"
 #include "CamFovFixture.generated.h"
 #include "CamRowFixture.generated.h"
 #include "CamTargetFixture.generated.h"
@@ -68,6 +71,9 @@ static_assert(std::is_same_v<decltype(&CamTargetSetterObserver::SetTargetEntity)
 static_assert(std::is_abstract_v<CCamTargetDE> && !std::is_abstract_v<CCamTargetSetterDE> && !std::is_abstract_v<CamTargetSetterObserver>);
 static_assert(!std::is_copy_constructible_v<CamTargetSetterObserver> && !std::is_move_constructible_v<CamTargetSetterObserver> &&
               !std::has_virtual_destructor_v<CamTargetSetterObserver>);
+static_assert(std::is_same_v<decltype(&CameraCamsObserver::GetCam), decltype(&CCameraCamsDE::GetCam)>);
+static_assert(std::is_abstract_v<CCameraCamsDE> && !std::is_abstract_v<CameraCamsObserver> && !std::has_virtual_destructor_v<CameraCamsObserver>);
+static_assert(!std::is_copy_constructible_v<CameraCamsObserver> && !std::is_move_constructible_v<CameraCamsObserver>);
 namespace
 {
     unsigned checks = 0;
@@ -816,6 +822,11 @@ namespace
         bool                    clearIntent = false;
         NativePedReferenceToken setIntent;
         std::function<void()>   afterReference;
+        std::function<void()>   afterAcquire;
+        ClockResult             publicationStatus = ClockResult::Ok, drainStatus = ClockResult::Ok;
+        unsigned                publicationChecks = 0, drainChecks = 0;
+        std::uint32_t           publicationRow = 0, drainRefusedRow = 0xffffffffu;
+        std::uint64_t           publicationId = 0;
         TargetAccess() noexcept
         {
             identity = {1, 1, reinterpret_cast<std::uintptr_t>(nativeBytes.data()), GetCurrentThreadId()};
@@ -885,7 +896,15 @@ namespace
             acquiredRow = row;
             const auto result = ledger.AcquireChecked(identity, row, []() noexcept { return ClockResult::Ok; }, token);
             if (result == ClockResult::Ok)
+            {
                 acquiredId = token.Id();
+                if (afterAcquire)
+                {
+                    auto action = std::move(afterAcquire);
+                    afterAcquire = {};
+                    action();
+                }
+            }
             return result;
         }
         ClockResult ReleaseCameraRowBorrow(NativeCameraRowBorrow::Token& token) noexcept override
@@ -893,6 +912,23 @@ namespace
             ++releases;
             releasedId = token.Id();
             return ledger.Release(token);
+        }
+        ClockResult ValidateCameraRowBorrow(const NativeCameraRowBorrow::Token& token) noexcept override
+        {
+            ++publicationChecks;
+            publicationRow = token.Row();
+            publicationId = token.Id();
+            return publicationStatus == ClockResult::Ok ? ledger.Validate(token, identity) : publicationStatus;
+        }
+        ClockResult CheckCameraRowBorrowDrain(const NativeCameraRowBorrow::Token& token) noexcept override
+        {
+            ++drainChecks;
+            if (GetCurrentThreadId() != identity.producerThread)
+                return ClockResult::WrongThread;
+            if (token.Row() == drainRefusedRow && drainStatus != ClockResult::Ok)
+                return drainStatus;
+            const auto result = ledger.Validate(token, identity);
+            return result == ClockResult::Stopped ? ClockResult::Ok : (result == ClockResult::Ok ? ClockResult::Busy : result);
         }
         ClockResult SetCameraRowTarget(const NativeCameraRowBorrow::Token& token, const NativePedReferenceToken* intent) noexcept override
         {
@@ -1279,6 +1315,134 @@ namespace
         std::puts("Actual camera target setter SDK fixture completed");
     }
 
+    void CameraProducts()
+    {
+        const auto before = checks;
+        {
+            TargetAccess                 owner;
+            camera_target_fixture::Pools pools(owner);
+            CameraCamsObserver           camera(pools, owner);
+            CCamera&                     sdk = camera;
+            Check(owner.acquires == 0 && !owner.ledger.IsRetained(), "partial camera construction is CPU-only and eagerly acquires no row");  // 1
+            for (unsigned id = 3; id <= 255; ++id)
+                Check(sdk.GetCam(static_cast<BYTE>(id)) == nullptr && owner.acquires == 0 && owner.publicationChecks == 0,
+                      "every out-of-range actual BYTE ID preserves classic null bounds without provider access");                                       // 253
+            Check(camera.DrainCamsOnProducer() == ClockResult::Busy && owner.releases == 0, "publication must close before producer drain can start");  // 255
+            std::array<CCam*, 3> products{};
+            for (BYTE row = 0; row < 3; ++row)
+            {
+                products[row] = sdk.GetCam(row);
+                const auto acquireCalls = owner.acquires, validationCalls = owner.publicationChecks;
+                Check(products[row] && acquireCalls == static_cast<unsigned>(row) + 1 && owner.publicationRow == row && owner.publicationId == owner.acquiredId,
+                      "each actual CCam product owns its row once and validates the held token before publication");  // 3 * 3
+                Check(sdk.GetCam(row) == products[row] && owner.acquires == acquireCalls && owner.publicationChecks == validationCalls + 1,
+                      "cached GetCam returns stable SDK identity only after fresh same-owner validation");
+                const auto sets = owner.setCalls, reads = owner.targetReads;
+                products[row]->SetTargetEntity(nullptr);
+                Check(products[row]->GetTargetEntity() == nullptr && owner.setCalls == sets + 1 && owner.targetReads == reads + 2 && owner.setRow == row,
+                      "products are the actual completed target-setter SDK rows, not forwarding test products or raw native casts");
+            }
+            Check(products[0] != products[1] && products[0] != products[2] && products[1] != products[2],
+                  "three logical rows retain three distinct actual SDK objects");  // 265
+            owner.publicationStatus = ClockResult::Stopped;
+            Refuses([&] { sdk.GetCam(0); }, "GetCam", ClockResult::Stopped);  // 266
+            Check(owner.acquires == 3 && owner.releases == 0 && owner.ledger.IsRetained(),
+                  "refused cached publication does not destroy or reacquire its row");  // 267
+            owner.publicationStatus = ClockResult::Ok;
+            camera.CloseCamPublication();
+            const auto validations = owner.publicationChecks;
+            Refuses([&] { sdk.GetCam(0); }, "GetCam", ClockResult::Stopped);  // 268
+            Check(owner.publicationChecks == validations && owner.releases == 0,
+                  "closed publication refuses without another native read or implicit destruction");           // 269
+            Check(sdk.GetCam(255) == nullptr, "bounds-first invalid IDs stay null after publication closes");  // 270
+            Check(camera.DrainCamsOnProducer() == ClockResult::Busy && owner.releases == 0,
+                  "close alone cannot manufacture native Stop/quiescence drain admission");  // 271
+            owner.ledger.CloseIssuance();
+            owner.drainRefusedRow = 1;
+            owner.drainStatus = ClockResult::WrongThread;
+            Check(camera.DrainCamsOnProducer() == ClockResult::WrongThread && owner.releases == 0 && owner.ledger.IsRetained(),
+                  "a later cached-token refusal preserves all earlier products and all holds");  // 272
+            owner.drainStatus = ClockResult::Ok;
+            ClockResult foreignResult = ClockResult::Ok;
+            std::thread foreign([&] { foreignResult = camera.DrainCamsOnProducer(); });
+            foreign.join();
+            Check(foreignResult == ClockResult::WrongThread && owner.releases == 0 && owner.ledger.IsRetained(),
+                  "foreign thread cannot turn closed issuance into producer release authority");  // 273
+            Check(camera.DrainCamsOnProducer() == ClockResult::Ok && owner.releases == 3 && !owner.ledger.IsRetained(),
+                  "producer prechecks all three held rows before exactly three typed CPU releases");  // 274
+            Check(camera.DrainCamsOnProducer() == ClockResult::Ok && owner.releases == 3,
+                  "completed producer drain is idempotent without replaying releases");  // 275
+            Refuses([&] { sdk.GetCam(0); }, "GetCam", ClockResult::Stopped);             // 276
+        }
+        {
+            Missing                      missing;
+            NativeCameraRowBorrow::Token token;
+            Check(missing.ValidateCameraRowBorrow(token) == ClockResult::NotInitialized &&
+                      missing.CheckCameraRowBorrowDrain(token) == ClockResult::NotInitialized,
+                  "older providers refuse both publication and producer drain rather than invent authority");  // 277
+        }
+        {
+            TargetAccess                           owner;
+            camera_target_fixture::Pools           pools(owner);
+            CameraCamsObserver                     camera(pools, owner);
+            std::optional<CamTargetSetterObserver> blocker;
+            blocker.emplace(1, pools, owner);
+            Check(owner.acquires == 1 && owner.ledger.IsRetained(), "an independent actual row product occupies the one native row slot");  // 278
+            CCam* const first = camera.GetCam(0);
+            Check(first && owner.acquires == 2, "lazy row zero can publish independently of occupied row one");  // 279
+            Refuses([&] { camera.GetCam(1); }, "AcquireCameraRowBorrow", ClockResult::Busy);                     // 280
+            Check(camera.GetCam(0) == first && camera.GetCam(2) && owner.acquires == 4 && owner.releases == 0,
+                  "a later row constructor failure neither unwinds earlier products nor prevents a different free row");  // 281
+            owner.ledger.CloseIssuance();
+            Refuses([&] { camera.GetCam(0); }, "GetCam", ClockResult::Stopped);                                                        // 282
+            Check(owner.releases == 0 && owner.ledger.IsRetained(), "actual ledger Stop is never hidden by a cached GetCam pointer");  // 283
+            camera.CloseCamPublication();
+            blocker.reset();
+            Check(owner.releases == 1 && owner.ledger.IsRetained(), "independent product retires on the producer while facade products remain owned");  // 284
+            Check(camera.DrainCamsOnProducer() == ClockResult::Ok && owner.releases == 3 && !owner.ledger.IsRetained(),
+                  "facade drains exactly its own two products after the independent hold retires");  // 285
+        }
+        {
+            TargetAccess                 owner;
+            camera_target_fixture::Pools pools(owner);
+            CameraCamsObserver           camera(pools, owner);
+            owner.publicationStatus = ClockResult::ReadFailure;
+            Refuses([&] { camera.GetCam(0); }, "GetCam", ClockResult::ReadFailure);  // 286
+            const auto id = owner.acquiredId;
+            Check(owner.acquires == 1 && owner.releases == 0 && owner.ledger.IsRetained(),
+                  "post-acquisition validation refusal leaves the new product safely cached for producer drain");  // 287
+            owner.publicationStatus = ClockResult::Ok;
+            Check(camera.GetCam(0) && owner.acquires == 1 && owner.publicationId == id,
+                  "later admitted publication reuses the already owned product without a second acquisition");  // 288
+            camera.CloseCamPublication();
+            owner.ledger.CloseIssuance();
+            Check(camera.DrainCamsOnProducer() == ClockResult::Ok && owner.releases == 1 && !owner.ledger.IsRetained(),
+                  "initial validation failure does not strand its cached hold");  // 289
+        }
+        {
+            TargetAccess                 owner;
+            camera_target_fixture::Pools pools(owner);
+            CameraCamsObserver           camera(pools, owner);
+            owner.afterAcquire = [&] { camera.CloseCamPublication(); };
+            Refuses([&] { camera.GetCam(0); }, "GetCam", ClockResult::Stopped);  // 290
+            Check(owner.acquires == 1 && owner.publicationChecks == 1 && owner.releases == 0 && owner.ledger.IsRetained(),
+                  "close during acquisition refuses raw publication only after noexcept transfer into typed cache ownership");  // 291
+            Check(camera.GetCam(255) == nullptr, "close-race refusal preserves the independent invalid-ID null policy");        // 292
+            owner.ledger.CloseIssuance();
+            Check(camera.DrainCamsOnProducer() == ClockResult::Ok && owner.releases == 1 && !owner.ledger.IsRetained(),
+                  "producer drain retires the unpublished product retained across the close race");  // 293
+        }
+        {
+            TargetAccess                 owner, foreign;
+            camera_target_fixture::Pools pools(owner);
+            Refuses([&] { CameraCamsObserver camera(pools, foreign); }, "CCameraCamsDE constructor", ClockResult::OwnerConflict);  // 294
+            Check(owner.acquires == 0 && foreign.acquires == 0 && owner.releases == 0 && foreign.releases == 0,
+                  "foreign facade construction is refused while still CPU-only");  // 295
+        }
+        Check(checks - before == 295, "GetCam SDK cases preserve every earlier camera and target test");  // 296
+        std::puts("Actual camera GetCam SDK fixture completed");
+    }
+
     void HistoryPointers()
     {
         // The actual SDK exposes four writable CVector elements, not a copy
@@ -1489,6 +1653,7 @@ namespace
         PooledInterfaces();
         TargetEntities();
         TargetSetters();
+        CameraProducts();
         std::puts("Actual camera JumpCut SDK fixture completed");
         std::puts("Actual camera basics SDK fixture completed");
         std::puts("Actual Cam finite FOV SDK fixture completed");

@@ -10,6 +10,7 @@
 
 namespace mta::game_de
 {
+    class CPedIntelligenceDE;
     // Task lookup, assignment, and every operation requiring a persistent CTask
     // remain pure. This slice cannot be published as a complete task manager.
     class CTaskManagerDE : public CTaskManager
@@ -22,6 +23,9 @@ namespace mta::game_de
         CTaskManagerDE(NativeTaskRemovalAccess& access, const NativePedReferenceToken& token) noexcept : access(access), token(token) {}
 
     private:
+        // The intelligence borrow may verify this exact typed owner/token
+        // without publishing a raw manager address or a new task factory.
+        friend class CPedIntelligenceDE;
         NativeTaskRemovalAccess& access;
         // Borrow the enclosing ped's existing reference. Constructing or
         // destroying this CPU slice never allocates or deletes native tasks.

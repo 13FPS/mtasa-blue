@@ -255,6 +255,13 @@ namespace mta::game_de
     }
     ClockResult CPoolsDE::ReadPedClientEntity(CPed* wrapper, CClientEntity*& output) noexcept
     {
+        NativePedPoolReader::Value native;
+        NativePedReferenceToken    reference;
+        return ReadPedClientBinding(wrapper, output, native, reference);
+    }
+    ClockResult CPoolsDE::ReadPedClientBinding(CPed* wrapper, CClientEntity*& output, NativePedPoolReader::Value& outputNative,
+                                               NativePedReferenceToken& outputReference) noexcept
+    {
         auto result = pedRegistryOwner.CheckPedPoolAccess();
         if (result != ClockResult::Ok)
             return result;
@@ -269,6 +276,8 @@ namespace mta::game_de
             if (MtaGame::CPedRegistryPolicy::FindByWrapper(pedLinks, wrapper))
                 return ClockResult::BindingChanged;
             output = nullptr;
+            outputNative = {};
+            outputReference = {};
             return ClockResult::Ok;
         }
         const auto                 index = static_cast<std::size_t>(row - pedLinks.data());
@@ -299,6 +308,8 @@ namespace mta::game_de
         // null. Arbitrary caller replacement remains a refusal, like all other
         // existing controlled DE lookups; neither case borrows StoredPointer.
         output = client;
+        outputNative = after;
+        outputReference = pedControls[index].reference;
         return ClockResult::Ok;
     }
     ClockResult CPoolsDE::ReadBorrowedPedReference(CPed* wrapper, NativePedReferenceToken& output) noexcept

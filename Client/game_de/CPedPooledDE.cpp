@@ -51,6 +51,15 @@ namespace mta::game_de
     ClockResult CPedPooledDE::ReadRegisteredCameraTarget(CPoolsDE& pools, NativeGameTimingAccess& owner, CameraTargetReader read, const void* context,
                                                          CEntity*& output) noexcept
     {
+        RegisteredPedIdentity current;
+        const auto            result = ReadRegisteredEntityTarget(pools, owner, read, context, current);
+        if (result == ClockResult::Ok)
+            output = current.entity;
+        return result;
+    }
+    ClockResult CPedPooledDE::ReadRegisteredEntityTarget(CPoolsDE& pools, NativeGameTimingAccess& owner, CameraTargetReader read, const void* context,
+                                                         RegisteredPedIdentity& output) noexcept
+    {
         if (!read || !context)
             return ClockResult::InvalidArgument;
         if (!pools.HasNativeOwner(owner))
@@ -65,7 +74,7 @@ namespace mta::game_de
                 return result;
             if (confirmed)
                 return ClockResult::BindingChanged;
-            output = nullptr;
+            output = {};
             return ClockResult::Ok;
         }
         SClientEntity<CPed>* first = nullptr;
@@ -108,7 +117,7 @@ namespace mta::game_de
             return ClockResult::BindingChanged;
         // Ordinary virtual-base conversion returns the actual borrowed SDK
         // entity. Native bits and StoredPointer never become a CEntity object.
-        output = static_cast<CEntity*>(ped);
+        output = {ped, static_cast<CEntity*>(ped), after, beforeReference};
         return ClockResult::Ok;
     }
     CEntitySAInterface* CPedPooledDE::GetInterface()

@@ -98,6 +98,10 @@ namespace mta::game_de
         // Its immutable token and vitals owner must match this exact owner;
         // a generic CPed pointer or a numeric native address cannot register.
         ClockResult BindBorrowedPed(CPedVitalsDE&, CClientEntity*, BorrowedPedRegistration&) noexcept;
+        // One existing client lookup itinerary publishes its confirmed native
+        // and CPU identity beside the nullable association. A derived adapter
+        // can compare an earlier address lookup without losing ABA provenance.
+        ClockResult ReadPedClientBinding(CPed*, CClientEntity*&, NativePedPoolReader::Value&, NativePedReferenceToken&) noexcept;
 
     private:
         // One enclosing typed factory may compose this same registry with the

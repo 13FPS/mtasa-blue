@@ -30,6 +30,8 @@ namespace mta::game_de
         // or register this still-abstract wrapper in the pool.
         CPlayerPedCompositionDE(NativeGameTimingAccess& owner, const NativePedReferenceToken& token, CGame& game, CPoolsDE& pools, CWanted* wanted,
                                 std::uint32_t wrapperType);
+        CPlayerPedCompositionDE(NativeGameTimingAccess& owner, const NativePedReferenceToken& token, CGame& game, CPoolsDE& pools, CWanted* wanted,
+                                std::uint32_t wrapperType, CAnimManagerDE& animations);
 
     private:
         static NativeGameTimingAccess& RequirePoolOwner(CPoolsDE&, NativeGameTimingAccess&);

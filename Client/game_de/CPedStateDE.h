@@ -28,6 +28,9 @@ namespace mta::game_de
         void SetType(std::uint32_t type) noexcept { wrapperTypeValue = type; }
 
     protected:
+        // The player branch borrows this exact shared-wrapper field instead
+        // of introducing a second custom-animation cache beside it.
+        friend class CPlayerPedMoveAnimDE;
         CPedStateDE(NativePedVitalsAccess& vitals, NativePedMetadataAccess& metadata, NativePedMutationAccess& mutation,
                     NativePedObservationAccess& observation, NativePedRotationAccess& rotation, NativePedOxygenAccess& oxygen, NativePedDuckingAccess& ducking,
                     const NativePedReferenceToken& token, std::uint32_t wrapperType, NativePedPhysicalScalarsAccess* scalars = nullptr) noexcept

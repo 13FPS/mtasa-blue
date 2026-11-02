@@ -123,10 +123,13 @@ namespace mta::game_de
         ClockResult Withdraw(const Token&) noexcept;
         ClockResult WithdrawAll() noexcept;
         bool        HasOverride(const Token&) const noexcept;
-        bool        Ready() const noexcept;
-        bool        IsRetained() const noexcept;
-        bool        RecoveryPending() const noexcept;
-        bool        Read(Receipt&) const noexcept;
+        // CPU intent equality only; the writer still needs its genuine current
+        // native owner, reference-cell and field/source bookends.
+        bool MatchesOverride(const Token&, std::int32_t custom) const noexcept;
+        bool Ready() const noexcept;
+        bool IsRetained() const noexcept;
+        bool RecoveryPending() const noexcept;
+        bool Read(Receipt&) const noexcept;
         // Cache before parking. Besides count==0, ALL these IP ranges must be
         // excluded, including prologue/restore windows outside the counter.
         bool Exclusions(std::array<NativeFunctionRange, 4>&) const noexcept;

@@ -858,4 +858,13 @@ namespace mta::game_de
         return lock && token.slot < data->entries.size() && data->entries[token.slot].published &&
                HookControllerDetail::Same(data->entries[token.slot].token, token);
     }
+    bool NativePlayerMoveAnimHookController::MatchesOverride(const Token& token, std::int32_t custom) const noexcept
+    {
+        if (!data)
+            return false;
+        HookControllerDetail::Operation lock(data->operation);
+        return lock && token.slot < data->entries.size() && data->entries[token.slot].published &&
+               HookControllerDetail::Same(data->entries[token.slot].token, token) && data->entries[token.slot].custom == custom;
+    }
+
 }

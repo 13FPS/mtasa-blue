@@ -28,4 +28,13 @@ namespace mta::game_de
           CPlayerPedMoveAnimDE(wanted, owner, token)
     {
     }
+    CPlayerPedCompositionDE::CPlayerPedCompositionDE(NativeGameTimingAccess& owner, const NativePedReferenceToken& token, CGame& game, CPoolsDE& pools,
+                                                     CWanted* wanted, std::uint32_t wrapperType, CAnimManagerDE& animations)
+        : CPlayerPedCompositionDE(owner, token, game, pools, wanted, wrapperType)
+    {
+        // All bases now exist, so the exact shared virtual CPed identity can
+        // be checked before the player branch borrows its protected state.
+        ConfigureMoveAnim(owner, animations, static_cast<CPedStateDE&>(*this));
+    }
+
 }

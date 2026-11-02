@@ -51,6 +51,7 @@
 #include "NativePedRebuildCalls.h"
 #include "NativePedMoveAnimReader.h"
 #include "NativePlayerMoveAnimReapply.h"
+#include "NativePlayerMoveAnimGroupWrite.h"
 #include "NativePlayerMoveAnimHookController.h"
 // The shared policy includes CPed's existing unscoped enum forward declaration.
 // Match the other DE SDK boundaries without changing the common SDK or hiding
@@ -277,6 +278,7 @@ namespace mta::game_de
             ClockResult ReadAnimationAssociationGroupLoaded(const NativeAnimationAssociationGroupReferenceToken&, bool&) noexcept override;
             ClockResult ReadAnimationAssociationGroupBlock(const NativeAnimationAssociationGroupReferenceToken&,
                                                            NativeAnimationAssociationGroupBlock&) noexcept override;
+            ClockResult ReadAnimationAssociationGroupChildArrayPresent(const NativeAnimationAssociationGroupReferenceToken&, bool&) noexcept override;
             ClockResult ResolveAnimationAssociationGroupStaticById(const NativeAnimationAssociationGroupReferenceToken&, std::uint32_t,
                                                                    NativeAnimationStaticAssociationReferenceToken&) noexcept override;
             ClockResult SetAnimationAssociationGroupIdOffset(const NativeAnimationAssociationGroupReferenceToken&, std::int32_t) noexcept override;
@@ -338,6 +340,7 @@ namespace mta::game_de
             ClockResult ReadPedRender(const NativePedReferenceToken&, std::uintptr_t&) noexcept override;
             ClockResult ReadPedMoveAnim(const NativePedReferenceToken&, std::int32_t&) noexcept override;
             ClockResult ReapplyCurrentPlayerMoveAnim(const NativePedReferenceToken&) noexcept override;
+            ClockResult WriteCurrentPlayerMoveAnimGroup(const NativePedReferenceToken&, std::int32_t) noexcept override;
             ClockResult EnablePlayerMoveAnimHooks() noexcept override;
             ClockResult PublishPlayerMoveAnimOverride(const NativePedReferenceToken&, std::int32_t) noexcept override;
             ClockResult WithdrawPlayerMoveAnimOverride(const NativePedReferenceToken&) noexcept override;
@@ -765,6 +768,10 @@ namespace mta::game_de
             // uncertain acknowledgement, even after its weak ped cell retires.
             NativePlayerMoveAnimReapply::Controller playerMoveAnimReapply;
             NativePlayerMoveAnimReapply::Receipt    playerMoveAnimReapplyReceipt;
+            // Persistent scalar intent is never End-time rollback. Only an
+            // unacknowledged entered CAS/outer identity retains this journal.
+            NativePlayerMoveAnimGroupWrite::Controller playerMoveAnimGroupWrite;
+            NativePlayerMoveAnimGroupWrite::Receipt    playerMoveAnimGroupWriteReceipt;
             // Exact call-site patches retain their own code, unwind table and
             // controlled CPU publications. Stop revokes decisions immediately;
             // producer retirement still requires genuine peer-IP exclusion.
@@ -997,9 +1004,9 @@ namespace mta::game_de
                    runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained() || runtime.groupCreations.IsRetained() ||
                    runtime.hierarchyUncompress.IsRetained() || runtime.cameraRestore.IsRetained() || runtime.cameraTargetSetter.IsRetained() ||
                    runtime.cameraFovWrite.IsRetained() || runtime.cameraDirection.IsRetained() || runtime.cameraWidescreen.IsRetained() ||
-                   runtime.playerMoveAnimReapply.IsRetained() || runtime.playerMoveAnimHooks.IsRetained() || runtime.playerMoveAnimHookPeers.Held() ||
-                   runtime.playerMoveAnimHookPeers.PresentationHeld() || runtime.hierarchyCacheRemove.IsRetained() || runtime.blockRegistration.IsRetained() ||
-                   runtime.blockRemoval.IsRetained() || runtime.customSequences.HasPendingCleanup();
+                   runtime.playerMoveAnimReapply.IsRetained() || runtime.playerMoveAnimGroupWrite.IsRetained() || runtime.playerMoveAnimHooks.IsRetained() ||
+                   runtime.playerMoveAnimHookPeers.Held() || runtime.playerMoveAnimHookPeers.PresentationHeld() || runtime.hierarchyCacheRemove.IsRetained() ||
+                   runtime.blockRegistration.IsRetained() || runtime.blockRemoval.IsRetained() || runtime.customSequences.HasPendingCleanup();
         }
 
         bool WeatherOverrideRetained() noexcept
@@ -6849,9 +6856,9 @@ namespace mta::game_de
         }
         ClockResult NativeAccess::ReapplyCurrentPlayerMoveAnim(const NativePedReferenceToken& source) noexcept
         {
-            // This internal operation consumes the current group only. It
-            // neither stores a requested group nor supplies MTA's persistent
-            // custom-group hook or the unfinished public player setter.
+            // This internal original consumes the current group only. The
+            // shared setter separately owns requested-group publication, its
+            // guarded DWORD write and persistent block-reference intent.
             const auto token = source;
             auto       result = CheckApplicationTimingOwner();
             if (result != ClockResult::Ok)
@@ -7964,6 +7971,26 @@ namespace mta::game_de
             output = next;
             return ClockResult::Ok;
         }
+        ClockResult NativeAccess::ReadAnimationAssociationGroupChildArrayPresent(const NativeAnimationAssociationGroupReferenceToken& source,
+                                                                                 bool&                                                output) noexcept
+        {
+            const auto token = source;
+            auto       result = CheckTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto generation = runtime.generation.load();
+            if (!token.ownerGeneration || token.ownerGeneration != generation)
+                return ClockResult::OwnerConflict;
+            bool present = false;
+            result = NativeAnimationManagerMemory({runtime.image}, &CheckTimingOwner).ReadAssociationGroupChildArrayPresent(token, present);
+            if (result != ClockResult::Ok || (result = CheckTimingOwner()) != ClockResult::Ok)
+                return result;
+            if (runtime.generation.load() != generation)
+                return ClockResult::OwnerConflict;
+            output = present;
+            return ClockResult::Ok;
+        }
+
         ClockResult NativeAccess::ReadAnimationAssociationGroupBlock(const NativeAnimationAssociationGroupReferenceToken& source,
                                                                      NativeAnimationAssociationGroupBlock&                output) noexcept
         {
@@ -9788,6 +9815,96 @@ namespace mta::game_de
             output = after;
             return ClockResult::Ok;
         }
+        struct MoveAnimWriteIntent
+        {
+            NativePedReferenceToken token;
+            std::int32_t            custom = 0;
+        };
+        thread_local const MoveAnimWriteIntent* moveAnimWriteIntent = nullptr;
+        struct MoveAnimWriteIntentScope
+        {
+            const MoveAnimWriteIntent* previous;
+            bool                       held;
+            explicit MoveAnimWriteIntentScope(const MoveAnimWriteIntent& intent) noexcept : previous(moveAnimWriteIntent), held(previous == nullptr)
+            {
+                if (held)
+                    moveAnimWriteIntent = &intent;
+            }
+            ~MoveAnimWriteIntentScope()
+            {
+                if (held)
+                    moveAnimWriteIntent = previous;
+            }
+        };
+        ClockResult CheckMoveAnimGroupWriteOwner() noexcept
+        {
+            auto result = CheckApplicationTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (!moveAnimWriteIntent || !moveAnimWriteIntent->custom || moveAnimWriteIntent->token.ownerGeneration != runtime.generation.load() ||
+                runtime.playerMoveAnimHookGeneration.load() != runtime.generation.load() || !runtime.playerMoveAnimHooks.Ready() ||
+                !runtime.playerMoveAnimHooks.MatchesOverride(moveAnimWriteIntent->token, moveAnimWriteIntent->custom))
+                return ClockResult::OwnerConflict;
+            return runtime.playerMoveAnimGroupWrite.RecoveryPending() ? ClockResult::RestoreFailure : ClockResult::Ok;
+        }
+        ClockResult QualifyMoveAnimGroupWriteGroup(std::int32_t desired) noexcept
+        {
+            if (!moveAnimWriteIntent || desired != moveAnimWriteIntent->custom)
+                return ClockResult::OwnerConflict;
+            auto result = QualifyMoveAnimHookGroup(desired);
+            if (result != ClockResult::Ok)
+                return result;
+            // Only CPU equality follows the existing final raw group anchors.
+            // Do not introduce another native callback behind their bookend.
+            return runtime.playerMoveAnimHooks.Ready() && runtime.playerMoveAnimHooks.MatchesOverride(moveAnimWriteIntent->token, desired)
+                       ? ClockResult::Ok
+                       : ClockResult::OwnerConflict;
+        }
+        ClockResult NativeAccess::WriteCurrentPlayerMoveAnimGroup(const NativePedReferenceToken& source, std::int32_t desired) noexcept
+        {
+            const auto token = source;
+            if (desired <= 0 ||
+                MtaGame::CPlayerMoveAnimPolicy::SelectRequest(static_cast<std::uint32_t>(desired)).kind == MtaGame::CPlayerMoveAnimPolicy::Kind::Invalid)
+                return ClockResult::InvalidArgument;
+            auto result = CheckApplicationTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            if (!runtime.playerMoveAnimHooks.Ready() || !runtime.playerMoveAnimHooks.MatchesOverride(token, desired))
+                return ClockResult::OwnerConflict;
+            NativePedPoolReader::Value before, after;
+            if ((result = QualifyMoveAnimHookPlayer(token, before)) != ClockResult::Ok)
+                return result;
+            const MoveAnimWriteIntent intent{token, desired};
+            MoveAnimWriteIntentScope  scope(intent);
+            if (!scope.held)
+                return ClockResult::Busy;
+            NativePlayerMoveAnimGroupWrite::Receipt receipt;
+            result = runtime.playerMoveAnimGroupWrite.Write(runtime.image, before, desired, &CheckMoveAnimGroupWriteOwner, &CheckApplicationTimingOwner,
+                                                            &QualifyMoveAnimGroupWriteGroup, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(token, after);
+                if (result == ClockResult::Ok && !SameRegisteredPed(before, after))
+                    result = ClockResult::OwnerConflict;
+                if (result == ClockResult::Ok)
+                    result = CheckMoveAnimGroupWriteOwner();
+            }
+            if (receipt.entered && result != ClockResult::Ok && (receipt.accepted || !receipt.returned))
+            {
+                // A rejected CAS changed nothing. An accepted/unknown one can
+                // already belong to a retiring native ped: retain the first
+                // prefix independently of token cleanup and never undo/replay.
+                runtime.playerMoveAnimGroupWrite.RetainAfterEntry(receipt, result);
+                receipt.phase = NativePlayerMoveAnimGroupWrite::Phase::Unknown;
+                receipt.acknowledged = false;
+                receipt.unknown = true;
+                receipt.result = result;
+                Stop(result);
+            }
+            runtime.playerMoveAnimGroupWriteReceipt = receipt;
+            return result;
+        }
+
         ClockResult CheckMoveAnimParkedOwner() noexcept
         {
             const auto generation = runtime.generation.load();

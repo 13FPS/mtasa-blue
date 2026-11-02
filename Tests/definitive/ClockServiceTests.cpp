@@ -2934,6 +2934,15 @@ namespace mta::game_de::NativeImageAccess
 }
 // Keep all owner effects in the actual implementation. Only final OS/module
 // identity and the terminal clothes consumer refer to explicitly owned fixtures.
+#include "../../Client/game_de/NativePlayerMoveAnimGroupWrite.h"
+namespace ClockMoveAnimSetterOwnerTest
+{
+    LONG Exchange(volatile LONG*, LONG, LONG) noexcept;
+}
+// Exercise the actual aligned CAS boundary only on this owned fixture's ped.
+#define MTA_DE_PLAYER_MOVEANIM_GROUP_EXCHANGE ClockMoveAnimSetterOwnerTest::Exchange
+#include "../../Client/game_de/NativePlayerMoveAnimGroupWrite.cpp"
+#undef MTA_DE_PLAYER_MOVEANIM_GROUP_EXCHANGE
 #include "../../Client/game_de/NativePlayerMoveAnimHookController.h"
 namespace ClockMoveAnimHookOwnerTest
 {
@@ -9154,6 +9163,7 @@ namespace
 #include "PreparedGameBorrowOwnerTests.inl"
 #include "NativePlayerMoveAnimReapplyOwnerTests.inl"
 #include "NativePlayerMoveAnimHookOwnerTests.inl"
+#include "NativePlayerMoveAnimSetterOwnerTests.inl"
 // The model fixture consumes the shared byte helpers defined by the earlier
 // private-association fixture; keep its consumer after those definitions.
 #include "../../Client/game_de/CModelInfoDE.h"
@@ -9273,6 +9283,17 @@ int main(int argc, char** argv)
                 playerMoveAnimHookOwnerScenario = index;
     }
     const bool playerMoveAnimHookOwnerOnly = playerMoveAnimHookOwnerScenario != 6;
+
+    unsigned playerMoveAnimSetterOwnerScenario = 4;
+    if (argc == 3)
+    {
+        constexpr std::array<const char*, 4> flags{"--player-moveanim-setter-owner-success", "--player-moveanim-setter-owner-invoke-unknown",
+                                                   "--player-moveanim-setter-owner-bookend-loss", "--player-moveanim-setter-owner-token-loss"};
+        for (unsigned index = 0; index != flags.size(); ++index)
+            if (std::strcmp(argv[2], flags[index]) == 0)
+                playerMoveAnimSetterOwnerScenario = index;
+    }
+    const bool playerMoveAnimSetterOwnerOnly = playerMoveAnimSetterOwnerScenario != 4;
 
     const bool preparedGameBorrowOnly = argc == 3 && std::strcmp(argv[2], "--prepared-game-borrow") == 0;
     const bool buildingPoolDefaultOnly = argc == 3 && std::strcmp(argv[2], "--building-pool-default") == 0;
@@ -9694,18 +9715,18 @@ int main(int argc, char** argv)
          animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly || fireCollisionOnly || fireOnly ||
          collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly || worldLineOnly || worldAreaOnly ||
          worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly || cameraSphereOnly || pedWeaponClearOnly ||
-         pedClothesOnly || pedRebuildOnly || playerMoveAnimHookOwnerOnly || playerMoveAnimReapplyOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly ||
-         animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly ||
-         animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly ||
-         customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly ||
-         privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly ||
-         privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly ||
-         sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly ||
-         animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly || cameraBasicsOnly || cameraJumpCutOnly ||
-         cameraFovWriteOnly || cameraDirectionOnly || cameraRowBorrowOnly || cameraHistoryOnly || cameraTargetOnly || cameraTargetSetterOnly ||
-         cameraGetCamOnly || cameraWidescreenOnly || cameraMainTargetOnly || applicationTimingOnly || emptyBlockRemovalOnly || blockRegistrationOnly ||
-         bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly || dynamicClumpOnly ||
-         groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
+         pedClothesOnly || pedRebuildOnly || playerMoveAnimSetterOwnerOnly || playerMoveAnimHookOwnerOnly || playerMoveAnimReapplyOnly || pedMoveAnimOnly ||
+         playerNativePrerequisitesOnly || animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly ||
+         animationManagerRefsOnly || animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly ||
+         animationHierarchyBankOnly || customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly ||
+         privateHierarchyNameOnly || privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly ||
+         privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly ||
+         animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly ||
+         animationDefinitionBlockNamesOnly || animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly || cameraBasicsOnly ||
+         cameraJumpCutOnly || cameraFovWriteOnly || cameraDirectionOnly || cameraRowBorrowOnly || cameraHistoryOnly || cameraTargetOnly ||
+         cameraTargetSetterOnly || cameraGetCamOnly || cameraWidescreenOnly || cameraMainTargetOnly || applicationTimingOnly || emptyBlockRemovalOnly ||
+         blockRegistrationOnly || bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly ||
+         dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
          groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
          animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
          privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
@@ -9716,6 +9737,14 @@ int main(int argc, char** argv)
         ClockImageFixture fixture;
         fixture.Create(argv[1]);
         PresentTransitionClockFixture::Run(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (playerMoveAnimSetterOwnerOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        PlayerMoveAnimSetterOwnerFixture::Run(fixture, playerMoveAnimSetterOwnerScenario);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

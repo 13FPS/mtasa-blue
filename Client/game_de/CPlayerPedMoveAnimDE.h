@@ -8,10 +8,14 @@
 #include "NativePedMoveAnimAccess.h"
 namespace mta::game_de
 {
+    class NativeGameTimingAccess;
+    class CAnimManagerDE;
+    class CPedStateDE;
     class CPlayerPedMoveAnimDE : public CPlayerPedWantedDE
     {
     public:
         eMoveAnim GetMoveAnim() override;
+        void      SetMoveAnim(eMoveAnim) override;
 
     protected:
         // The enclosing factory supplies both borrowed CPU associations.
@@ -22,12 +26,21 @@ namespace mta::game_de
         {
         }
 
+        // The complete enclosing wrapper lends the existing state branch and
+        // an explicitly configured same-owner manager. It publishes no factory.
+        CPlayerPedMoveAnimDE(CWanted*, NativeGameTimingAccess&, const NativePedReferenceToken&, CAnimManagerDE&, CPedStateDE&);
+        void ConfigureMoveAnim(NativeGameTimingAccess&, CAnimManagerDE&, CPedStateDE&);
+
     private:
+        void                          RequireMoveAnimServices(const char*) const;
+        NativeGameTimingAccess*       movementOwner = nullptr;
+        CAnimManagerDE*               animationManager = nullptr;
+        CPedStateDE*                  customState = nullptr;
         NativePedMoveAnimAccess&      native;
         const NativePedReferenceToken reference;
     };
-    // SetMoveAnim, SetInitialState and targeting retain their mandatory real
-    // contracts. Current group storage is not custom-override bookkeeping or
-    // proof of block refs, loaded associations, reapply and anti-override hooks.
+    // The configured setter reuses the actual MTA policy and native owner.
+    // Initial state, targeting and the other incomplete SDK contracts stay pure;
+    // this method does not complete or publish a player factory.
     static_assert(std::is_abstract_v<CPlayerPedMoveAnimDE> && std::is_base_of_v<CPlayerPed, CPlayerPedMoveAnimDE>);
 }

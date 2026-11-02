@@ -1035,6 +1035,42 @@ namespace mta::game_de
         output = next;
         return ClockResult::Ok;
     }
+    ClockResult NativeAnimationManagerMemory::ReadAssociationGroupChildArrayPresent(const NativeAnimationAssociationGroupReferenceToken& source,
+                                                                                    bool&                                                output) const noexcept
+    {
+        namespace D = AnimationAssociationGroupReadDetail;
+        namespace P = NativeAnimationGroupArrayProfile;
+        namespace M = NativeModelReferenceMap;
+        const auto                             token = source;
+        D::Snapshot                            first, second;
+        std::array<unsigned char, P::RowBytes> before{}, after{}, final{};
+        auto                                   result = D::Read(binding, owner, token, false, first);
+        if (result != ClockResult::Ok)
+            return result;
+        if (!M::Copy(token.locator, before.data(), before.size()))
+            return ClockResult::ReadFailure;
+        if ((result = D::Read(binding, owner, token, false, second)) != ClockResult::Ok)
+            return result;
+        if (!D::Same(first, second) || !M::Copy(token.locator, after.data(), after.size()) || before != after)
+            return ClockResult::BindingChanged;
+        if ((result = AnimationGroupCreatedDetail::Begin(binding, owner)) != ClockResult::Ok)
+            return result;
+        // This last owner callback may replace the global array or only the
+        // selected child word. Recheck the exact parent32 and its current
+        // root/count/cookie afterward, without dereferencing the child pointer.
+        std::uintptr_t rows = 0, child = 0;
+        std::int32_t   count = 0;
+        std::uint64_t  capacity = 0;
+        if (second.parent.rows < P::CookieBytes || !NativeImageAccess::ReadImage(binding.image, binding.image + P::GlobalRva, &rows, sizeof(rows), true) ||
+            rows != second.parent.rows || !NativeImageAccess::ReadImage(binding.image, binding.image + P::CountRva, &count, sizeof(count), true) ||
+            count != second.parent.count || !M::Copy(rows - P::CookieBytes, &capacity, sizeof(capacity)) || capacity != second.parent.capacity ||
+            !M::Copy(token.locator, final.data(), final.size()) || final != after)
+            return ClockResult::BindingChanged;
+        std::memcpy(&child, final.data() + 8, sizeof(child));
+        output = child != 0;
+        return ClockResult::Ok;
+    }
+
     ClockResult NativeAnimationManagerMemory::ReadAssociationGroupLoaded(const NativeAnimationAssociationGroupReferenceToken& source,
                                                                          bool&                                                output) const noexcept
     {

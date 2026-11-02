@@ -102,5 +102,12 @@ namespace mta::game_de
         {
             return ClockResult::NotInitialized;
         }
+        // A null current child pointer is an admitted early false for the
+        // player movement policy. Nonnull is only a parent fact: it grants no
+        // child/cookie/hierarchy access and never hides provider refusal.
+        virtual ClockResult ReadAnimationAssociationGroupChildArrayPresent(const NativeAnimationAssociationGroupReferenceToken&, bool&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
     };
 }

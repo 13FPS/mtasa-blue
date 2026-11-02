@@ -36,6 +36,7 @@ namespace mta::game_de
         ClockResult ResolveAssociationGroupReference(std::uintptr_t, NativeAnimationAssociationGroupReferenceToken&) const noexcept;
         ClockResult ReadAssociationGroup(const NativeAnimationAssociationGroupReferenceToken&, NativeAnimationAssociationGroupValues&) const noexcept;
         ClockResult ReadAssociationGroupLoaded(const NativeAnimationAssociationGroupReferenceToken&, bool&) const noexcept;
+        ClockResult ReadAssociationGroupChildArrayPresent(const NativeAnimationAssociationGroupReferenceToken&, bool&) const noexcept;
         ClockResult ReadAssociationGroupBlock(const NativeAnimationAssociationGroupReferenceToken&, NativeAnimationAssociationGroupBlock&) const noexcept;
         ClockResult ResolveAssociationGroupStaticById(const NativeAnimationAssociationGroupReferenceToken&, std::uint32_t,
                                                       NativeAnimationStaticAssociationReferenceToken&) const noexcept;

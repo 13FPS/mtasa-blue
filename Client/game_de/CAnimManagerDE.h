@@ -100,6 +100,9 @@ namespace mta::game_de
                        std::uint64_t);
 
     private:
+        // A configured movement setter compares CPU provider/generation
+        // affinity before borrowing our genuine block-request factories.
+        friend class CPlayerPedMoveAnimDE;
         NativeAnimationSequenceReferenceToken SequenceOperationIdentity(CAnimBlendSequence*, const char*) const;
         NativeAnimationSequenceReferenceToken ResolveCustomSequenceInterface(std::uintptr_t, const char*) const;
         NativeAnimationBlockIdentity          ReadCounterIdentity(int, const char*) const;

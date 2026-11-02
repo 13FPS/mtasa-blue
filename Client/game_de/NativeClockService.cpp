@@ -58,6 +58,7 @@
 #include "NativeCameraSphereVisibleCalls.h"
 #include "NativeCameraDataMemory.h"
 #include "NativeCameraFovWrite.h"
+#include "NativeCameraDirection.h"
 #include "NativeCameraRestore.h"
 #include "CWorldLineDE.h"
 #include "NativeAnimationBlockMemory.h"
@@ -329,6 +330,10 @@ namespace mta::game_de
             ClockResult ReadCameraActiveIndex(std::uint8_t&) noexcept override;
             ClockResult ReadCameraFov(std::uint32_t, std::uint32_t&) noexcept override;
             ClockResult WriteCameraFov(std::uint32_t, std::uint32_t) noexcept override;
+            ClockResult ReadCameraMode(std::uint32_t, std::uint16_t&) noexcept override;
+            ClockResult ReadCameraDirection(std::uint32_t, std::uint32_t&, std::uint32_t&) noexcept override;
+            ClockResult ConditionalRepairCameraDirection(std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t) noexcept override;
+            ClockResult WriteCameraDirection(std::uint32_t, std::uint32_t, std::uint32_t) noexcept override;
             ClockResult RestoreCamera() noexcept override;
             ClockResult RestoreCameraWithJumpCut() noexcept override;
             ClockResult ReadStreamingModelGroups(NativeStreamingModelGroupsReader::Value&) noexcept override;
@@ -699,6 +704,8 @@ namespace mta::game_de
             // A bank's timestamp conversion owns no private allocation.
             // Retain only its actual entered/unknown operation journal; do
             // not hide that debt in the custom buffer retirement generation.
+            NativeCameraDirection                             cameraDirection;
+            NativeCameraDirectionCalls::Receipt               cameraDirectionReceipt;
             NativeCameraFovWrite                              cameraFovWrite;
             NativeCameraFovWriteCalls::Receipt                cameraFovWriteReceipt;
             NativeCameraRestore                               cameraRestore;
@@ -905,8 +912,9 @@ namespace mta::game_de
                    runtime.pedModelCreationRetained.load() || runtime.modelBackingReferences.IsRetained() || runtime.pedReferences.IsRetained() ||
                    WorldIgnoreRetained() || runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() ||
                    runtime.privateAssociations.IsRetained() || runtime.groupCreations.IsRetained() || runtime.hierarchyUncompress.IsRetained() ||
-                   runtime.cameraRestore.IsRetained() || runtime.cameraFovWrite.IsRetained() || runtime.hierarchyCacheRemove.IsRetained() ||
-                   runtime.blockRegistration.IsRetained() || runtime.blockRemoval.IsRetained() || runtime.customSequences.HasPendingCleanup();
+                   runtime.cameraRestore.IsRetained() || runtime.cameraFovWrite.IsRetained() || runtime.cameraDirection.IsRetained() ||
+                   runtime.hierarchyCacheRemove.IsRetained() || runtime.blockRegistration.IsRetained() || runtime.blockRemoval.IsRetained() ||
+                   runtime.customSequences.HasPendingCleanup();
         }
 
         bool WeatherOverrideRetained() noexcept
@@ -6100,6 +6108,41 @@ namespace mta::game_de
             // that lost their bookends keep this journal through Stop/End;
             // neither path retries, repairs or restores old engine FOV bits.
             if (receipt.debt || runtime.cameraFovWrite.RecoveryPending())
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::ReadCameraMode(std::uint32_t row, std::uint16_t& output) noexcept
+        {
+            return NativeCameraDataMemory::ReadMode(runtime.image, row, &CheckTimingOwner, output);
+        }
+        ClockResult NativeAccess::ReadCameraDirection(std::uint32_t row, std::uint32_t& horizontal, std::uint32_t& vertical) noexcept
+        {
+            return NativeCameraDataMemory::ReadDirection(runtime.image, row, &CheckTimingOwner, horizontal, vertical);
+        }
+        ClockResult NativeAccess::ConditionalRepairCameraDirection(std::uint32_t row, std::uint32_t expectedH, std::uint32_t expectedV, std::uint32_t wrappedH,
+                                                                   std::uint32_t wrappedV) noexcept
+        {
+            NativeCameraDirectionCalls::Receipt receipt;
+            const auto result = runtime.cameraDirection.Repair(runtime.image, row, expectedH, expectedV, wrappedH, wrappedV, &CheckTimingOwner,
+                                                               &CheckApplicationTimingOwner, &receipt);
+            // Keep the original entered journal visible after uncertainty;
+            // a later refused request does not replace it with an empty one.
+            if (!runtime.cameraDirectionReceipt.debt || receipt.horizontal.entered || receipt.vertical.entered)
+                runtime.cameraDirectionReceipt = receipt;
+            if (receipt.debt || runtime.cameraDirection.RecoveryPending())
+                Stop(result);
+            return result;
+        }
+        ClockResult NativeAccess::WriteCameraDirection(std::uint32_t row, std::uint32_t wrappedH, std::uint32_t wrappedV) noexcept
+        {
+            NativeCameraDirectionCalls::Receipt receipt;
+            const auto result = runtime.cameraDirection.Set(runtime.image, row, wrappedH, wrappedV, &CheckTimingOwner, &CheckApplicationTimingOwner, &receipt);
+            if (!runtime.cameraDirectionReceipt.debt || receipt.horizontal.entered || receipt.vertical.entered)
+                runtime.cameraDirectionReceipt = receipt;
+            // A partial pair stays retained through Stop/End, including a
+            // known second CAS rejection. Native camera updates remain engine
+            // owned; no teardown path may replay or restore these angles.
+            if (receipt.debt || runtime.cameraDirection.RecoveryPending())
                 Stop(result);
             return result;
         }

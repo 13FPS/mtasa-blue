@@ -28,6 +28,16 @@ namespace mta::game_de
         // must acknowledge one bounded store or retain its uncertainty; an
         // older provider cannot turn absence into a successful FOV setter.
         virtual ClockResult WriteCameraFov(std::uint32_t, std::uint32_t) noexcept { return ClockResult::NotInitialized; }
+        // Raw pair reads publish no repair. The actual SDK computes its
+        // float policy once, then conditionally repairs this exact original
+        // pair before publishing outputs; an older owner must refuse it.
+        virtual ClockResult ReadCameraMode(std::uint32_t, std::uint16_t&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult ReadCameraDirection(std::uint32_t, std::uint32_t&, std::uint32_t&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult ConditionalRepairCameraDirection(std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
+        virtual ClockResult WriteCameraDirection(std::uint32_t, std::uint32_t, std::uint32_t) noexcept { return ClockResult::NotInitialized; }
         // Ordinary Restore is one distinct native effect. Older owners must
         // refuse rather than substitute JumpCut, a field repair or a retry.
         virtual ClockResult RestoreCamera() noexcept { return ClockResult::NotInitialized; }

@@ -1,7 +1,7 @@
 /****************************************************************************
  * PROJECT: Multi Theft Auto
  * LICENSE: See LICENSE in the repository root
- * PURPOSE: Preserve actual CCam FOV policies on an immutable logical native row
+ * PURPOSE: Preserve actual CCam scalar policies on an immutable logical row
  ****************************************************************************/
 #pragma once
 #include "NativeCameraSphereVisibleAccess.h"
@@ -12,8 +12,11 @@ namespace mta::game_de
     class CCamFovDE : public CCam
     {
     public:
-        float GetFOV() const override;
-        void  SetFOV(float value) override;
+        float        GetFOV() const override;
+        void         SetFOV(float value) override;
+        unsigned int GetMode() const override;
+        void         GetDirection(float& horizontal, float& vertical) override;
+        void         SetDirection(float horizontal, float vertical) override;
 
     protected:
         // A logical immutable index is re-admitted by the same native owner

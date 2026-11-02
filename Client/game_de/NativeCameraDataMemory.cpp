@@ -5,6 +5,8 @@
  ****************************************************************************/
 #include "NativeCameraDataMemory.h"
 #include "NativeCameraFovWrite.h"
+#include "NativeCameraDirection.h"
+#include "NativeCameraDirectionProfile.h"
 #include <intrin.h>
 #include "NativeCameraDataProfile.h"
 #include "NativeStreamingCompletionContext.h"
@@ -319,6 +321,311 @@ namespace mta::game_de
             !D::Same(data->observedWorld, data->confirmedWorld, true))
             return finish(ClockResult::BindingChanged);
         receipt.after = data->confirmed;
+        receipt.effectsVerified = true;
+        data.reset();
+        return finish(ClockResult::Ok);
+    }
+}
+
+namespace mta::game_de
+{
+    namespace CameraDirectionDetail
+    {
+        namespace M = NativeCameraDataMemory;
+        namespace D = NativeStreamingCompletionContext;
+        namespace P = NativeCameraDataProfile;
+        namespace Q = NativeCameraDirectionProfile;
+        namespace I = NativeImageAccess;
+        using CheckOwner = NativeCameraDirectionCalls::CheckOwner;
+        using Bits = NativeCameraDirectionCalls::Bits;
+        bool Same(const Bits& a, const Bits& b) noexcept
+        {
+            return a.horizontal == b.horizontal && a.vertical == b.vertical;
+        }
+        bool Same(std::uint16_t a, std::uint16_t b) noexcept
+        {
+            return a == b;
+        }
+        bool Profile(std::uintptr_t image) noexcept
+        {
+            // Add new source roles only here. Unchanged FOV, active-index and
+            // Restore operations continue to use their original qualifications.
+            if (!M::Profile(image))
+                return false;
+            IMAGE_DOS_HEADER dos{};
+            if (!I::ReadImage(image, image, &dos, sizeof(dos)) || dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew <= 0 ||
+                static_cast<std::size_t>(dos.e_lfanew) > P::ImageBytes - sizeof(IMAGE_NT_HEADERS64))
+                return false;
+            IMAGE_NT_HEADERS64 nt{};
+            const auto         ntRva = static_cast<std::size_t>(dos.e_lfanew);
+            if (!I::ReadImage(image, image + ntRva, &nt, sizeof(nt)) || nt.Signature != IMAGE_NT_SIGNATURE ||
+                nt.FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 || nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
+                nt.OptionalHeader.SizeOfImage != P::ImageBytes || nt.FileHeader.SizeOfOptionalHeader < sizeof(IMAGE_OPTIONAL_HEADER64) ||
+                !nt.FileHeader.NumberOfSections || nt.FileHeader.NumberOfSections > 96)
+                return false;
+            const auto                           sectionsRva = ntRva + offsetof(IMAGE_NT_HEADERS64, OptionalHeader) + nt.FileHeader.SizeOfOptionalHeader;
+            const auto                           sectionsBytes = static_cast<std::size_t>(nt.FileHeader.NumberOfSections) * sizeof(IMAGE_SECTION_HEADER);
+            std::array<IMAGE_SECTION_HEADER, 96> sections{};
+            if (sectionsRva > P::ImageBytes || sectionsBytes > P::ImageBytes - sectionsRva ||
+                !I::ReadImage(image, image + sectionsRva, sections.data(), sectionsBytes))
+                return false;
+            for (const auto& pin : Q::Pins)
+            {
+                bool section = false;
+                for (std::size_t index = 0; index != nt.FileHeader.NumberOfSections; ++index)
+                    section =
+                        section || I::SectionContains(sections[index], pin.rva, pin.size, IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_WRITE);
+                std::array<unsigned char, Q::MaximumPinBytes> actual{};
+                if (!section || !pin.size || pin.size > actual.size() || !I::ReadImage(image, image + pin.rva, actual.data(), pin.size, false, true) ||
+                    std::memcmp(actual.data(), pin.bytes, pin.size))
+                    return false;
+            }
+            return true;
+        }
+        bool ReadPair(std::uintptr_t image, std::uintptr_t row, Bits& pair) noexcept
+        {
+            return I::ReadImage(image, row + Q::HorizontalOffset, &pair.horizontal, sizeof(pair.horizontal), true) &&
+                   I::ReadImage(image, row + Q::VerticalOffset, &pair.vertical, sizeof(pair.vertical), true);
+        }
+        template <class T, class Read>
+        ClockResult Sample(std::uintptr_t image, CheckOwner owner, CheckOwner afterApplicationOwner, D::Value& world, T& bits, Read read) noexcept
+        {
+            auto result = afterApplicationOwner ? afterApplicationOwner() : ClockResult::Ok;
+            if (result != ClockResult::Ok || (result = D::Owner(image, owner)) != ClockResult::Ok)
+                return result;
+            if (!Profile(image))
+                return ClockResult::UnsupportedBuild;
+            if (!M::Storage(image))
+                return ClockResult::BindingChanged;
+            D::Value nextWorld;
+            T        next{};
+            if ((result = D::Capture(image, nextWorld)) != ClockResult::Ok)
+                return result;
+            if (!read(next))
+                return ClockResult::ReadFailure;
+            if (!D::Fence(image, nextWorld) || !Profile(image) || !M::Storage(image))
+                return ClockResult::BindingChanged;
+            world = nextWorld;
+            bits = next;
+            return ClockResult::Ok;
+        }
+        template <class T, class Read>
+        ClockResult Observe(std::uintptr_t image, std::uint32_t logicalRow, CheckOwner owner, T& output, Read read) noexcept
+        {
+            if (logicalRow >= P::RowCount)
+                return ClockResult::InvalidArgument;
+            if (!owner)
+                return ClockResult::NotInitialized;
+            if (!image || image > (std::numeric_limits<std::uintptr_t>::max)() - P::ImageBytes)
+                return ClockResult::UnsupportedBuild;
+            if (!D::TryEnter())
+                return ClockResult::Busy;
+            D::Scope scope;
+            D::Value firstWorld, secondWorld, confirmedWorld;
+            T        first{}, second{}, confirmed{};
+            auto     result = Sample(image, owner, nullptr, firstWorld, first, read);
+            if (result != ClockResult::Ok)
+                return result;
+            if ((result = Sample(image, owner, nullptr, secondWorld, second, read)) != ClockResult::Ok)
+                return result;
+            if (!Same(first, second) || !D::Same(firstWorld, secondWorld, true))
+                return ClockResult::BindingChanged;
+            if ((result = Sample(image, owner, nullptr, confirmedWorld, confirmed, read)) != ClockResult::Ok)
+                return result;
+            if (!Same(first, confirmed) || !D::Same(firstWorld, confirmedWorld, true) || !D::Same(secondWorld, confirmedWorld, true))
+                return ClockResult::BindingChanged;
+            output = confirmed;
+            return ClockResult::Ok;
+        }
+        // Unconditional real delegate remains available to meaningful fixtures
+        // even when they replace only the final pair exchange boundary.
+        ClockResult NativeExchange(std::uintptr_t target, std::uint32_t expected, std::uint32_t replacement, std::uint32_t& observed,
+                                   std::uint32_t& exception) noexcept
+        {
+            return CameraFovWriteDetail::NativeExchange(target, expected, replacement, observed, exception);
+        }
+    }
+}
+namespace mta::game_de::NativeCameraDataMemory
+{
+    ClockResult ReadMode(std::uintptr_t image, std::uint32_t logicalRow, CheckOwner owner, std::uint16_t& rawMode) noexcept
+    {
+        namespace C = CameraDirectionDetail;
+        namespace P = NativeCameraDataProfile;
+        namespace Q = NativeCameraDirectionProfile;
+        const auto target = image + P::CameraRva + P::ArrayOffset + logicalRow * static_cast<std::uintptr_t>(P::RowBytes) + Q::ModeOffset;
+        return C::Observe(image, logicalRow, owner, rawMode,
+                          [&](std::uint16_t& next) { return NativeImageAccess::ReadImage(image, target, &next, sizeof(next), true); });
+    }
+    ClockResult ReadDirection(std::uintptr_t image, std::uint32_t logicalRow, CheckOwner owner, std::uint32_t& horizontal, std::uint32_t& vertical) noexcept
+    {
+        namespace C = CameraDirectionDetail;
+        namespace P = NativeCameraDataProfile;
+        const auto row = image + P::CameraRva + P::ArrayOffset + logicalRow * static_cast<std::uintptr_t>(P::RowBytes);
+        C::Bits    pair;
+        const auto result = C::Observe(image, logicalRow, owner, pair, [&](C::Bits& next) { return C::ReadPair(image, row, next); });
+        if (result == ClockResult::Ok)
+        {
+            horizontal = pair.horizontal;
+            vertical = pair.vertical;
+        }
+        return result;
+    }
+}
+namespace mta::game_de
+{
+    struct NativeCameraDirection::Data
+    {
+        NativeStreamingCompletionContext::Value beforeWorld, observedWorld, confirmedWorld;
+        Bits                                    before, observed, confirmed;
+        Receipt                                 receipt;
+    };
+    NativeCameraDirection::NativeCameraDirection() noexcept = default;
+    NativeCameraDirection::~NativeCameraDirection() = default;
+    ClockResult NativeCameraDirection::Set(std::uintptr_t image, std::uint32_t row, std::uint32_t wrappedH, std::uint32_t wrappedV, CheckOwner owner,
+                                           CheckOwner afterApplicationOwner, Receipt* output, Exchange exchange) noexcept
+    {
+        return Run(image, row, nullptr, Bits{wrappedH, wrappedV}, owner, afterApplicationOwner, output, exchange);
+    }
+    ClockResult NativeCameraDirection::Repair(std::uintptr_t image, std::uint32_t row, std::uint32_t expectedH, std::uint32_t expectedV, std::uint32_t wrappedH,
+                                              std::uint32_t wrappedV, CheckOwner owner, CheckOwner afterApplicationOwner, Receipt* output,
+                                              Exchange exchange) noexcept
+    {
+        const Bits expected{expectedH, expectedV};
+        return Run(image, row, &expected, Bits{wrappedH, wrappedV}, owner, afterApplicationOwner, output, exchange);
+    }
+    ClockResult NativeCameraDirection::Run(std::uintptr_t image, std::uint32_t logicalRow, const Bits* expected, const Bits& replacement, CheckOwner owner,
+                                           CheckOwner afterApplicationOwner, Receipt* output, Exchange exchange) noexcept
+    {
+        namespace C = CameraDirectionDetail;
+        namespace D = NativeStreamingCompletionContext;
+        namespace P = NativeCameraDataProfile;
+        namespace Q = NativeCameraDirectionProfile;
+        Receipt receipt;
+        receipt.image = image;
+        receipt.logicalRow = logicalRow;
+        receipt.replacement = replacement;
+        receipt.getter = receipt.repair = expected != nullptr;
+        if (expected)
+            receipt.expected = *expected;
+        bool       ownsAttempt = false;
+        const auto finish = [&](ClockResult result)
+        {
+            if ((receipt.horizontal.entered || receipt.vertical.entered) && !receipt.knownNoEffect && result != ClockResult::Ok)
+                debt.store(true);
+            receipt.result = result;
+            receipt.debt = debt.load();
+            // A refusal after debt cannot overwrite the private journal that
+            // caused it. Only this admitted attempt may update its own record.
+            if (ownsAttempt && data)
+                data->receipt = receipt;
+            if (output)
+                *output = receipt;
+            return result;
+        };
+        if (busy.exchange(true))
+            return finish(ClockResult::Busy);
+        struct BusyScope
+        {
+            std::atomic<bool>& value;
+            ~BusyScope() { value.store(false); }
+        } busyScope{busy};
+        if (debt.load())
+            return finish(ClockResult::RestoreFailure);
+        if (logicalRow >= P::RowCount)
+            return finish(ClockResult::InvalidArgument);
+        if (!owner || !afterApplicationOwner)
+            return finish(ClockResult::NotInitialized);
+        if (!image || image > (std::numeric_limits<std::uintptr_t>::max)() - P::ImageBytes)
+            return finish(ClockResult::UnsupportedBuild);
+        const auto row = image + P::CameraRva + P::ArrayOffset + logicalRow * P::RowBytes;
+        receipt.horizontal.target = row + Q::HorizontalOffset;
+        receipt.vertical.target = row + Q::VerticalOffset;
+        if (receipt.horizontal.target % alignof(std::uint32_t) || receipt.vertical.target % alignof(std::uint32_t))
+            return finish(ClockResult::BindingChanged);
+        if (!D::TryEnter())
+            return finish(ClockResult::Busy);
+        D::Scope scope;
+        try
+        {
+            data = std::make_unique<Data>();
+        }
+        catch (...)
+        {
+            return finish(ClockResult::WriteFailure);
+        }
+        ownsAttempt = true;
+        const auto read = [&](Bits& next) { return C::ReadPair(image, row, next); };
+        auto       result = C::Sample(image, owner, afterApplicationOwner, data->beforeWorld, data->before, read);
+        if (result != ClockResult::Ok)
+            return finish(result);
+        if ((result = C::Sample(image, owner, afterApplicationOwner, data->observedWorld, data->observed, read)) != ClockResult::Ok)
+            return finish(result);
+        if (!C::Same(data->before, data->observed) || !D::Same(data->beforeWorld, data->observedWorld, true))
+            return finish(ClockResult::BindingChanged);
+        receipt.original = data->before;
+        receipt.root = data->beforeWorld.root;
+        receipt.world = data->beforeWorld.world;
+        // Conditional getter repair is tied to the exact pair observed by the
+        // SDK before it computed its outputs. A later current pair is not ours.
+        if (expected && !C::Same(*expected, data->before))
+            return finish(ClockResult::BindingChanged);
+        receipt.horizontal.before = data->before.horizontal;
+        receipt.vertical.before = data->before.vertical;
+        receipt.horizontal.replacement = replacement.horizontal;
+        receipt.vertical.replacement = replacement.vertical;
+#if defined(MTA_DE_CAMERA_DIRECTION_EXCHANGE)
+        const auto primitive = exchange ? exchange : &MTA_DE_CAMERA_DIRECTION_EXCHANGE;
+#else
+        const auto primitive = exchange ? exchange : &C::NativeExchange;
+#endif
+        const auto enter = [&](NativeCameraDirectionCalls::Step& step)
+        {
+            step.entered = true;
+            const auto status = primitive(step.target, step.before, step.replacement, step.observed, step.exceptionCode);
+            if (status != ClockResult::Ok)
+                return status;
+            step.returned = true;
+            if (step.observed != step.before)
+                return ClockResult::Busy;
+            step.accepted = true;
+            return ClockResult::Ok;
+        };
+        result = enter(receipt.horizontal);
+        if (result != ClockResult::Ok)
+        {
+            if (receipt.horizontal.returned && !receipt.horizontal.accepted)
+            {
+                receipt.knownNoEffect = true;
+                data.reset();
+            }
+            return finish(result);
+        }
+        const Bits prefix{replacement.horizontal, data->before.vertical};
+        if ((result = C::Sample(image, owner, afterApplicationOwner, data->observedWorld, data->observed, read)) != ClockResult::Ok)
+            return finish(result);
+        if (!C::Same(prefix, data->observed) || !D::Same(data->beforeWorld, data->observedWorld, true))
+            return finish(ClockResult::BindingChanged);
+        if ((result = C::Sample(image, owner, afterApplicationOwner, data->confirmedWorld, data->confirmed, read)) != ClockResult::Ok)
+            return finish(result);
+        if (!C::Same(prefix, data->confirmed) || !D::Same(data->beforeWorld, data->confirmedWorld, true) ||
+            !D::Same(data->observedWorld, data->confirmedWorld, true))
+            return finish(ClockResult::BindingChanged);
+        result = enter(receipt.vertical);
+        if (result != ClockResult::Ok)
+            return finish(result);
+        if ((result = C::Sample(image, owner, afterApplicationOwner, data->observedWorld, data->observed, read)) != ClockResult::Ok)
+            return finish(result);
+        if (!C::Same(replacement, data->observed) || !D::Same(data->beforeWorld, data->observedWorld, true))
+            return finish(ClockResult::BindingChanged);
+        if ((result = C::Sample(image, owner, afterApplicationOwner, data->confirmedWorld, data->confirmed, read)) != ClockResult::Ok)
+            return finish(result);
+        if (!C::Same(replacement, data->confirmed) || !D::Same(data->beforeWorld, data->confirmedWorld, true) ||
+            !D::Same(data->observedWorld, data->confirmedWorld, true))
+            return finish(ClockResult::BindingChanged);
+        receipt.after = data->confirmed;
+        receipt.horizontal.after = data->confirmed.horizontal;
+        receipt.vertical.after = data->confirmed.vertical;
         receipt.effectsVerified = true;
         data.reset();
         return finish(ClockResult::Ok);

@@ -5,6 +5,8 @@
  *****************************************************************************/
 #include "../../Client/game_de/CClockDE.h"
 #include "../../Client/game_de/NativeCameraFovWrite.h"
+#include "../../Client/game_de/NativeCameraDirection.h"
+#include "../../Client/game_de/NativeCameraDirectionProfile.h"
 #include "../../Client/game_de/CCamFovDE.h"
 #include "../../Client/game_de/NativeCameraDataMemory.h"
 #include "../../Client/game_de/NativeCameraDataProfile.h"
@@ -676,6 +678,15 @@ namespace ClockCameraRestoreOwnerTest
             *reinterpret_cast<unsigned char*>(camera + 0x55) ^= 1;
         return mta::game_de::ClockResult::Ok;
     }
+}
+
+namespace ClockCameraDirectionOwnerTest
+{
+    std::uintptr_t            image = 0, worldMode = 0, sourceRva = 0, targetH = 0, targetV = 0;
+    std::uint32_t             beforeH = 0, beforeV = 0, replacementH = 0, replacementV = 0;
+    unsigned                  calls = 0, step = 0, scenario = 0;
+    bool                      ordered = false;
+    mta::game_de::ClockResult Exchange(std::uintptr_t, std::uint32_t, std::uint32_t, std::uint32_t&, std::uint32_t&) noexcept;
 }
 
 namespace ClockCameraFovWriteOwnerTest
@@ -3520,9 +3531,64 @@ namespace ClockWorldIgnoreOwnerTest
     }
 }
 
-#define MTA_DE_CAMERA_FOV_EXCHANGE ClockCameraFovWriteOwnerTest::Exchange
+#define MTA_DE_CAMERA_DIRECTION_EXCHANGE ClockCameraDirectionOwnerTest::Exchange
+#define MTA_DE_CAMERA_FOV_EXCHANGE       ClockCameraFovWriteOwnerTest::Exchange
 #include "../../Client/game_de/NativeCameraDataMemory.cpp"
 #undef MTA_DE_CAMERA_FOV_EXCHANGE
+#undef MTA_DE_CAMERA_DIRECTION_EXCHANGE
+namespace ClockCameraDirectionOwnerTest
+{
+    mta::game_de::ClockResult Exchange(std::uintptr_t target, std::uint32_t expected, std::uint32_t replacement, std::uint32_t& observed,
+                                       std::uint32_t& exception) noexcept
+    {
+        ++calls;
+        ++step;
+        const bool first = step == 1;
+        if (step > 2 || target != (first ? targetH : targetV) || expected != (first ? beforeH : beforeV) ||
+            replacement != (first ? replacementH : replacementV))
+            std::abort();
+        if (first && *reinterpret_cast<std::uint32_t*>(targetV) != beforeV)
+            std::abort();
+        if (!first)
+        {
+            ordered = *reinterpret_cast<std::uint32_t*>(targetH) == replacementH;
+            if (!ordered)
+                std::abort();
+        }
+        if ((scenario == 1 && first) || ((scenario == 2 || scenario == 17) && !first))
+            *reinterpret_cast<std::uint32_t*>(target) = 0x3f000000u;
+        if (((scenario == 3 || scenario == 15) && first) || (scenario == 5 && !first))
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return mta::game_de::ClockResult::WriteFailure;
+        }
+        // Both positive stores execute the unconditionally compiled real CAS.
+        // Fault modes alter only its external acknowledgement bookends.
+        const auto result = mta::game_de::CameraDirectionDetail::NativeExchange(target, expected, replacement, observed, exception);
+        if ((scenario == 4 && first) || ((scenario == 6 || scenario == 16) && !first))
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return mta::game_de::ClockResult::WriteFailure;
+        }
+        if ((scenario == 7 && first) || (scenario == 11 && !first))
+            *reinterpret_cast<LONG*>(image + mta::game_de::NativeBorrowedGcProfile::markerRva) = 1;
+        if ((scenario == 8 && first) || (scenario == 12 && !first))
+            *reinterpret_cast<std::uint32_t*>(target) = 0x3f000000u;
+        if ((scenario == 9 && first) || (scenario == 13 && !first))
+            *reinterpret_cast<std::uint32_t*>(worldMode) ^= 1;
+        if ((scenario == 10 && first) || (scenario == 14 && !first))
+        {
+            const auto code = reinterpret_cast<void*>(image + sourceRva);
+            DWORD      prior = 0, ignored = 0;
+            if (!::VirtualProtect(code, 1, PAGE_READWRITE, &prior))
+                std::abort();
+            *static_cast<unsigned char*>(code) ^= 1;
+            if (!::VirtualProtect(code, 1, prior, &ignored) || !::FlushInstructionCache(GetCurrentProcess(), code, 1))
+                std::abort();
+        }
+        return result;
+    }
+}
 namespace ClockCameraFovWriteOwnerTest
 {
     mta::game_de::ClockResult Exchange(std::uintptr_t target, std::uint32_t expected, std::uint32_t replacement, std::uint32_t& observed,
@@ -4247,7 +4313,7 @@ namespace
             IMAGE_NT_HEADERS64 nt{};
             nt.Signature = IMAGE_NT_SIGNATURE;
             nt.FileHeader.Machine = IMAGE_FILE_MACHINE_AMD64;
-            nt.FileHeader.NumberOfSections = 18;
+            nt.FileHeader.NumberOfSections = 20;
             nt.FileHeader.SizeOfOptionalHeader = sizeof(IMAGE_OPTIONAL_HEADER64);
             nt.FileHeader.Characteristics = IMAGE_FILE_EXECUTABLE_IMAGE | IMAGE_FILE_LARGE_ADDRESS_AWARE;
             nt.OptionalHeader.Magic = IMAGE_NT_OPTIONAL_HDR64_MAGIC;
@@ -4266,7 +4332,7 @@ namespace
             nt.OptionalHeader.SizeOfStackCommit = nt.OptionalHeader.SizeOfHeapCommit = 0x1000;
             nt.OptionalHeader.NumberOfRvaAndSizes = IMAGE_NUMBEROF_DIRECTORY_ENTRIES;
             std::memcpy(bytes.data() + dos.e_lfanew, &nt, sizeof(nt));
-            std::array<IMAGE_SECTION_HEADER, 18> sections{};
+            std::array<IMAGE_SECTION_HEADER, 20> sections{};
             // A Windows image section table must describe adjacent virtual
             // ranges. Sparse zero-filled sections preserve the actual native
             // RVAs without leaving loader-invalid gaps or a huge raw file.
@@ -4290,6 +4356,11 @@ namespace
             // an otherwise read-only PE section, and surrounding SDK literals
             // must retain their non-executable section contract.
             constexpr std::uint32_t mathPageRva = 0x3e98000;
+            // Camera direction independently pins the cosine import thunk
+            // at 0x3e9080f. Its exact page must also be RX in PE metadata:
+            // VirtualProtect cannot turn a read-only section into admitted
+            // source code. Keep the two surrounding literal gaps read-only.
+            constexpr std::uint32_t cameraCosPageRva = 0x3e90000;
             // The Teleport prerequisite reuses real UObject membership and
             // logical-world profiles whose instructions lie in three later
             // native ranges. Model just those pages as code; surrounding SDK
@@ -4301,14 +4372,16 @@ namespace
             zeroSection(6, ".level", 0x2fa9000, 0x2000);
             zeroSection(7, ".gapL", 0x2fab000, 0x3002000 - 0x2fab000);
             zeroSection(8, ".actor", 0x3002000, 0x1000);
-            zeroSection(9, ".gapA", 0x3003000, mathPageRva - 0x3003000);
-            zeroSection(10, ".math", mathPageRva, 0x1000);
-            zeroSection(11, ".gapM", mathPageRva + 0x1000, animationPageRva - mathPageRva - 0x1000);
-            zeroSection(12, ".anims", animationPageRva, 0x1000);
-            zeroSection(13, ".gap2", animationPageRva + 0x1000, cheatPageRva - animationPageRva - 0x1000);
-            zeroSection(14, ".cheats", cheatPageRva, 0x1000);
-            zeroSection(15, ".gap3", cheatPageRva + 0x1000, DataRva - cheatPageRva - 0x1000);
-            zeroSection(17, ".tail", DataRva + DataSize, nt.OptionalHeader.SizeOfImage - DataRva - DataSize);
+            zeroSection(9, ".gapA", 0x3003000, cameraCosPageRva - 0x3003000);
+            zeroSection(10, ".cos", cameraCosPageRva, 0x1000);
+            zeroSection(11, ".gapC", cameraCosPageRva + 0x1000, mathPageRva - cameraCosPageRva - 0x1000);
+            zeroSection(12, ".math", mathPageRva, 0x1000);
+            zeroSection(13, ".gapM", mathPageRva + 0x1000, animationPageRva - mathPageRva - 0x1000);
+            zeroSection(14, ".anims", animationPageRva, 0x1000);
+            zeroSection(15, ".gap2", animationPageRva + 0x1000, cheatPageRva - animationPageRva - 0x1000);
+            zeroSection(16, ".cheats", cheatPageRva, 0x1000);
+            zeroSection(17, ".gap3", cheatPageRva + 0x1000, DataRva - cheatPageRva - 0x1000);
+            zeroSection(19, ".tail", DataRva + DataSize, nt.OptionalHeader.SizeOfImage - DataRva - DataSize);
             // Only bounded admitted pages gain executable/writable protection
             // below. These virtual-section flags also describe the earlier
             // application caller and later root/state fields to the real gate.
@@ -4318,19 +4391,20 @@ namespace
             sections[6].Characteristics |= IMAGE_SCN_MEM_EXECUTE;
             sections[8].Characteristics |= IMAGE_SCN_MEM_EXECUTE;
             sections[10].Characteristics |= IMAGE_SCN_MEM_EXECUTE;
-            sections[12].Characteristics |= IMAGE_SCN_MEM_WRITE;
+            sections[12].Characteristics |= IMAGE_SCN_MEM_EXECUTE;
             sections[14].Characteristics |= IMAGE_SCN_MEM_WRITE;
-            sections[17].Characteristics |= IMAGE_SCN_MEM_WRITE;
+            sections[16].Characteristics |= IMAGE_SCN_MEM_WRITE;
+            sections[19].Characteristics |= IMAGE_SCN_MEM_WRITE;
             std::memcpy(sections[1].Name, ".text", 5);
             sections[1].VirtualAddress = TextRva;
             sections[1].Misc.VirtualSize = sections[1].SizeOfRawData = TextSize;
             sections[1].PointerToRawData = 0x1000;
             sections[1].Characteristics = IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE;
-            std::memcpy(sections[16].Name, ".data", 5);
-            sections[16].VirtualAddress = DataRva;
-            sections[16].Misc.VirtualSize = sections[16].SizeOfRawData = DataSize;
-            sections[16].PointerToRawData = 0x1000 + TextSize;
-            sections[16].Characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE;
+            std::memcpy(sections[18].Name, ".data", 5);
+            sections[18].VirtualAddress = DataRva;
+            sections[18].Misc.VirtualSize = sections[18].SizeOfRawData = DataSize;
+            sections[18].PointerToRawData = 0x1000 + TextSize;
+            sections[18].Characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE;
             std::memcpy(bytes.data() + dos.e_lfanew + sizeof(nt), sections.data(), sizeof(sections));
             const auto code = [&](std::uintptr_t rva, const auto& data) { std::memcpy(bytes.data() + 0x1000 + rva - TextRva, data.data(), data.size()); };
             code(NativeClockProfile::clockCodeRva, NativeClockProfile::clockCode);
@@ -8921,6 +8995,7 @@ namespace
 #include "NativeCameraBasicsOwnerTests.inl"
 #include "JumpCutOwnerTests.inl"
 #include "FovWriteOwnerTests.inl"
+#include "DirectionOwnerTests.inl"
 // The model fixture consumes the shared byte helpers defined by the earlier
 // private-association fixture; keep its consumer after those definitions.
 #include "../../Client/game_de/CModelInfoDE.h"
@@ -9077,6 +9152,17 @@ int main(int argc, char** argv)
         staticAssociationInitializationUnknown || (argc == 3 && std::strcmp(argv[2], "--static-association-initialization-success") == 0);
     const bool animationStaticAssociationReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-static-association-reads") == 0;
     const bool animationAssociationGroupReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-association-group-reads") == 0;
+    const bool cameraDirectionOnly = argc == 3 && std::strncmp(argv[2], "--camera-direction-", 19) == 0;
+    unsigned   cameraDirectionScenario = 18;
+    if (cameraDirectionOnly)
+    {
+        const char* names[] = {"success",          "cas-rejected",  "second-rejected",  "h-before",        "h-after",        "v-before",
+                               "v-after",          "h-owner-loss",  "h-value-mismatch", "h-world-drift",   "h-code-drift",   "v-owner-loss",
+                               "v-value-mismatch", "v-world-drift", "v-code-drift",     "repair-h-before", "repair-v-after", "repair-second-rejected"};
+        for (unsigned i = 0; i != 18; ++i)
+            if (std::strcmp(argv[2] + 19, names[i]) == 0)
+                cameraDirectionScenario = i;
+    }
     const bool cameraFovWriteOnly = argc == 3 && std::strncmp(argv[2], "--camera-fov-write-", 19) == 0;
     unsigned   cameraFovWriteScenario = 8;
     if (cameraFovWriteOnly)
@@ -9367,9 +9453,9 @@ int main(int argc, char** argv)
            privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly ||
            sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly ||
            animationDefinitionBlockNamesOnly || animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly ||
-           cameraBasicsOnly || cameraJumpCutOnly || cameraFovWriteOnly || applicationTimingOnly || emptyBlockRemovalOnly || blockRegistrationOnly ||
-           bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly || dynamicClumpOnly ||
-           groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
+           cameraBasicsOnly || cameraJumpCutOnly || cameraFovWriteOnly || cameraDirectionOnly || applicationTimingOnly || emptyBlockRemovalOnly ||
+           blockRegistrationOnly || bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly ||
+           dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
            groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
            animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
            privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
@@ -9550,6 +9636,15 @@ int main(int argc, char** argv)
         fixture.Create(argv[1]);
         // One real module-pinned lifetime needs one pristine host process.
         NativeAnimationBlocksOwnedSdk(fixture, &AnimationAssociationGroupChildProductsOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (cameraDirectionOnly)
+    {
+        Check(cameraDirectionScenario < 18, "exact finite camera direction scenario required");
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        CameraDirectionOwnerFixture::Run(fixture, cameraDirectionScenario);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

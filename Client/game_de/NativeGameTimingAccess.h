@@ -74,6 +74,7 @@
 #include "NativeAnimationManagerAccess.h"
 #include "NativeWeaponConstructorProgress.h"
 #include "NativeGameConstructorServices.h"
+#include "NativePreparedGameBorrow.h"
 #include "NativeStartupMenuAccess.h"
 #include "NativeStartupPreparationAccess.h"
 #include "NativeNumericGarageAccess.h"
@@ -258,6 +259,16 @@ namespace mta::game_de
         // Read the genuine original BUILDING constructor capacity, separately
         // from mutable pool size. Older owners explicitly refuse this surface.
         virtual ClockResult ReadDefaultBuildingPoolCapacity(std::uint32_t&) noexcept { return ClockResult::NotInitialized; }
+
+        // A prepared identity value alone cannot retain SDK products. These
+        // private CPU lifetime channels deliberately refuse on older owners.
+        virtual ClockResult AcquirePreparedGameBorrow(const NativeGameConstructorServices&, NativePreparedGameBorrow::Token&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
+        virtual ClockResult ValidatePreparedGameBorrow(const NativePreparedGameBorrow::Token&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult CheckPreparedGameBorrowDrain(const NativePreparedGameBorrow::Token&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult ReleasePreparedGameBorrow(NativePreparedGameBorrow::Token&) noexcept { return ClockResult::NotInitialized; }
 
     protected:
         ~NativeGameTimingAccess() = default;

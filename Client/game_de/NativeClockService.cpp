@@ -10,6 +10,7 @@
 #include "NativeClockMemory.h"
 #include "NativePresentTransitionGate.h"
 #include "NativeGameTimingAccess.h"
+#include "NativePreparedGameBorrow.h"
 #include "NativeGameStateMemory.h"
 #include "NativeCheatFlagAccess.h"
 #include "NativeWeatherTransitionJournal.h"
@@ -364,6 +365,10 @@ namespace mta::game_de
             ClockResult ReadModelAnimFileIndex(std::uint32_t, std::uint32_t&) noexcept override;
             ClockResult CreateAndPublishPedModelMetadata(std::uint32_t) noexcept override;
             ClockResult CopyStartupModelCollision(std::uint32_t, std::uint32_t) noexcept override;
+            ClockResult AcquirePreparedGameBorrow(const NativeGameConstructorServices&, NativePreparedGameBorrow::Token&) noexcept override;
+            ClockResult ValidatePreparedGameBorrow(const NativePreparedGameBorrow::Token&) noexcept override;
+            ClockResult CheckPreparedGameBorrowDrain(const NativePreparedGameBorrow::Token&) noexcept override;
+            ClockResult ReleasePreparedGameBorrow(NativePreparedGameBorrow::Token&) noexcept override;
             ClockResult ReadDefaultBuildingPoolCapacity(std::uint32_t&) noexcept override;
             ClockResult RequireStartupInitializationReady() noexcept override;
             ClockResult RequireStartupPedModelCreationReady() noexcept override;
@@ -720,6 +725,7 @@ namespace mta::game_de
             // A bank's timestamp conversion owns no private allocation.
             // Retain only its actual entered/unknown operation journal; do
             // not hide that debt in the custom buffer retirement generation.
+            NativePreparedGameBorrow                          preparedGameBorrow;
             NativeCameraRowBorrow                             cameraRowBorrows;
             NativeCameraDirection                             cameraDirection;
             NativeCameraDirectionCalls::Receipt               cameraDirectionReceipt;
@@ -930,7 +936,7 @@ namespace mta::game_de
         }
         bool NativeLifetimeRetained() noexcept
         {
-            return runtime.cameraRowBorrows.IsRetained() || runtime.associationGroupInitializationBusy.load() ||
+            return runtime.preparedGameBorrow.IsRetained() || runtime.cameraRowBorrows.IsRetained() || runtime.associationGroupInitializationBusy.load() ||
                    runtime.staticAssociationInitializationBusy.load() || runtime.staticAssociationInitializationRecovery.load() ||
                    runtime.presentationRecovery.Held() || runtime.weatherOverridePeers.PresentationHeld() || runtime.startupMenuBusy.load() ||
                    runtime.startupMenuRetained.load() || runtime.startupCollisionBusy.load() || runtime.startupCollisionRetained.load() ||
@@ -984,6 +990,7 @@ namespace mta::game_de
             // Revocation can happen inside a native callback while the same
             // controller is busy. Its atomic epoch barrier never waits on or
             // re-enters that operation; later bookends reject public issuance.
+            runtime.preparedGameBorrow.CloseIssuance();
             runtime.cameraRowBorrows.CloseIssuance();
             runtime.privateAssociations.CloseFacadeIssuance(runtime.generation.load());
             runtime.active.store(false);
@@ -6195,6 +6202,88 @@ namespace mta::game_de
                 Stop(result);
             return result;
         }
+        // Prepared graph APIs share the existing callback/API-operation
+        // guards; define them only after those guard declarations are visible.
+        NativePreparedGameBorrow::Identity PreparedGameBorrowIdentity() noexcept
+        {
+            return {runtime.generation.load(), runtime.admissionSerial.load(), runtime.image, runtime.producerThread};
+        }
+        ClockResult PreparedGameBorrowDrainState(const NativePreparedGameBorrow::Token& token) noexcept
+        {
+            if (!token)
+                return ClockResult::InvalidArgument;
+            const auto generation = runtime.generation.load();
+            if (!runtime.bound.load() || !generation || !runtime.image || !runtime.producerThread || !runtime.admissionSerial.load())
+                return ClockResult::NotInitialized;
+            if (GetCurrentThreadId() != runtime.producerThread)
+                return ClockResult::WrongThread;
+            if (callbackDepth || runtime.inFlight.load() || runtime.peersRetained.load() || runtime.weatherOverridePeers.Held())
+                return ClockResult::Busy;
+            if (runtime.admissionGeneration.load() != generation)
+                return ClockResult::OwnerConflict;
+            if (runtime.active.load() || !runtime.stopping.load() || !runtime.preparedGameBorrow.IssuanceClosed())
+                return ClockResult::Busy;
+            const auto result = runtime.preparedGameBorrow.Validate(token, PreparedGameBorrowIdentity());
+            // Only the exact retained slot's closed-state result permits drain;
+            // neither an old token nor a caller's earlier preflight suffices.
+            return result == ClockResult::Stopped ? ClockResult::Ok : result == ClockResult::Ok ? ClockResult::OwnerConflict : result;
+        }
+        ClockResult NativeAccess::AcquirePreparedGameBorrow(const NativeGameConstructorServices& services, NativePreparedGameBorrow::Token& output) noexcept
+        {
+            auto result = CheckApplicationTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto supplied = services;
+            return runtime.preparedGameBorrow.AcquireChecked(PreparedGameBorrowIdentity(), supplied, output,
+                                                             [&]() noexcept
+                                                             {
+                                                                 NativeGameConstructorServices current;
+                                                                 auto                          checked = CheckApplicationTimingOwner();
+                                                                 if (checked != ClockResult::Ok ||
+                                                                     (checked = ValidateConstructorServices(supplied)) != ClockResult::Ok ||
+                                                                     (checked = CaptureConstructorServices(&runtime.clock, current)) != ClockResult::Ok)
+                                                                     return checked;
+                                                                 if (!supplied.Same(current) || !supplied.Same(services))
+                                                                     return ClockResult::OwnerConflict;
+                                                                 if ((checked = CheckApplicationTimingOwner()) != ClockResult::Ok)
+                                                                     return checked;
+                                                                 return ValidateConstructorServices(supplied);
+                                                             });
+        }
+        ClockResult NativeAccess::ValidatePreparedGameBorrow(const NativePreparedGameBorrow::Token& token) noexcept
+        {
+            auto result = CheckApplicationTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto                    identity = PreparedGameBorrowIdentity();
+            NativeGameConstructorServices held;
+            // The hold retains this Runtime's CPU service objects, not their
+            // mutable native state. Reuse the current identity validator;
+            // each selected service getter keeps its own native qualification.
+            if ((result = runtime.preparedGameBorrow.ReadServices(token, identity, held)) != ClockResult::Ok ||
+                (result = ValidateConstructorServices(held)) != ClockResult::Ok)
+                return result;
+            if ((result = CheckApplicationTimingOwner()) != ClockResult::Ok || (result = ValidateConstructorServices(held)) != ClockResult::Ok)
+                return result;
+            return runtime.preparedGameBorrow.Validate(token, identity);
+        }
+        ClockResult NativeAccess::CheckPreparedGameBorrowDrain(const NativePreparedGameBorrow::Token& token) noexcept
+        {
+            ApiOperation operation;
+            if (!operation.acquired)
+                return ClockResult::Busy;
+            return PreparedGameBorrowDrainState(token);
+        }
+        ClockResult NativeAccess::ReleasePreparedGameBorrow(NativePreparedGameBorrow::Token& token) noexcept
+        {
+            ApiOperation operation;
+            if (!operation.acquired)
+                return ClockResult::Busy;
+            // Release repeats the actual stopped/quiescent producer checks;
+            // a successful earlier SDK preflight grants no lasting authority.
+            const auto result = PreparedGameBorrowDrainState(token);
+            return result == ClockResult::Ok ? runtime.preparedGameBorrow.Release(token, PreparedGameBorrowIdentity()) : result;
+        }
         ClockResult NativeAccess::AcquireCameraRowBorrow(std::uint32_t row, NativeCameraRowBorrow::Token& output) noexcept
         {
             return NativeCameraDataMemory::AcquireRowBorrow(runtime.image, row, runtime.cameraRowBorrows, CameraRowBorrowIdentity(), &CheckTimingOwner,
@@ -10237,6 +10326,8 @@ namespace mta::game_de
         // a rejected executable must not bind a camera client generation.
         if (valid)
             valid = runtime.cameraRowBorrows.Open(CameraRowBorrowIdentity()) == ClockResult::Ok;
+        if (valid)
+            valid = runtime.preparedGameBorrow.Open(PreparedGameBorrowIdentity()) == ClockResult::Ok;
         if (!valid)
             Stop(ClockResult::UnsupportedBuild);
         HMODULE retained = nullptr;
@@ -10273,7 +10364,10 @@ namespace mta::game_de
                 Stop(presentationRefusal == ClockResult::Ok ? ClockResult::PatchFailure : presentationRefusal);
         }
         if (!valid)
+        {
+            runtime.preparedGameBorrow.CloseIssuance();
             runtime.cameraRowBorrows.CloseIssuance();
+        }
         ReadState(finalState);
         hasFinalState = true;
         state = finalState;

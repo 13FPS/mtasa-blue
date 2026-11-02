@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('BuildingPoolDefault','StartupLifecycle','CameraMainTarget','CameraWidescreen','CameraGetCam','CameraTargetSetter','CameraTarget','CameraHistory','CameraRowBorrow','CameraDirection','CameraFovWrite','CameraJumpCut','CameraBasics','ModelTimeGetter','VehiclePredicates','EmptyBlockRemoval','BlockRegistration','BankPostprocess','BankEviction','BankDecompression','ApplicationTiming','AnimationHierarchyUncompress','NumericAssociationOwner','DynamicClumpOwner','AnimationAssociationGroupFactories','GroupSourceCreationOwner','JointTemporaryStaticInitializerOwner','GroupReplacementOwner','GroupCopyAnimationOwner','GroupEmptyInitialization','AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','PresentTransitionClock','StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
+    [ValidateSet('PreparedGameBorrow','BuildingPoolDefault','StartupLifecycle','CameraMainTarget','CameraWidescreen','CameraGetCam','CameraTargetSetter','CameraTarget','CameraHistory','CameraRowBorrow','CameraDirection','CameraFovWrite','CameraJumpCut','CameraBasics','ModelTimeGetter','VehiclePredicates','EmptyBlockRemoval','BlockRegistration','BankPostprocess','BankEviction','BankDecompression','ApplicationTiming','AnimationHierarchyUncompress','NumericAssociationOwner','DynamicClumpOwner','AnimationAssociationGroupFactories','GroupSourceCreationOwner','JointTemporaryStaticInitializerOwner','GroupReplacementOwner','GroupCopyAnimationOwner','GroupEmptyInitialization','AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','PresentTransitionClock','StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -23,6 +23,12 @@ $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;a
 # Historical markers start false and are set only by the branch that actually
 # executed. Focus mode must never inherit the cumulative suite's claims.
 $record['runScope'] = $Scope
+$record['nativePreparedGameBorrowActualRuntimeTested']=$false
+$record['nativePreparedGameBorrowRetentionTested']=$false
+$record['nativePreparedGameBorrowRefusalsTested']=$false
+$record['nativePreparedGameBorrowProducerDrainTested']=$false
+$record['nativePreparedGameBorrowNoEffectsTested']=$false
+$record['nativePreparedGameBorrowOwnerTested']=$false
 $record['nativeBuildingPoolDefaultActualSdkOwnerTested']=$false
 $record['nativeBuildingPoolDefaultOriginalVsLiveTested']=$false
 $record['nativeBuildingPoolDefaultRefusalsTested']=$false
@@ -850,6 +856,9 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
     $sourceNames += @('Client/game_de/NativeBuildingPoolDefaultMemory.h','Client/game_de/NativeBuildingPoolDefaultMemory.cpp',
         'Client/game_de/NativeBuildingPoolDefaultProfile.h','Client/game_de/CGameBuildingPoolDefaultDE.h','Client/game_de/CGameBuildingPoolDefaultDE.cpp',
         'Tests/definitive/BuildingPoolDefaultOwnerTests.inl','Tests/definitive/RowBorrowOwnerTests.inl','Tests/definitive/NativeStreamingLoadAllGraphFixture.h')
+    $sourceNames += @('Client/game_de/NativePreparedGameBorrow.h','Client/game_de/CGamePreparedBorrowDE.h','Client/game_de/CGamePreparedBorrowDE.cpp',
+        'Tests/definitive/PreparedGameBorrowOwnerTests.inl','Tests/definitive/NativeGameConstructorServicesOwnerTests.inl',
+        'Tests/definitive/BuildingPoolDefaultOwnerTests.inl','Tests/definitive/RowBorrowOwnerTests.inl')
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
@@ -1209,6 +1218,8 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         # NativeClock* discovery deliberately does not collect other helpers.
         (Join-Path $taskRoot 'Client/game_de/NativeBuildingPoolDefaultMemory.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameBuildingPoolDefaultDE.cpp'),
+        # The envelope is a real SDK lifetime owner; link its actual body once.
+        (Join-Path $taskRoot 'Client/game_de/CGamePreparedBorrowDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CClockDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CGameTimingDE.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeGravityReadAccess.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWeatherTransitionDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CWeatherScalarsDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CWeatherOverridesDE.cpp'),
@@ -1403,10 +1414,11 @@ namespace ClockPrivateHierarchyParentWriteFixture {
     # process retirement; keep its large synthetic PE in owned disposable scratch.
     # Preserve the argument vector: an if result with one item becomes a
     # scalar string, so later += would append the switch to the path.
-    $fixtureArguments = @(if ($Scope -in @('AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','StartupPreparationReadiness','StartupNumericGarages','StartupStreamingReceiver','StartupInitializationReadiness','StartupLifecycle','BuildingPoolDefault','PresentTransitionClock')) { $scratchRoot } else { $outputRoot })
+    $fixtureArguments = @(if ($Scope -in @('AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','StartupPreparationReadiness','StartupNumericGarages','StartupStreamingReceiver','StartupInitializationReadiness','StartupLifecycle','BuildingPoolDefault','PreparedGameBorrow','PresentTransitionClock')) { $scratchRoot } else { $outputRoot })
     if ($Scope -eq 'ModelTimeGetter') { $fixtureArguments += '--model-time-getter' }
     if ($Scope -eq 'VehiclePredicates') { $fixtureArguments += '--vehicle-predicates' }
     if ($Scope -eq 'PresentTransitionClock') { $fixtureArguments += '--present-transition-clock' }
+    if ($Scope -eq 'PreparedGameBorrow') { $fixtureArguments += '--prepared-game-borrow' }
     if ($Scope -eq 'BuildingPoolDefault') { $fixtureArguments += '--building-pool-default' }
     if ($Scope -eq 'StartupLifecycle') { $fixtureArguments += '--startup-lifecycle' }
     if ($Scope -eq 'StartupInitializationReadiness') { $fixtureArguments += '--startup-initialization-readiness' }
@@ -2516,7 +2528,7 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         $text = $texts -join [Environment]::NewLine
     } else {
         $testExecutable = $executable
-    if ($Scope -in @('AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','StartupPreparationReadiness','StartupNumericGarages','StartupStreamingReceiver','StartupInitializationReadiness','StartupLifecycle','BuildingPoolDefault','PresentTransitionClock')) {
+    if ($Scope -in @('AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','StartupPreparationReadiness','StartupNumericGarages','StartupStreamingReceiver','StartupInitializationReadiness','StartupLifecycle','BuildingPoolDefault','PreparedGameBorrow','PresentTransitionClock')) {
         # The fixture's existing path guard requires its backing-image directory
         # to equal its executable directory. Run an exact owned scratch copy so
         # that guard stays intact and neither retained synthetic PE survives.
@@ -2531,7 +2543,18 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if($Scope -eq 'BuildingPoolDefault'){
+    if($Scope -eq 'PreparedGameBorrow'){
+        $record.nativePreparedGameBorrowActualRuntimeTested=$text.Contains('Production prepared game borrow actual runtime envelope completed')
+        $record.nativePreparedGameBorrowRetentionTested=$text.Contains('Production prepared game borrow retention and refusal completed')
+        $record.nativePreparedGameBorrowRefusalsTested=$text.Contains('Production prepared game borrow current and stale refusal completed')
+        $record.nativePreparedGameBorrowProducerDrainTested=$text.Contains('Production prepared game borrow producer drain completed')
+        $record.nativePreparedGameBorrowNoEffectsTested=$text.Contains('Production prepared game borrow no effects completed')
+        $record.nativePreparedGameBorrowOwnerTested=$record.nativePreparedGameBorrowActualRuntimeTested -and $record.nativePreparedGameBorrowRetentionTested -and
+            $record.nativePreparedGameBorrowRefusalsTested -and $record.nativePreparedGameBorrowProducerDrainTested -and $record.nativePreparedGameBorrowNoEffectsTested -and
+            $text.Contains('Production prepared game borrow focused owner fixture completed')
+        if(-not $record.nativePreparedGameBorrowOwnerTested){throw 'Actual prepared graph owner fixture incomplete'}
+        $record.productionNativeCallbackTested=$true
+    } elseif($Scope -eq 'BuildingPoolDefault'){
         $record.nativeBuildingPoolDefaultActualSdkOwnerTested=$text.Contains('Production building pool default actual const SDK owner completed')
         $record.nativeBuildingPoolDefaultOriginalVsLiveTested=$text.Contains('Production building pool default original versus live capacity completed')
         $record.nativeBuildingPoolDefaultRefusalsTested=$text.Contains('Production building pool default refusal and output preservation completed')

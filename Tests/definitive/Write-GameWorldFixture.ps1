@@ -60,7 +60,7 @@ function InterfaceMethods([string]$RelativePath) {
     foreach($required in @('void\s+RemoveGameWorld\s*\(\s*\)\s*override\s*;','void\s+RestoreGameWorld\s*\(\s*\)\s*override\s*;','bool\s+SetBuildingPoolSize\s*\(\s*(?:std::)?size_t\s+\w+\s*\)\s*override\s*;')) {
         if($world -notmatch $required){throw "Actual World SDK override missing: $required"}
     }
-    if($world -notmatch 'class\s+CGameWorldDE\s*:\s*public\s+CGameResetDE'){throw 'Actual World must retain the Reset parent'}
+    if($world -notmatch 'class\s+CGameWorldDE\s*:\s*public\s+CGameResetDE' -and ($world -notmatch 'class\s+CGameWorldDE\s*:\s*public\s+CGameWorldMixinDE\s*<\s*CGameResetDE\s*>' -or $world -notmatch 'class\s+CGameWorldMixinDE\s*:\s*public\s+GameBase')){throw 'Actual World must retain its Reset parent through the exact linear mixin and legacy class shell'}
     $testedGame=@('GetPools')
     $methods=@(InterfaceMethods 'Client/sdk/game/CGame.h'|Where-Object {$provided -notcontains $_.name -and $testedGame -notcontains $_.name})
     $lines=@('#pragma once','namespace world_fixture {','class GameWorldFixtureBase : public mta::game_de::CGameWorldDE { public:',

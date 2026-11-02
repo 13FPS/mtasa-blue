@@ -67,7 +67,22 @@
 #include "../../Client/game_de/NativePedRebuildCalls.h"
 #include "NativePedRebuildFixture.h"
 #include "NativePedWeaponGrantFixture.h"
+// The strict lifecycle receiver defines CHud's by-value colour getters;
+// it needs the genuine complete shared colour type before the SDK headers.
+#include <SharedUtil.Defines.h>
+#pragma warning(push)
+#pragma warning(disable : 4201 4456)
+#include <SharedUtil.Misc.h>
+#pragma warning(pop)
 #include <game/CGame.h>
+#include "../../Client/game_de/CGameStartupLifecycleDE.h"
+#include <game/CFireManager.h>
+#include <game/CCamera.h>
+#include <game/CHud.h>
+#include <game/CBuildingsPool.h>
+#include <game/CDummyPool.h>
+#include <game/CPools.h>
+#include "StartupLifecycleFixture.generated.h"
 #include <game/CModelInfo.h>
 #include <game/CWeapon.h>
 #include "../../Client/game_de/NativePedAreaProfile.h"
@@ -3287,6 +3302,20 @@ namespace mta::game_de::NativeImageAccess
             after();
         }
         return true;
+    }
+}
+
+// The separately compiled reader retains its real profile/read/thread guards;
+// this private seam selects only the fixture's executable/module identity.
+namespace mta::game_de::NativeGameStateReaderTestHost
+{
+    bool Executable() noexcept
+    {
+        return NativeImageAccess::ClockReaderFixtureExecutable();
+    }
+    std::uintptr_t Image() noexcept
+    {
+        return reinterpret_cast<std::uintptr_t>(ClockReaderTestHost::Module(nullptr));
     }
 }
 
@@ -8962,6 +8991,9 @@ namespace
 #include "NativeStartupMenuRuntimeOwnerTests.inl"
 #include "NativeStartupPreparationReadinessRuntimeOwnerTests.inl"
 #include "NativeStartupNumericGaragesRuntimeOwnerTests.inl"
+// The focused lifecycle setup borrows only numeric garage helper declarations;
+// placing them first does not execute that fixture's historical Run matrix.
+#include "StartupLifecycleOwnerTests.inl"
 // The joint readiness scope reuses the actual numeric/default-collision helpers.
 #include "NativeStreamingRequestOwnerTests.inl"
 #include "AnimationSequenceStorageManager.generated.h"
@@ -9142,6 +9174,7 @@ int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
     const bool presentTransitionClockOnly = argc == 3 && std::strcmp(argv[2], "--present-transition-clock") == 0;
+    const bool startupLifecycleOnly = argc == 3 && std::strcmp(argv[2], "--startup-lifecycle") == 0;
     const bool startupInitializationReadinessOnly = argc == 3 && std::strcmp(argv[2], "--startup-initialization-readiness") == 0;
     const bool startupStreamingReceiverOnly = argc == 3 && std::strcmp(argv[2], "--startup-streaming-receiver") == 0;
     const bool startupNumericGaragesOnly = argc == 3 && std::strcmp(argv[2], "--startup-numeric-garages") == 0;
@@ -9551,34 +9584,43 @@ int main(int argc, char** argv)
     const bool waterOnly = orientationWithWater || (argc == 3 && std::strcmp(argv[2], "--ped-water") == 0);
     const bool poseOnly = argc == 3 && std::strcmp(argv[2], "--ped-pose") == 0;
     const bool poolRegistryOnly = argc == 3 && std::strcmp(argv[2], "--ped-pool-registry") == 0;
-    Check((argc == 2 || presentTransitionClockOnly || startupInitializationReadinessOnly || startupStreamingReceiverOnly || startupNumericGaragesOnly ||
-           startupPreparationReadinessOnly || startupMenuOnly || startupCollisionOnly || pedCreationLifecycleOnly || constructorOnly || vehiclePredicatesOnly ||
-           modelTimeGetterOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly || waterOnly ||
-           animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly ||
-           fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly ||
-           worldLineOnly || worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly ||
-           cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly ||
-           animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly ||
-           animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly ||
-           customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly ||
-           privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly ||
-           privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly ||
-           sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly ||
-           animationDefinitionBlockNamesOnly || animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly ||
-           cameraBasicsOnly || cameraJumpCutOnly || cameraFovWriteOnly || cameraDirectionOnly || cameraRowBorrowOnly || cameraHistoryOnly || cameraTargetOnly ||
-           cameraTargetSetterOnly || cameraGetCamOnly || cameraWidescreenOnly || cameraMainTargetOnly || applicationTimingOnly || emptyBlockRemovalOnly ||
-           blockRegistrationOnly || bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly ||
-           dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
-           groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
-           animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
-           privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
-              std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
-          "durable fixture evidence is restricted to the explicit owned executable output directory");
+    Check(
+        (argc == 2 || presentTransitionClockOnly || startupLifecycleOnly || startupInitializationReadinessOnly || startupStreamingReceiverOnly ||
+         startupNumericGaragesOnly || startupPreparationReadinessOnly || startupMenuOnly || startupCollisionOnly || pedCreationLifecycleOnly ||
+         constructorOnly || vehiclePredicatesOnly || modelTimeGetterOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly ||
+         poolRegistryOnly || poseOnly || waterOnly || animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly ||
+         areaOnly || specialOnly || fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly ||
+         constructorServicesOnly || worldGroundOnly || worldLineOnly || worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly ||
+         pedWeaponGrantOnly || worldIgnoreOnly || cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || pedMoveAnimOnly ||
+         playerNativePrerequisitesOnly || animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly ||
+         animationManagerRefsOnly || animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly ||
+         animationHierarchyBankOnly || customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly ||
+         privateHierarchyNameOnly || privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly ||
+         privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly ||
+         animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly ||
+         animationDefinitionBlockNamesOnly || animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly || cameraBasicsOnly ||
+         cameraJumpCutOnly || cameraFovWriteOnly || cameraDirectionOnly || cameraRowBorrowOnly || cameraHistoryOnly || cameraTargetOnly ||
+         cameraTargetSetterOnly || cameraGetCamOnly || cameraWidescreenOnly || cameraMainTargetOnly || applicationTimingOnly || emptyBlockRemovalOnly ||
+         blockRegistrationOnly || bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly ||
+         dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
+         groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
+         animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
+         privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
+            std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
+        "durable fixture evidence is restricted to the explicit owned executable output directory");
     if (presentTransitionClockOnly)
     {
         ClockImageFixture fixture;
         fixture.Create(argv[1]);
         PresentTransitionClockFixture::Run(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (startupLifecycleOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        StartupLifecycleOwnerFixture::Run(fixture);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

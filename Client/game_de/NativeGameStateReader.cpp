@@ -13,6 +13,15 @@
 
 namespace mta::game_de
 {
+#if defined(MTA_DE_GAME_STATE_READER_TEST_IMAGE)
+    // Owned SEC_IMAGE tests replace only OS identity selection; native profile,
+    // current-state, memory and producer-thread checks remain the real reader.
+    namespace NativeGameStateReaderTestHost
+    {
+        bool           Executable() noexcept;
+        std::uintptr_t Image() noexcept;
+    }
+#endif
     namespace
     {
         namespace Image = NativeImageAccess;
@@ -162,9 +171,17 @@ namespace mta::game_de
         if (ownerThread.load() && ownerThread.load() != thread)
             return Status::WrongThread;
         Reset();
+#if defined(MTA_DE_GAME_STATE_READER_TEST_IMAGE)
+        if (sizeof(void*) != 8 || !NativeGameStateReaderTestHost::Executable())
+#else
         if (sizeof(void*) != 8 || !Image::CheckExecutableBuild())
+#endif
             return Status::Unsupported;
+#if defined(MTA_DE_GAME_STATE_READER_TEST_IMAGE)
+        const auto image = NativeGameStateReaderTestHost::Image();
+#else
         const auto image = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
+#endif
         if (!NativeGameStateMemory::Qualify(image))
             return Status::Unsupported;
         // Admission is independent of the current state. This caller owns only

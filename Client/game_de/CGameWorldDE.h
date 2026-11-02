@@ -8,7 +8,10 @@
 #include <game/CGameWorldPolicy.h>
 namespace mta::game_de
 {
-    class CGameWorldDE : public CGameResetDE
+    // One linear base shares the real game identity and exactly one world
+    // state with either the legacy or startup-qualified reset composition.
+    template <class GameBase>
+    class CGameWorldMixinDE : public GameBase
     {
     public:
         void RemoveGameWorld() override;
@@ -16,7 +19,7 @@ namespace mta::game_de
         bool SetBuildingPoolSize(std::size_t size) override;
 
     protected:
-        using CGameResetDE::CGameResetDE;
+        using GameBase::GameBase;
         // The enclosing backend must freshly admit all actual receivers and
         // effects. This CPU phase is neither a native lease nor pool readiness.
         virtual void RequireWorldLifecycleReady() = 0;
@@ -33,5 +36,14 @@ namespace mta::game_de
     private:
         bool m_worldRemoved = false;
     };
+    // Preserve the legacy injected name and protected constructor routes
+    // without fields or forwarding overrides; the mixin owns the one policy.
+    class CGameWorldDE : public CGameWorldMixinDE<CGameResetDE>
+    {
+    protected:
+        using CGameWorldMixinDE<CGameResetDE>::CGameWorldMixinDE;
+    };
     static_assert(std::is_abstract_v<CGameWorldDE> && std::is_base_of_v<CGameResetDE, CGameWorldDE>);
 }
+
+#include "CGameWorldMixinDE.inl"

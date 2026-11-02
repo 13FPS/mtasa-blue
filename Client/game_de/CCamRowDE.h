@@ -28,6 +28,9 @@ namespace mta::game_de
         // Acquire the same provider's row hold before any actual native vector
         // address can escape. This supplies no GetCam/CGame camera factory.
         CCamRowDE(std::uint32_t row, NativeCameraSphereVisibleAccess& provider);
+        // A derived SDK slice may ask the same owner for another qualified
+        // observation, but cannot transfer or release this retained token.
+        const NativeCameraRowBorrow::Token& RowBorrowToken() const noexcept { return token; }
 
     private:
         CVector*                         Read(CameraRowVectorKind, const char*) const;

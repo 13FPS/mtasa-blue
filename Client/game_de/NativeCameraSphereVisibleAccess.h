@@ -47,6 +47,9 @@ namespace mta::game_de
         {
             return ClockResult::NotInitialized;
         }
+        // Raw target observation is tied to this same row client. A zero
+        // or unknown value grants no entity adoption or reference writes.
+        virtual ClockResult ReadCameraRowTarget(const NativeCameraRowBorrow::Token&, std::uintptr_t&) noexcept { return ClockResult::NotInitialized; }
         // Ordinary Restore is one distinct native effect. Older owners must
         // refuse rather than substitute JumpCut, a field repair or a retry.
         virtual ClockResult RestoreCamera() noexcept { return ClockResult::NotInitialized; }

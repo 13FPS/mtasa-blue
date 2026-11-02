@@ -338,6 +338,7 @@ namespace mta::game_de
             ClockResult AcquireCameraRowBorrow(std::uint32_t, NativeCameraRowBorrow::Token&) noexcept override;
             ClockResult ReleaseCameraRowBorrow(NativeCameraRowBorrow::Token&) noexcept override;
             ClockResult ReadCameraRowVector(const NativeCameraRowBorrow::Token&, CameraRowVectorKind, CVector*&) noexcept override;
+            ClockResult ReadCameraRowTarget(const NativeCameraRowBorrow::Token&, std::uintptr_t&) noexcept override;
             ClockResult RestoreCamera() noexcept override;
             ClockResult RestoreCameraWithJumpCut() noexcept override;
             ClockResult ReadStreamingModelGroups(NativeStreamingModelGroupsReader::Value&) noexcept override;
@@ -6177,6 +6178,13 @@ namespace mta::game_de
                 return NativeCameraDataMemory::ReadRowHistory(runtime.image, runtime.cameraRowBorrows, CameraRowBorrowIdentity(), token, &CheckTimingOwner,
                                                               &CheckApplicationTimingOwner, output);
             return NativeCameraDataMemory::ReadRowVector(runtime.image, runtime.cameraRowBorrows, CameraRowBorrowIdentity(), token, kind, &CheckTimingOwner,
+                                                         &CheckApplicationTimingOwner, output);
+        }
+        ClockResult NativeAccess::ReadCameraRowTarget(const NativeCameraRowBorrow::Token& token, std::uintptr_t& output) noexcept
+        {
+            // Mapping belongs to the same native pool owner. Do not follow
+            // this value or synthesize an entity while observing the cell.
+            return NativeCameraDataMemory::ReadRowTarget(runtime.image, runtime.cameraRowBorrows, CameraRowBorrowIdentity(), token, &CheckTimingOwner,
                                                          &CheckApplicationTimingOwner, output);
         }
         ClockResult NativeAccess::RestoreCamera() noexcept

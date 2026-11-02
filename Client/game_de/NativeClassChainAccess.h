@@ -31,6 +31,11 @@ namespace mta::game_de
         // a false subtype answer that a later startup decision could trust.
         bool IsChildOf(std::uintptr_t candidateClass, std::uintptr_t expectedBaseClass, bool& output) const noexcept
         {
+            // Portable SDK interfaces may include this type, but the proved
+            // DE chain layout is x64 only. Refuse before any guarded read or
+            // output publication instead of treating x86 pointers as that ABI.
+            if constexpr (sizeof(std::uintptr_t) != 8)
+                return false;
             Sample first{}, second{};
             if (!Observe(candidateClass, expectedBaseClass, first) || !Observe(candidateClass, expectedBaseClass, second) || !Equal(first, second))
                 return false;
@@ -42,9 +47,12 @@ namespace mta::game_de
         // Read just the native +30 pointer and +38 signed index. Adjacent
         // padding or another UObject's metaclass is not part of this contract.
         using Header = std::array<unsigned char, sizeof(std::uintptr_t) + sizeof(std::int32_t)>;
-        static_assert(sizeof(std::uintptr_t) == 8);
+        // Pointer-dependent layout checks apply to the only admitted read
+        // path. The fixed native offsets stay checked on every SDK build.
+        static_assert(sizeof(std::uintptr_t) != 8 || sizeof(Header) == 12);
         static_assert(NativeUiClassMapProfile::classChainOffset == 0x30 && NativeUiClassMapProfile::classChainIndexOffset == 0x38);
-        static_assert(NativeUiClassMapProfile::classChainOffset + sizeof(std::uintptr_t) == NativeUiClassMapProfile::classChainIndexOffset);
+        static_assert(sizeof(std::uintptr_t) != 8 ||
+                      NativeUiClassMapProfile::classChainOffset + sizeof(std::uintptr_t) == NativeUiClassMapProfile::classChainIndexOffset);
 
         struct Sample
         {

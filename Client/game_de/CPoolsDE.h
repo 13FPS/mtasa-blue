@@ -31,6 +31,10 @@ namespace mta::game_de
     public:
         static constexpr std::size_t PedCapacity = NativePedPoolProfile::NativeCapacity;
 
+        // Endpoint identity uses the same typed native owner, not addresses of
+        // different interface subobjects or a coincident generation number.
+        bool HasNativeOwner(NativeGameTimingAccess&) const noexcept;
+
         // A future enclosing factory owns this guard separately from its
         // borrowed complete wrapper: pool and wrapper outlive the guard, and
         // the factory retires the guard before destroying the wrapper. This

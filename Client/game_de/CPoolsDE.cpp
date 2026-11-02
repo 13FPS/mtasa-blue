@@ -12,6 +12,10 @@
 
 namespace mta::game_de
 {
+    bool CPoolsDE::HasNativeOwner(NativeGameTimingAccess& owner) const noexcept
+    {
+        return &pedRegistryOwner == &owner;
+    }
     CPoolsDE::BorrowedPedRegistration::~BorrowedPedRegistration()
     {
         Reset();

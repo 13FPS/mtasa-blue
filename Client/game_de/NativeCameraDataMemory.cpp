@@ -921,3 +921,97 @@ namespace mta::game_de::NativeCameraDataMemory
         return ClockResult::Ok;
     }
 }
+
+namespace mta::game_de
+{
+    namespace CameraRowTargetDetail
+    {
+        namespace C = CameraRowBorrowDetail;
+        namespace P = NativeCameraDataProfile;
+        namespace D = NativeStreamingCompletionContext;
+        namespace I = NativeImageAccess;
+        using CheckOwner = NativeCameraDataMemory::CheckOwner;
+        // The already qualified dispatcher fills this exact QWORD cell and
+        // registers its address. Observation grants no reference-cell write,
+        // entity adoption or permission to dereference the observed value.
+        inline constexpr std::size_t TargetOffset = 0x1a0;
+
+        bool Cell(std::uintptr_t image, std::uint32_t row, std::uintptr_t& address) noexcept
+        {
+            if (row >= P::RowCount || !C::Fields(image, row))
+                return false;
+            const auto offset = P::ArrayOffset + static_cast<std::size_t>(row) * P::RowBytes;
+            if (TargetOffset > P::RowBytes || sizeof(std::uintptr_t) > P::RowBytes - TargetOffset || offset > P::CameraBytes ||
+                TargetOffset > P::CameraBytes - offset || sizeof(std::uintptr_t) > P::CameraBytes - offset - TargetOffset)
+                return false;
+            const auto target = image + P::CameraRva + offset + TargetOffset;
+            if (target % alignof(std::uintptr_t) || !I::ImagePages(image, target, sizeof(std::uintptr_t), true))
+                return false;
+            address = target;
+            return true;
+        }
+
+        ClockResult Sample(std::uintptr_t image, std::uint32_t row, CheckOwner owner, CheckOwner afterApplicationOwner, D::Value& outputWorld,
+                           std::uintptr_t& outputTarget) noexcept
+        {
+            D::Value nextWorld;
+            auto     result = C::Sample(image, row, owner, afterApplicationOwner, nextWorld);
+            if (result != ClockResult::Ok)
+                return result;
+            std::uintptr_t cell = 0, confirmedCell = 0, nextTarget = 0;
+            if (!Cell(image, row, cell))
+                return ClockResult::BindingChanged;
+            if (!I::ReadImage(image, cell, &nextTarget, sizeof(nextTarget), true))
+                return ClockResult::ReadFailure;
+            if (!D::Fence(image, nextWorld) || !C::Profile(image) || !Cell(image, row, confirmedCell) || confirmedCell != cell)
+                return ClockResult::BindingChanged;
+            // Even a noncanonical or unknown target is only a raw observation.
+            // The SDK/pool owner must map its own known controlled ped or refuse;
+            // this helper never tests a page at nextTarget or follows it.
+            outputWorld = nextWorld;
+            outputTarget = nextTarget;
+            return ClockResult::Ok;
+        }
+    }
+}
+
+namespace mta::game_de::NativeCameraDataMemory
+{
+    ClockResult ReadRowTarget(std::uintptr_t image, NativeCameraRowBorrow& ledger, const NativeCameraRowBorrow::Identity& identity,
+                              const NativeCameraRowBorrow::Token& token, CheckOwner owner, CheckOwner afterApplicationOwner, std::uintptr_t& output) noexcept
+    {
+        namespace C = CameraRowTargetDetail;
+        namespace D = NativeStreamingCompletionContext;
+        namespace P = NativeCameraDataProfile;
+        if (!token || token.Row() >= P::RowCount)
+            return ClockResult::InvalidArgument;
+        if (!owner || !afterApplicationOwner)
+            return ClockResult::NotInitialized;
+        if (!image || image > (std::numeric_limits<std::uintptr_t>::max)() - P::ImageBytes)
+            return ClockResult::UnsupportedBuild;
+        if (identity.image != image)
+            return ClockResult::OwnerConflict;
+        if (!D::TryEnter())
+            return ClockResult::Busy;
+        D::Scope scope;
+        auto     result = ledger.Validate(token, identity);
+        if (result != ClockResult::Ok)
+            return result;
+        const auto     row = token.Row();
+        D::Value       firstWorld, currentWorld, confirmedWorld;
+        std::uintptr_t first = 0, current = 0, confirmed = 0;
+        if ((result = C::Sample(image, row, owner, afterApplicationOwner, firstWorld, first)) != ClockResult::Ok ||
+            (result = C::Sample(image, row, owner, afterApplicationOwner, currentWorld, current)) != ClockResult::Ok)
+            return result;
+        if (first != current || !D::Same(firstWorld, currentWorld, true))
+            return ClockResult::BindingChanged;
+        if ((result = C::Sample(image, row, owner, afterApplicationOwner, confirmedWorld, confirmed)) != ClockResult::Ok)
+            return result;
+        if (first != confirmed || !D::Same(firstWorld, confirmedWorld, true) || !D::Same(currentWorld, confirmedWorld, true))
+            return ClockResult::BindingChanged;
+        if ((result = ledger.Validate(token, identity)) != ClockResult::Ok)
+            return result;
+        output = confirmed;
+        return ClockResult::Ok;
+    }
+}

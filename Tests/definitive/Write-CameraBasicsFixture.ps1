@@ -60,3 +60,48 @@ function Write-CamRowFixture([string]$RepositoryRoot,[string]$OutputPath) {
         inheritedProductionMethods=@($provided|ForEach-Object {$_.signature});source=$source;sourceSha256=(Get-FileHash -LiteralPath (Join-Path $RepositoryRoot $source) -Algorithm SHA256).Hash.ToLowerInvariant();
         productionCamConcrete=$false;nativeFactoryClaimed=$false;sharedSdkEdited=$false;polymorphicBaseDeletionExecuted=$false}
 }
+
+function Write-CamTargetFixture([string]$RepositoryRoot,[string]$OutputPath) {
+    $source='Client/sdk/game/CCam.h'
+    $all=@(Get-CameraBasicsSdkMethods $RepositoryRoot $source)
+    $provided=@($all|Where-Object {$_.name -ne 'SetTargetEntity'})
+    $rejected=@($all|Where-Object {$_.name -eq 'SetTargetEntity'})
+    if($all.Count -ne 13 -or $provided.Count -ne 12 -or $rejected.Count -ne 1){throw 'Actual target Cam13-method partition changed'}
+    $lines=@('#pragma once','#include <cstdlib>','#pragma warning(push)','#pragma warning(disable : 4100)',
+        'class CamTargetObserver final : public mta::game_de::CCamTargetDE {public:',
+        'CamTargetObserver(std::uint32_t row,mta::game_de::CPoolsDE& pools,mta::game_de::NativeGameTimingAccess& owner) : CCamTargetDE(row,pools,owner) {}')
+    $lines+=@($rejected|ForEach-Object {$_.signature+' override {std::abort();}'})
+    $lines+=@('};','#pragma warning(pop)')
+    [IO.File]::WriteAllLines($OutputPath,$lines,[Text.UTF8Encoding]::new($false))
+    [ordered]@{path=$OutputPath;sha256=(Get-FileHash -LiteralPath $OutputPath -Algorithm SHA256).Hash.ToLowerInvariant();rejectingMethods=$rejected.Count;
+        inheritedProductionMethods=@($provided|ForEach-Object {$_.signature});source=$source;sourceSha256=(Get-FileHash -LiteralPath (Join-Path $RepositoryRoot $source) -Algorithm SHA256).Hash.ToLowerInvariant();
+        productionCamConcrete=$false;nativeFactoryClaimed=$false;sharedSdkEdited=$false;polymorphicBaseDeletionExecuted=$false}
+}
+
+function Write-PedPooledFixture([string]$RepositoryRoot,[string]$OutputPath) {
+    # Reuse the existing strict receiver generator, adding only actual pooled
+    # GetInterface composition. Every unrelated hook remains a rejecting stub.
+    $helper=Join-Path $RepositoryRoot 'Tests/definitive/Write-PedPoolRegistryFixture.ps1'
+    . $helper
+    $basePath=$OutputPath+'.base.h'
+    $base=Write-PedPoolRegistryFixture $RepositoryRoot $basePath
+    $text=[IO.File]::ReadAllText($basePath)
+    $old='class Ped final : public Anchor, public mta::game_de::CPedVitalsDE { public:'
+    if(-not $text.Contains($old)){throw 'Existing strict ped composition changed'}
+    $text=$text.Replace('namespace pool_registry_fixture {','namespace camera_target_fixture {')
+    $text=$text.Replace($old,'class Ped : public Anchor, public mta::game_de::CPedVitalsDE, public mta::game_de::CPedPooledDE { public:')
+    # The deliberate virtual-CPed diamond inherits each real overrider from
+    # its production slice. Do not add forwarding overrides to hide dominance.
+    $text=$text.Replace('#pragma warning(disable : 4100)','#pragma warning(disable : 4100 4250)')
+    $old='Ped(mta::game_de::NativeGameTimingAccess& owner,const mta::game_de::NativePedReferenceToken& token,std::function<void()> callback={}) noexcept : CPedVitalsDE(owner,token),destructionCallbackValue(std::move(callback)){}'
+    if(-not $text.Contains($old)){throw 'Existing strict ped constructor changed'}
+    $text=$text.Replace($old,'Ped(mta::game_de::NativeGameTimingAccess& owner,const mta::game_de::NativePedReferenceToken& token,mta::game_de::CPoolsDE& registry,std::function<void()> callback={}) noexcept : CPedVitalsDE(owner,token),CPedPooledDE(registry,owner),destructionCallbackValue(std::move(callback)){}')
+    $pattern='(?m)^class CEntitySAInterface\* GetInterface\(\) override \{Unqualified\(\);\}\r?\n'
+    if([regex]::Matches($text,$pattern).Count -ne 1){throw 'Expected exactly one rejecting GetInterface hook'}
+    $text=[regex]::Replace($text,$pattern,'')
+    [IO.File]::WriteAllText($OutputPath,$text,[Text.UTF8Encoding]::new($false))
+    [ordered]@{path=$OutputPath;sha256=(Get-FileHash -LiteralPath $OutputPath -Algorithm SHA256).Hash.ToLowerInvariant();
+        rejectingPedMethods=($base.rejectingPedMethods-1);rejectingPoolMethods=$base.rejectingPoolMethods;
+        inheritedPooledMethods=@('CEntity::GetInterface');sharedVirtualPedBase=$true;nativeFactoryClaimed=$false;
+        baseGenerator=$helper;baseGeneratorSha256=(Get-FileHash -LiteralPath $helper -Algorithm SHA256).Hash.ToLowerInvariant()}
+}

@@ -84,6 +84,9 @@ namespace mta::game_de
         // copied token adds no registration and exposes no native pointer;
         // its consumer still needs current native callback admission.
         ClockResult ReadBorrowedPedReference(CPed* wrapper, NativePedReferenceToken&) noexcept;
+        // Setter intent accepts only an actual existing controlled entity base.
+        // Neither an unknown CEntity nor its virtual GetInterface is trusted.
+        ClockResult ReadBorrowedPedEntityReference(CEntity*, CPed*&, NativePedReferenceToken&) noexcept;
 
         CPoolsDE(const CPoolsDE&) = delete;
         CPoolsDE& operator=(const CPoolsDE&) = delete;

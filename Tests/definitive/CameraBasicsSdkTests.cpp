@@ -7,6 +7,7 @@
 #include "../../Client/game_de/CCamFovDE.h"
 #include "../../Client/game_de/CCamRowDE.h"
 #include "../../Client/game_de/CCamTargetDE.h"
+#include "../../Client/game_de/CCamTargetSetterDE.h"
 #include "../../Client/game_de/CPedPooledDE.h"
 #include "../../Client/game_de/CPoolsDE.h"
 #include "../../Client/game_de/CPedVitalsDE.h"
@@ -29,6 +30,7 @@
 #include "CamFovFixture.generated.h"
 #include "CamRowFixture.generated.h"
 #include "CamTargetFixture.generated.h"
+#include "CamTargetSetterFixture.generated.h"
 #include "PedPooledFixture.generated.h"
 using namespace mta::game_de;
 static_assert(std::is_same_v<decltype(&CameraBasicsObserver::RestoreWithJumpCut), decltype(&CCameraSphereVisibleDE::RestoreWithJumpCut)>);
@@ -62,6 +64,10 @@ static_assert(std::is_same_v<decltype(&camera_target_fixture::Ped::GetInterface)
 static_assert(std::is_abstract_v<CCamTargetDE> && std::is_abstract_v<CPedPooledDE> && !std::is_abstract_v<CamTargetObserver>);
 static_assert(std::is_convertible_v<camera_target_fixture::Ped*, CPed*> && !std::is_copy_constructible_v<CamTargetObserver> &&
               !std::is_move_constructible_v<CamTargetObserver>);
+static_assert(std::is_same_v<decltype(&CamTargetSetterObserver::SetTargetEntity), decltype(&CCamTargetSetterDE::SetTargetEntity)>);
+static_assert(std::is_abstract_v<CCamTargetDE> && !std::is_abstract_v<CCamTargetSetterDE> && !std::is_abstract_v<CamTargetSetterObserver>);
+static_assert(!std::is_copy_constructible_v<CamTargetSetterObserver> && !std::is_move_constructible_v<CamTargetSetterObserver> &&
+              !std::has_virtual_destructor_v<CamTargetSetterObserver>);
 namespace
 {
     unsigned checks = 0;
@@ -802,7 +808,14 @@ namespace
         std::uint64_t  acquiredId = 0, targetId = 0, releasedId = 0;
         std::uintptr_t target = 0;
         unsigned       targetSeam = 0;
-        std::function<void()> afterTarget;
+        std::function<void()>   afterTarget;
+        ClockResult             setterStatus = ClockResult::Ok;
+        unsigned                setCalls = 0, resolutionSeam = 0;
+        std::uint32_t           setRow = 0;
+        std::uint64_t           setId = 0;
+        bool                    clearIntent = false;
+        NativePedReferenceToken setIntent;
+        std::function<void()>   afterReference;
         TargetAccess() noexcept
         {
             identity = {1, 1, reinterpret_cast<std::uintptr_t>(nativeBytes.data()), GetCurrentThreadId()};
@@ -842,6 +855,12 @@ namespace
             if (!SameToken(token, reference))
                 return ClockResult::OwnerConflict;
             output = nativePed;
+            if (afterReference && resolutions == resolutionSeam)
+            {
+                auto action = std::move(afterReference);
+                afterReference = {};
+                action();
+            }
             return ClockResult::Ok;
         }
         ClockResult RecheckPedPoolHandle(const NativePedPoolReader::Value& expected) noexcept override
@@ -874,6 +893,25 @@ namespace
             ++releases;
             releasedId = token.Id();
             return ledger.Release(token);
+        }
+        ClockResult SetCameraRowTarget(const NativeCameraRowBorrow::Token& token, const NativePedReferenceToken* intent) noexcept override
+        {
+            ++setCalls;
+            setRow = token.Row();
+            setId = token.Id();
+            clearIntent = intent == nullptr;
+            setIntent = intent ? *intent : NativePedReferenceToken{};
+            if (setterStatus != ClockResult::Ok)
+                return setterStatus;
+            const auto result = ledger.Validate(token, identity);
+            if (result != ClockResult::Ok)
+                return result;
+            if (intent && !SameToken(*intent, reference))
+                return ClockResult::OwnerConflict;
+            // This is only SDK transport over opaque owned tags. The native
+            // owner suite exercises actual reference surgery and effect debt.
+            target = intent ? nativePed.nativePed : 0;
+            return ClockResult::Ok;
         }
         ClockResult ReadCameraRowTarget(const NativeCameraRowBorrow::Token& token, std::uintptr_t& output) noexcept override
         {
@@ -1081,6 +1119,164 @@ namespace
         }
         Check(checks - before == 155, "bounded target transport case count preserves all prior camera cases");  // 156
         std::puts("Actual camera target SDK fixture completed");
+    }
+
+    void TargetSetters()
+    {
+        const auto                            before = checks;
+        constexpr std::array<ClockResult, 14> refusals{ClockResult::InvalidArgument, ClockResult::NotInitialized,   ClockResult::WrongThread,
+                                                       ClockResult::BindingChanged,  ClockResult::ReadFailure,      ClockResult::WriteFailure,
+                                                       ClockResult::RestoreFailure,  ClockResult::PatchFailure,     ClockResult::Busy,
+                                                       ClockResult::Expired,         ClockResult::UnsupportedBuild, ClockResult::OwnerConflict,
+                                                       ClockResult::Stopped,         ClockResult::OriginalException};
+        for (std::uint32_t row = 0; row < 3; ++row)
+        {
+            TargetAccess                      owner;
+            camera_target_fixture::Pools      pools(owner);
+            camera_target_fixture::Ped        ped(owner, owner.reference, pools), unregistered(owner, owner.reference, pools);
+            CPoolsDE::BorrowedPedRegistration registration;
+            Check(owner.opened == ClockResult::Ok, "setter transport owns its ledger and opaque native tags");  // 1
+            Check(pools.BindBorrowedPed(ped, nullptr, registration) == ClockResult::Ok,
+                  "setter receiver uses the existing actual controlled ped registry");  // 2
+            CEntity* const entity = static_cast<CEntity*>(static_cast<CPed*>(&ped));
+            {
+                CamTargetSetterObserver camera(row, pools, owner);
+                CCam&                   sdk = camera;
+                Check(owner.acquires == 1 && owner.acquiredRow == row && owner.acquiredId && owner.ledger.IsRetained(),
+                      "setter composition retains exactly the base's one row hold");  // 3
+                sdk.SetTargetEntity(nullptr);
+                Check(owner.setCalls == 1 && owner.clearIntent && owner.target == 0 && owner.setRow == row && owner.setId == owner.acquiredId,
+                      "actual null setter dispatches an explicit clear with the same held row token");  // 4
+                sdk.SetTargetEntity(entity);
+                Check(owner.setCalls == 2 && !owner.clearIntent && TargetAccess::SameToken(owner.setIntent, owner.reference) &&
+                          owner.target == owner.nativePed.nativePed,
+                      "actual CEntity identity becomes a copied current CPU token rather than a raw native interface");  // 5
+                sdk.SetTargetEntity(entity);
+                Check(owner.setCalls == 3 && owner.nativeAcquires == 0 && owner.nativeReleases == 0 && pools.GetPedCount() == 1,
+                      "same-target intent still reaches the native owner; SDK invents neither a reference effect nor a lease");  // 6
+                sdk.SetTargetEntity(nullptr);
+                Check(owner.setCalls == 4 && owner.clearIntent && owner.target == 0,
+                      "clearing follows the actual MTA null request instead of treating it as a no-op");  // 7
+                auto        calls = owner.setCalls;
+                auto* const unknown = reinterpret_cast<CEntity*>(owner.nativeBytes.data() + 17);
+                Refuses([&] { sdk.SetTargetEntity(unknown); }, "SetTargetEntity", ClockResult::NotInitialized);  // 8
+                Check(owner.setCalls == calls && owner.target == 0 && pools.GetPedCount() == 1,
+                      "an opaque unknown/nonped entity identity is never dereferenced or silently turned into clear intent");  // 9
+                Refuses([&] { sdk.SetTargetEntity(static_cast<CEntity*>(static_cast<CPed*>(&unregistered))); }, "SetTargetEntity",
+                        ClockResult::NotInitialized);                                                                                            // 10
+                Check(owner.setCalls == calls, "an actual but unregistered SDK ped cannot manufacture setter provenance through GetInterface");  // 11
+                for (auto status : refusals)
+                {
+                    owner.setterStatus = status;
+                    calls = owner.setCalls;
+                    Refuses([&] { sdk.SetTargetEntity(entity); }, "SetTargetEntity", status);  // 14 * 2
+                    Check(owner.setCalls == calls + 1 && owner.target == 0 && owner.ledger.IsRetained() && registration.IsBound(),
+                          "exact provider refusal propagates once without replay or changing CPU registration/row ownership");
+                }
+                owner.setterStatus = ClockResult::Ok;
+                owner.poolStatus = ClockResult::WrongThread;
+                calls = owner.setCalls;
+                Refuses([&] { sdk.SetTargetEntity(entity); }, "SetTargetEntity", ClockResult::WrongThread);     // 40
+                Check(owner.setCalls == calls, "registry authority refusal stays before native setter entry");  // 41
+                owner.poolStatus = ClockResult::Ok;
+                owner.referenceStatus = ClockResult::NotInitialized;
+                Refuses([&] { sdk.SetTargetEntity(entity); }, "SetTargetEntity", ClockResult::NotInitialized);   // 42
+                Check(owner.setCalls == calls, "withdrawn/freed native reference cannot become setter intent");  // 43
+                owner.referenceStatus = ClockResult::Ok;
+                auto* const pair = pools.GetPed(std::size_t{0});
+                pair->pEntity = reinterpret_cast<CPed*>(owner.nativeBytes.data() + 23);
+                Refuses([&] { sdk.SetTargetEntity(entity); }, "SetTargetEntity", ClockResult::BindingChanged);                      // 44
+                Check(owner.setCalls == calls, "mutable canonical pair provenance is checked before any virtual-base conversion");  // 45
+                pair->pEntity = &ped;
+                CPed*                   selected = &unregistered;
+                NativePedReferenceToken token{999, 999, 999};
+                Check(pools.ReadBorrowedPedEntityReference(entity, selected, token) == ClockResult::Ok && selected == static_cast<CPed*>(&ped) &&
+                          TargetAccess::SameToken(token, owner.reference),
+                      "bounded actual-entity inverse returns the current controlled SDK/token pair");  // 46
+                selected = &unregistered;
+                token = {999, 999, 999};
+                Check(pools.ReadBorrowedPedEntityReference(unknown, selected, token) == ClockResult::NotInitialized &&
+                          selected == static_cast<CPed*>(&unregistered) && token.version == 999 && token.ownerGeneration == 999 && token.slot == 999,
+                      "unknown entity inverse preserves both outputs on refusal");  // 47
+                Check(pools.ReadBorrowedPedEntityReference(nullptr, selected, token) == ClockResult::InvalidArgument &&
+                          selected == static_cast<CPed*>(&unregistered) && token.version == 999 && token.ownerGeneration == 999 && token.slot == 999,
+                      "null inverse is invalid; only the actual SDK setter selects explicit clear");  // 48
+                Check(registration.Reset() == ClockResult::Ok && !registration.IsBound(),
+                      "caller withdraws the existing CPU registration before destroying its wrapper");               // 49
+                Refuses([&] { sdk.SetTargetEntity(entity); }, "SetTargetEntity", ClockResult::NotInitialized);       // 50
+                Check(owner.setCalls == calls, "a previously registered SDK identity is refused after withdrawal");  // 51
+                sdk.SetTargetEntity(nullptr);
+                Check(owner.setCalls == calls + 1 && owner.clearIntent && owner.target == 0,
+                      "explicit clear does not require inventing a replacement registered ped");  // 52
+                owner.ledger.CloseIssuance();
+                Refuses([&] { sdk.SetTargetEntity(nullptr); }, "SetTargetEntity", ClockResult::Stopped);                                             // 53
+                Check(owner.ledger.IsRetained() && owner.releases == 0, "Stop refuses new effects while the typed camera still owns its row hold");  // 54
+            }
+            Check(owner.releases == 1 && owner.releasedId == owner.acquiredId && !owner.ledger.IsRetained(),
+                  "typed setter receiver destruction releases one hold without unregistering the engine target cell");  // 55
+        }
+        {
+            TargetAccess                 owner, foreign;
+            camera_target_fixture::Pools pools(owner);
+            Refuses([&] { CamTargetSetterObserver camera(0, pools, foreign); }, "CCamTargetDE constructor", ClockResult::OwnerConflict);  // 166
+            Check(owner.acquires == 0 && foreign.acquires == 0, "foreign owner fails before either receiver can acquire a row");          // 167
+        }
+        {
+            TargetAccess                      owner, foreign;
+            camera_target_fixture::Pools      pools(owner), foreignPools(foreign);
+            camera_target_fixture::Ped        foreignPed(foreign, foreign.reference, foreignPools);
+            CPoolsDE::BorrowedPedRegistration registration;
+            Check(foreignPools.BindBorrowedPed(foreignPed, nullptr, registration) == ClockResult::Ok,
+                  "foreign test entity is a genuine controlled SDK ped owned by its distinct registry");  // 168
+            {
+                CamTargetSetterObserver camera(0, pools, owner);
+                Refuses([&] { camera.SetTargetEntity(static_cast<CEntity*>(static_cast<CPed*>(&foreignPed))); }, "SetTargetEntity",
+                        ClockResult::NotInitialized);  // 169
+                Check(owner.setCalls == 0 && foreign.setCalls == 0 && pools.GetPedCount() == 0,
+                      "a registered foreign entity never crosses the exact owner/registry boundary");  // 170
+            }
+            Check(owner.releases == 1 && !owner.ledger.IsRetained(), "foreign-entity refusal still retires the receiver hold normally");  // 171
+        }
+        {
+            Missing                      missing;
+            NativeCameraRowBorrow::Token token;
+            Check(missing.SetCameraRowTarget(token, nullptr) == ClockResult::NotInitialized,
+                  "older providers default-refuse the new effectful endpoint instead of inventing a clear");  // 172
+        }
+        {
+            TargetAccess                              owner;
+            camera_target_fixture::Pools              pools(owner);
+            std::optional<camera_target_fixture::Ped> ped;
+            ped.emplace(owner, owner.reference, pools);
+            CPoolsDE::BorrowedPedRegistration registration;
+            Check(pools.BindBorrowedPed(*ped, nullptr, registration) == ClockResult::Ok,
+                  "setter ABA test starts from the existing genuine SDK registration");  // 173
+            CPed* const    original = &*ped;
+            CEntity* const entity = static_cast<CEntity*>(original);
+            const auto     version = owner.reference.version;
+            bool           reset = false, rebound = false;
+            {
+                CamTargetSetterObserver camera(0, pools, owner);
+                owner.resolutionSeam = owner.resolutions + 1;
+                owner.afterReference = [&]
+                {
+                    reset = registration.Reset() == ClockResult::Ok;
+                    ped.reset();
+                    ++owner.reference.version;
+                    ped.emplace(owner, owner.reference, pools);
+                    rebound = pools.BindBorrowedPed(*ped, nullptr, registration) == ClockResult::Ok;
+                };
+                Refuses([&] { camera.SetTargetEntity(entity); }, "SetTargetEntity", ClockResult::BindingChanged);  // 174
+                Check(reset && rebound && static_cast<CPed*>(&*ped) == original && owner.reference.version != version,
+                      "CPU/native address recurrence does not hide replacement registration during inverse qualification");          // 175
+                Check(owner.setCalls == 0 && owner.ledger.IsRetained(), "registration ABA refuses before any native setter entry");  // 176
+            }
+            Check(owner.releases == 1 && !owner.ledger.IsRetained(), "setter ABA refusal releases only its existing camera hold");  // 177
+            Check(registration.Reset() == ClockResult::Ok && !registration.IsBound(),
+                  "replacement CPU registration is withdrawn before its typed wrapper dies");  // 178
+        }
+        Check(checks - before == 178, "setter SDK transport adds a finite case group and preserves all earlier camera cases");  // 179
+        std::puts("Actual camera target setter SDK fixture completed");
     }
 
     void HistoryPointers()
@@ -1292,6 +1488,7 @@ namespace
         ClassChainIncludeBoundary();
         PooledInterfaces();
         TargetEntities();
+        TargetSetters();
         std::puts("Actual camera JumpCut SDK fixture completed");
         std::puts("Actual camera basics SDK fixture completed");
         std::puts("Actual Cam finite FOV SDK fixture completed");

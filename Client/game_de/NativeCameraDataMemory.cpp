@@ -1015,3 +1015,48 @@ namespace mta::game_de::NativeCameraDataMemory
         return ClockResult::Ok;
     }
 }
+
+namespace mta::game_de::NativeCameraDataMemory
+{
+    ClockResult CaptureRowTargetForWrite(std::uintptr_t image, NativeCameraRowBorrow& ledger, const NativeCameraRowBorrow::Identity& identity,
+                                         const NativeCameraRowBorrow::Token& token, CheckOwner owner, CheckOwner afterApplicationOwner,
+                                         RowTargetWriteSnapshot& output) noexcept
+    {
+        namespace C = CameraRowTargetDetail;
+        namespace D = NativeStreamingCompletionContext;
+        namespace P = NativeCameraDataProfile;
+        if (!token || token.Row() >= P::RowCount)
+            return ClockResult::InvalidArgument;
+        if (!owner || !afterApplicationOwner)
+            return ClockResult::NotInitialized;
+        if (!image || image > (std::numeric_limits<std::uintptr_t>::max)() - P::ImageBytes)
+            return ClockResult::UnsupportedBuild;
+        if (identity.image != image)
+            return ClockResult::OwnerConflict;
+        auto result = ledger.Validate(token, identity);
+        if (result != ClockResult::Ok)
+            return result;
+        RowTargetWriteSnapshot next;
+        const auto             row = token.Row();
+        if ((result = C::Sample(image, row, owner, afterApplicationOwner, next.world, next.target)) != ClockResult::Ok)
+            return result;
+        if (!C::Cell(image, row, next.cell))
+            return ClockResult::BindingChanged;
+        const auto address = image + P::CameraRva + P::ArrayOffset + static_cast<std::size_t>(row) * P::RowBytes;
+        if (!NativeImageAccess::ReadImage(image, address, next.bytes.data(), next.bytes.size(), true))
+            return ClockResult::ReadFailure;
+        std::uintptr_t copied = 0;
+        std::memcpy(&copied, next.bytes.data() + C::TargetOffset, sizeof(copied));
+        D::Value       confirmedWorld;
+        std::uintptr_t confirmed = 0, confirmedCell = 0;
+        if ((result = C::Sample(image, row, owner, afterApplicationOwner, confirmedWorld, confirmed)) != ClockResult::Ok)
+            return result;
+        if (copied != next.target || confirmed != next.target || !D::Same(next.world, confirmedWorld, true) || !C::Cell(image, row, confirmedCell) ||
+            confirmedCell != next.cell)
+            return ClockResult::BindingChanged;
+        if ((result = ledger.Validate(token, identity)) != ClockResult::Ok)
+            return result;
+        output = next;
+        return ClockResult::Ok;
+    }
+}

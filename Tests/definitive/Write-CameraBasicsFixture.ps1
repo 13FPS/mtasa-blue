@@ -105,3 +105,19 @@ function Write-PedPooledFixture([string]$RepositoryRoot,[string]$OutputPath) {
         inheritedPooledMethods=@('CEntity::GetInterface');sharedVirtualPedBase=$true;nativeFactoryClaimed=$false;
         baseGenerator=$helper;baseGeneratorSha256=(Get-FileHash -LiteralPath $helper -Algorithm SHA256).Hash.ToLowerInvariant()}
 }
+
+function Write-CamTargetSetterFixture([string]$RepositoryRoot,[string]$OutputPath) {
+    $source='Client/sdk/game/CCam.h'
+    $all=@(Get-CameraBasicsSdkMethods $RepositoryRoot $source)
+    if($all.Count -ne 13){throw 'Actual setter Cam13-method partition changed'}
+    # Inherit all actual production methods. A forwarding setter in this test
+    # would hide whether virtual dispatch reaches the real implementation.
+    $lines=@('#pragma once',
+        'class CamTargetSetterObserver final : public mta::game_de::CCamTargetSetterDE {public:',
+        'CamTargetSetterObserver(std::uint32_t row,mta::game_de::CPoolsDE& pools,mta::game_de::NativeGameTimingAccess& owner) : CCamTargetSetterDE(row,pools,owner) {}',
+        '};')
+    [IO.File]::WriteAllLines($OutputPath,$lines,[Text.UTF8Encoding]::new($false))
+    [ordered]@{path=$OutputPath;sha256=(Get-FileHash -LiteralPath $OutputPath -Algorithm SHA256).Hash.ToLowerInvariant();rejectingMethods=0;
+        inheritedProductionMethods=@($all|ForEach-Object {$_.signature});source=$source;sourceSha256=(Get-FileHash -LiteralPath (Join-Path $RepositoryRoot $source) -Algorithm SHA256).Hash.ToLowerInvariant();
+        nativeFactoryClaimed=$false;sharedSdkEdited=$false;polymorphicBaseDeletionExecuted=$false;productionConstructionProtected=$true}
+}

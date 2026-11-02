@@ -346,6 +346,40 @@ namespace mta::game_de
         output = selected;
         return ClockResult::Ok;
     }
+    ClockResult CPoolsDE::ReadBorrowedPedEntityReference(CEntity* entity, CPed*& outputPed, NativePedReferenceToken& outputReference) noexcept
+    {
+        if (!entity)
+            return ClockResult::InvalidArgument;
+        auto result = pedRegistryOwner.CheckPedPoolAccess();
+        if (result != ClockResult::Ok)
+            return result;
+        for (std::size_t index = 0; index < PedCapacity; ++index)
+        {
+            if (!pedLinks[index].pEntity && !pedLinks[index].pClientEntity)
+                continue;
+            // Canonical pairs are mutable SDK storage. Validate provenance
+            // before a virtual-base conversion can touch an alleged CPed.
+            if (!Matches(index))
+                return ClockResult::BindingChanged;
+            CPed* const ped = pedControls[index].expectedPed;
+            if (static_cast<CEntity*>(ped) != entity)
+                continue;
+            const auto              version = pedControls[index].version;
+            NativePedReferenceToken reference;
+            result = ReadBorrowedPedReference(ped, reference);
+            if (result != ClockResult::Ok)
+                return result;
+            if (!Matches(index) || pedControls[index].version != version || pedControls[index].expectedPed != ped)
+                return ClockResult::BindingChanged;
+            // Only a current controlled SDK object may become native intent.
+            // The foreign CEntity input was compared, never dereferenced.
+            outputPed = ped;
+            outputReference = reference;
+            return ClockResult::Ok;
+        }
+        result = pedRegistryOwner.CheckPedPoolAccess();
+        return result == ClockResult::Ok ? ClockResult::NotInitialized : result;
+    }
     void CPoolsDE::Require(ClockResult result, const char* operation)
     {
         if (result != ClockResult::Ok)

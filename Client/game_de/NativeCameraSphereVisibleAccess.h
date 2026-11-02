@@ -6,6 +6,7 @@
 #pragma once
 #include <game/CGameClockService.h>
 #include "NativeCameraRowBorrow.h"
+#include "NativePedReferenceToken.h"
 #include <windows.h>
 #include <cstdint>
 #include <SharedUtil.Defines.h>
@@ -50,6 +51,12 @@ namespace mta::game_de
         // Raw target observation is tied to this same row client. A zero
         // or unknown value grants no entity adoption or reference writes.
         virtual ClockResult ReadCameraRowTarget(const NativeCameraRowBorrow::Token&, std::uintptr_t&) noexcept { return ClockResult::NotInitialized; }
+        // DE retargeting owns an acknowledged engine-cell itinerary. A null
+        // token pointer explicitly clears; older providers must refuse it.
+        virtual ClockResult SetCameraRowTarget(const NativeCameraRowBorrow::Token&, const NativePedReferenceToken*) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
         // Ordinary Restore is one distinct native effect. Older owners must
         // refuse rather than substitute JumpCut, a field repair or a retry.
         virtual ClockResult RestoreCamera() noexcept { return ClockResult::NotInitialized; }

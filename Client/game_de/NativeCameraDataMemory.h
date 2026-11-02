@@ -6,11 +6,25 @@
 #pragma once
 #include <game/CGameClockService.h>
 #include "NativeCameraRowBorrow.h"
+#include "NativeCameraDataProfile.h"
+#include "NativeStreamingCompletionContext.h"
 #include <cstdint>
 class CVector;
 namespace mta::game_de::NativeCameraDataMemory
 {
     using CheckOwner = ClockResult (*)() noexcept;
+    struct RowTargetWriteSnapshot
+    {
+        NativeStreamingCompletionContext::Value                      world;
+        std::array<unsigned char, NativeCameraDataProfile::RowBytes> bytes{};
+        std::uintptr_t                                               cell = 0, target = 0;
+    };
+    // Internal transaction observation: the setter owns the one streaming
+    // scope for its whole itinerary. Taking a second public-reader gate here
+    // would reject the real owner after a successful reference prefix.
+    ClockResult CaptureRowTargetForWrite(std::uintptr_t image, NativeCameraRowBorrow& ledger, const NativeCameraRowBorrow::Identity& identity,
+                                         const NativeCameraRowBorrow::Token& token, CheckOwner owner, CheckOwner afterApplicationOwner,
+                                         RowTargetWriteSnapshot& output) noexcept;
     ClockResult AcquireRowBorrow(std::uintptr_t image, std::uint32_t row, NativeCameraRowBorrow& ledger, const NativeCameraRowBorrow::Identity& identity,
                                  CheckOwner owner, CheckOwner afterApplicationOwner, NativeCameraRowBorrow::Token& output) noexcept;
     ClockResult ReadRowVector(std::uintptr_t image, NativeCameraRowBorrow& ledger, const NativeCameraRowBorrow::Identity& identity,

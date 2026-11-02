@@ -61,6 +61,7 @@
 #include "NativeCameraDirection.h"
 #include "NativeCameraRowBorrow.h"
 #include "NativeCameraRestore.h"
+#include "NativeCameraTargetSetter.h"
 #include "CWorldLineDE.h"
 #include "NativeAnimationBlockMemory.h"
 #include "NativeAnimationBlockRefMemory.h"
@@ -339,6 +340,7 @@ namespace mta::game_de
             ClockResult ReleaseCameraRowBorrow(NativeCameraRowBorrow::Token&) noexcept override;
             ClockResult ReadCameraRowVector(const NativeCameraRowBorrow::Token&, CameraRowVectorKind, CVector*&) noexcept override;
             ClockResult ReadCameraRowTarget(const NativeCameraRowBorrow::Token&, std::uintptr_t&) noexcept override;
+            ClockResult SetCameraRowTarget(const NativeCameraRowBorrow::Token&, const NativePedReferenceToken*) noexcept override;
             ClockResult RestoreCamera() noexcept override;
             ClockResult RestoreCameraWithJumpCut() noexcept override;
             ClockResult ReadStreamingModelGroups(NativeStreamingModelGroupsReader::Value&) noexcept override;
@@ -716,6 +718,8 @@ namespace mta::game_de
             NativeCameraFovWriteCalls::Receipt                cameraFovWriteReceipt;
             NativeCameraRestore                               cameraRestore;
             NativeCameraRestoreCalls::Receipt                 cameraRestoreReceipt;
+            NativeCameraTargetSetter                          cameraTargetSetter;
+            NativeCameraTargetSetterCalls::Receipt            cameraTargetSetterReceipt;
             NativeAnimationHierarchyUncompress                hierarchyUncompress;
             NativeAnimationHierarchyUncompressCalls::Receipt  hierarchyUncompressReceipt;
             NativeAnimationBlockRegistration                  blockRegistration;
@@ -922,9 +926,9 @@ namespace mta::game_de
                    runtime.pedModelCreationBusy.load() || runtime.pedModelCreationRetained.load() || runtime.modelBackingReferences.IsRetained() ||
                    runtime.pedReferences.IsRetained() || WorldIgnoreRetained() || runtime.customSequences.IsRetained() ||
                    runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained() || runtime.groupCreations.IsRetained() ||
-                   runtime.hierarchyUncompress.IsRetained() || runtime.cameraRestore.IsRetained() || runtime.cameraFovWrite.IsRetained() ||
-                   runtime.cameraDirection.IsRetained() || runtime.hierarchyCacheRemove.IsRetained() || runtime.blockRegistration.IsRetained() ||
-                   runtime.blockRemoval.IsRetained() || runtime.customSequences.HasPendingCleanup();
+                   runtime.hierarchyUncompress.IsRetained() || runtime.cameraRestore.IsRetained() || runtime.cameraTargetSetter.IsRetained() ||
+                   runtime.cameraFovWrite.IsRetained() || runtime.cameraDirection.IsRetained() || runtime.hierarchyCacheRemove.IsRetained() ||
+                   runtime.blockRegistration.IsRetained() || runtime.blockRemoval.IsRetained() || runtime.customSequences.HasPendingCleanup();
         }
 
         bool WeatherOverrideRetained() noexcept
@@ -6187,6 +6191,25 @@ namespace mta::game_de
             return NativeCameraDataMemory::ReadRowTarget(runtime.image, runtime.cameraRowBorrows, CameraRowBorrowIdentity(), token, &CheckTimingOwner,
                                                          &CheckApplicationTimingOwner, output);
         }
+        ClockResult NativeAccess::SetCameraRowTarget(const NativeCameraRowBorrow::Token& row, const NativePedReferenceToken* target) noexcept
+        {
+            // This exact Runtime resolves its already registered ped token;
+            // neither a raw pointer nor a foreign provider grants retargeting.
+            NativeCameraTargetSetterCalls::Resolver resolver{
+                static_cast<NativeGameTimingAccess*>(this), [](void* context, const NativePedReferenceToken& token, NativePedPoolReader::Value& output) noexcept
+                { return static_cast<NativeGameTimingAccess*>(context)->ResolvePedReference(token, output); }};
+            NativeCameraTargetSetterCalls::Receipt receipt;
+            const auto result = runtime.cameraTargetSetter.Set(runtime.image, runtime.cameraRowBorrows, CameraRowBorrowIdentity(), row, target, resolver,
+                                                               &CheckTimingOwner, &CheckApplicationTimingOwner, &receipt);
+            // A later refusal cannot replace the first partial-effect journal.
+            // End must retain it, without replay or engine-cell rollback.
+            if (!runtime.cameraTargetSetterReceipt.debt || receipt.effectsEntered)
+                runtime.cameraTargetSetterReceipt = receipt;
+            if (receipt.debt || runtime.cameraTargetSetter.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result;
+        }
+
         ClockResult NativeAccess::RestoreCamera() noexcept
         {
             // Restore changes permanent engine camera reference cells. Only

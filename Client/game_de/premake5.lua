@@ -12,6 +12,11 @@ project "Game DE"
 	-- This is an MTA backend module. It has no standalone transport, CLEO
 	-- lifecycle, classic engine addresses or dependency on game_sa's hooks.
 	includedirs { "../../Shared/sdk", "../sdk", "../../vendor/detours/4.0.1/src" }
+	-- The composed Reset/World SDK includes CPools and its actual sparsehash
+	-- map types. Use the same Windows/config roots as Game SA, treating only
+	-- vendor headers as external while keeping backend warnings fatal.
+	externalincludedirs { "../../vendor/sparsehash/src/windows", "../../vendor/sparsehash/src" }
+	externalwarnings "Off"
 	files { "premake5.lua", "**.h", "**.cpp" }
 	if _OPTIONS["with-definitive-adapter"] then
 		filter { "architecture:x86_64", "configurations:Release" }

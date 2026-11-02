@@ -1,5 +1,5 @@
 # Strict linear lifecycle receiver. Native hooks stay pure for genuine owner admission.
-function Write-StartupLifecycleFixture([string]$taskRoot,[string]$OutputPath) {
+function Write-StartupLifecycleFixture([string]$taskRoot,[string]$OutputPath,[switch]$BuildingDefault) {
 function InterfaceMethods([string]$RelativePath) {
     $text = [IO.File]::ReadAllText((Join-Path $taskRoot $RelativePath))
     $text = [regex]::Replace($text,'(?s)/\*.*?\*/|//[^\r\n]*','')
@@ -82,6 +82,22 @@ function InterfaceMethods([string]$RelativePath) {
         $lines+='};'
         if($missing -lt 0){$lines+='static_assert(!std::is_abstract_v<AllHooksProbe>);'}else{$lines+=('static_assert(std::is_abstract_v<'+$name+'>);')}
     }
+    # The base fourteen omission probes stay unchanged for existing owners.
+    # This derived surface supplies only thirteen guards: implementing the
+    # production capacity hook here would accidentally hide the new SDK path.
+    if($BuildingDefault) {
+        $defaultHooks=@($hooks|Where-Object{$_.name -ne 'GetResetBuildingPoolCapacity'})
+        if($defaultHooks.Count -ne 13){throw 'Building default must leave exactly13 unresolved native hooks'}
+        foreach($missing in -1..12) {
+            $name=if($missing -lt 0){'DefaultAllHooksProbe'}else{'DefaultMissingHook'+$missing}
+            $lines+=('class '+$name+' : public NoPresentationGameBase<mta::game_de::CGameBuildingPoolDefaultDE> { protected:')
+            for($index=0;$index -lt $defaultHooks.Count;$index++) {
+                if($index -ne $missing){$lines+=($defaultHooks[$index].signature+(RejectBody $defaultHooks[$index].signature ('NativeHook::'+$defaultHooks[$index].name)))}
+            }
+            $lines+='};'
+            if($missing -lt 0){$lines+='static_assert(!std::is_abstract_v<DefaultAllHooksProbe>);'}else{$lines+=('static_assert(std::is_abstract_v<'+$name+'>);')}
+        }
+    }
     $counts=[ordered]@{game=$methods.Count}
     foreach($definition in @(
         @{name='Fire';header='Client/sdk/game/CFireManager.h';base='CFireManager';provided=@('ExtinguishAllFires')},
@@ -101,5 +117,5 @@ function InterfaceMethods([string]$RelativePath) {
     [ordered]@{path=$OutputPath;sha256=(Get-FileHash -LiteralPath $OutputPath -Algorithm SHA256).Hash.ToLowerInvariant();
         namespace='lifecycle_fixture';template='GameBase<Base>';nonPresentationTemplate='NoPresentationGameBase<Base>';
         rejectingOverrides=$counts;inheritedProductionMethods=$provided|Sort-Object -Unique;pureNativeHooks=$hooks;
-        omittedHookProbes=14;allHooksProbeConcrete=$true;nativeHooksImplemented=$false;completeFactoryProvided=$false}
+        omittedHookProbes=14;defaultOmittedHookProbes=$(if($BuildingDefault){13}else{0});defaultHookInherited=[bool]$BuildingDefault;allHooksProbeConcrete=$true;nativeHooksImplemented=$false;completeFactoryProvided=$false}
 }

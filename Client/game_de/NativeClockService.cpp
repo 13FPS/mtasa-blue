@@ -64,6 +64,7 @@
 #include "NativeCameraTargetSetter.h"
 #include "NativeCameraWidescreen.h"
 #include "NativeCameraMainTargetMemory.h"
+#include "NativeBuildingPoolDefaultMemory.h"
 #include "CWorldLineDE.h"
 #include "NativeAnimationBlockMemory.h"
 #include "NativeAnimationBlockRefMemory.h"
@@ -363,6 +364,7 @@ namespace mta::game_de
             ClockResult ReadModelAnimFileIndex(std::uint32_t, std::uint32_t&) noexcept override;
             ClockResult CreateAndPublishPedModelMetadata(std::uint32_t) noexcept override;
             ClockResult CopyStartupModelCollision(std::uint32_t, std::uint32_t) noexcept override;
+            ClockResult ReadDefaultBuildingPoolCapacity(std::uint32_t&) noexcept override;
             ClockResult RequireStartupInitializationReady() noexcept override;
             ClockResult RequireStartupPedModelCreationReady() noexcept override;
             ClockResult RequireStartupSpecialModelRequestReady() noexcept override;
@@ -5768,6 +5770,12 @@ namespace mta::game_de
             if (result == ClockResult::Ok)
                 output = next;
             return result;
+        }
+        ClockResult NativeAccess::ReadDefaultBuildingPoolCapacity(std::uint32_t& output) noexcept
+        {
+            // The const SDK hook borrows this exact current owner. Neither a
+            // live capacity snapshot nor native pool effects supply a default.
+            return NativeBuildingPoolDefaultMemory::Read(runtime.image, &CheckTimingOwner, &CheckApplicationTimingOwner, output);
         }
         ClockResult NativeAccess::RequireStartupInitializationReady() noexcept
         {

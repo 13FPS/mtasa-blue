@@ -48,6 +48,9 @@ namespace mta::game_de
         static float                  RequireFPS(const NativeGameTimingReader& reader);
         static void                   RequireNativeWrite(ClockResult result, const char* operation);
         NativeGameTimingAccess&       NativeWrites() noexcept { return timingWriter; }
+        // A const game facade still borrows the identical current native owner.
+        // Observation may update that owner's scope/diagnostics, not this game.
+        NativeGameTimingAccess& NativeWrites() const noexcept { return timingWriter; }
 
     private:
         const NativeGameTimingReader& timing;

@@ -9,6 +9,7 @@
 #include <SharedUtil.Misc.h>
 #pragma warning(pop)
 #include "../../Client/game_de/CGameStartupLifecycleDE.h"
+#include "../../Client/game_de/CGameBuildingPoolDefaultDE.h"
 #include "../../Client/game_de/NativeGameTimingAccess.h"
 #include "../../Client/game_de/CClockDE.h"
 #include <game/CFireManager.h>
@@ -22,6 +23,7 @@
 #include <functional>
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <vector>
 #include "StartupLifecycleFixture.generated.h"
@@ -150,6 +152,7 @@ namespace
 
     public:
         int  size = 20;
+        int  lastCapacity = -1;
         bool resizeResult = true;
         explicit Buildings(Trace& t) : trace(t) {}
         int GetSize() const override
@@ -160,6 +163,7 @@ namespace
         bool Resize(int next) override
         {
             trace.Call(112);
+            lastCapacity = next;
             if (resizeResult)
                 size = next;
             return resizeResult;
@@ -193,7 +197,7 @@ namespace
         ClockResult Freeze(bool) noexcept override { std::abort(); }
         ClockResult Frozen(bool&) const noexcept override { std::abort(); }
     };
-    class Owner final : public NativeGameTimingAccess
+    class Owner : public NativeGameTimingAccess
     {
     public:
         NativeGameConstructorServices bundle;
@@ -320,17 +324,20 @@ namespace
                   std::is_base_of_v<CGameStartupInitializationDE, Game>);
     static_assert(std::is_abstract_v<CGameStartupLifecycleDE> && std::is_abstract_v<CGameStartupLifecyclePresentationDE> &&
                   std::is_convertible_v<CGameStartupLifecyclePresentationDE*, CGame*>);
-    struct Context
+    // A typed test owner lets the default hook extend this same service graph
+    // without replacing the real inherited hook with a policy spy.
+    template <class OwnerType>
+    struct ContextWithOwner
     {
         NativeGameTimingReader          reader;
         NativeStreamingFileIdsReader    streaming;
         NativeGameStateReader           state;
         ClockOwner                      clockOwner;
         CClockDE                        clock{clockOwner};
-        Owner                           owner;
+        OwnerType                       owner;
         Trace                           trace;
         std::array<std::uintptr_t, 128> tags{};
-        Context()
+        ContextWithOwner()
         {
             // Opaque test-only bundle identities are compared but never used
             // as service objects or native effect endpoints.
@@ -347,6 +354,7 @@ namespace
                 b.weapons[i] = reinterpret_cast<CWeaponInfo*>(&tags[6 + i]);
         }
     };
+    using Context = ContextWithOwner<Owner>;
     bool Pre(CPlayerPed*, bool)
     {
         return false;
@@ -473,6 +481,7 @@ namespace
               "oversize capacity refuses before readiness or SDK effects");
         std::puts("Actual lifecycle Reset World order and state fixture completed");
     }
+#include "BuildingPoolDefaultSdkTests.inl"
 }
 int main()
 {
@@ -480,6 +489,7 @@ int main()
     {
         Identity();
         Policies();
+        BuildingDefaults();
         std::puts("All fourteen lifecycle native hooks remain abstract");
         std::printf("Passed %u startup lifecycle SDK checks (%u-bit; policy doubles only)\n", checks, static_cast<unsigned>(sizeof(void*) * 8));
         return 0;

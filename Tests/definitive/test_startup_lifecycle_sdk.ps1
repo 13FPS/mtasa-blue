@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 #requires -Version 7.0
-# Compile only the actual world lifecycle policy/SDK dispatch; no historical Reset suite replay.
+# Compile the actual combined lifecycle graph and its qualified original-capacity hook; no unrelated suite replay.
 [CmdletBinding()]
 param()
 
@@ -20,9 +20,10 @@ $record = [ordered]@{
     schema='mta_startup_lifecycle_sdk_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     generatedFixture=$null;results=@();failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;
-    scope='One actual linear startup/reset/world CGame SDK graph; shared prepared identities/handlers, inherited ready-Initialize refusal, policy order/state and14 pure native hooks. Explicit policy doubles exercise no native engine code.';
+    scope='One actual linear startup/reset/world CGame SDK graph; shared prepared identities/handlers, inherited ready-Initialize refusal, policy order/state and14 pure native hooks; the default-capacity derived type retains13 and inherits its real const SDK hook. Explicit policy doubles exercise no native engine code.';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;completeCGameReady=$false;
-    lifecycleSingleGameTested=$false;lifecycleSharedServicesHandlersTested=$false;lifecyclePoliciesTested=$false;lifecyclePureHooksTested=$false;lifecycleReadyInitializationInheritedTested=$false
+    lifecycleSingleGameTested=$false;lifecycleSharedServicesHandlersTested=$false;lifecyclePoliciesTested=$false;lifecyclePureHooksTested=$false;lifecycleReadyInitializationInheritedTested=$false;
+    lifecycleDefaultCapacitySdkTested=$false;lifecycleDefaultCapacityTransportTested=$false;lifecycleDefaultCapacityResetOrderTested=$false;lifecycleDefaultCapacityPureHooksTested=$false
 }
 
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -80,7 +81,7 @@ function InterfaceMethods([string]$RelativePath) {
 }
 
 try {
-    $productionSources = @('Tests/definitive/TextureRegistrySStringSupport.cpp','Client/game_de/CGameWorldDE.cpp','Client/game_de/CGameResetDE.cpp','Client/game_de/CGameInitializationDE.cpp','Client/game_de/CGaragesDE.cpp','Client/game_de/CGameDE.cpp','Client/game_de/CGameTimingDE.cpp','Client/game_de/CGameWeaponInfoDE.cpp','Client/game_de/CWeaponStatFactoryDE.cpp','Client/game_de/CClockDE.cpp',
+    $productionSources = @('Client/game_de/CGameBuildingPoolDefaultDE.cpp','Tests/definitive/TextureRegistrySStringSupport.cpp','Client/game_de/CGameWorldDE.cpp','Client/game_de/CGameResetDE.cpp','Client/game_de/CGameInitializationDE.cpp','Client/game_de/CGaragesDE.cpp','Client/game_de/CGameDE.cpp','Client/game_de/CGameTimingDE.cpp','Client/game_de/CGameWeaponInfoDE.cpp','Client/game_de/CWeaponStatFactoryDE.cpp','Client/game_de/CClockDE.cpp',
         'Client/game_de/CKeyGenDE.cpp','Client/game_de/CAsyncLoadingDE.cpp','Client/game_de/NativeGravityReadAccess.cpp','Client/game_de/NativeGameTimingReader.cpp',
         'Client/game_de/NativeGameTimeReader.cpp','Client/game_de/NativeStreamingFileIdsReader.cpp',
         'Client/game_de/NativeGameStateReader.cpp','Client/game_de/NativeGameStateMemory.cpp','Client/game_de/NativeDataFileNamesReader.cpp','Client/game_de/NativeImageAccess.cpp',
@@ -118,12 +119,13 @@ try {
     $sourceNames += @('Build/definitive-recovery/mta-startup-model-collision-20261028/startup-model-collision-api-source-ready.json','Build/definitive-recovery/mta-startup-model-collision-20261028/startup-model-collision-sdk-admission-ready.json','Build/definitive-recovery/mta-startup-model-collision-tests-20261028/startup-model-collision-sdk-tests-source-ready.json')
     $sourceNames += @('Client/game_de/CGameResetMixinDE.inl','Client/game_de/CGameWorldMixinDE.inl','Client/game_de/CGameStartupLifecycleDE.h','Client/game_de/CGameStartupInitializationDE.h','Client/game_de/CGameStartupStreamingDE.h','Client/game_de/CGameNumericGaragesDE.h','Client/game_de/CGameNativeMenuDE.h','Client/game_de/CGameRenderPreparationDE.h','Client/game_de/CGamePresentationPolicyDE.h','Client/game_de/NativePresentationPolicyAccess.h','Client/game_de/WeaponFireHandlerAccess.h','Client/sdk/game/CGamePresentationPolicy.h','Client/game_de/CRenderWarePreparationDE.h','Client/sdk/game/CShaderTextureWatchTypes.h','Client/sdk/game/CShaderTextureWatch.h','Client/sdk/game/CShaderTextureWatch.inl','Client/sdk/game/CTextureWatchInitializationPolicy.h','Shared/sdk/SString.hpp','Shared/sdk/SharedUtil.FastHashMap.h','Shared/sdk/SharedUtil.FastHashSet.h','Tests/definitive/Write-StartupLifecycleFixture.ps1')
     $sourceNames += @('vendor/sparsehash/src/google/dense_hash_map','vendor/sparsehash/src/google/dense_hash_set','vendor/sparsehash/src/sparsehash/dense_hash_map','vendor/sparsehash/src/sparsehash/dense_hash_set','vendor/sparsehash/src/sparsehash/internal/densehashtable.h','vendor/sparsehash/src/sparsehash/internal/hashtable-common.h','vendor/sparsehash/src/sparsehash/internal/libc_allocator_with_realloc.h','vendor/sparsehash/src/sparsehash/type_traits.h','vendor/sparsehash/src/sparsehash/template_util.h','vendor/sparsehash/src/windows/sparsehash/internal/sparseconfig.h')
+    $sourceNames += @('Client/game_de/CGameBuildingPoolDefaultDE.h','Tests/definitive/BuildingPoolDefaultSdkTests.inl')
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
     . (Join-Path $PSScriptRoot 'Write-StartupLifecycleFixture.ps1')
     $generated=Join-Path $scratchRoot 'StartupLifecycleFixture.generated.h'
-    $record.generatedFixture=Write-StartupLifecycleFixture $taskRoot $generated
+    $record.generatedFixture=Write-StartupLifecycleFixture $taskRoot $generated -BuildingDefault
     $durableGenerated=Join-Path $outputRoot 'StartupLifecycleFixture.generated.h'
     Copy-Item -LiteralPath $generated -Destination $durableGenerated
     $record.generatedFixture['durablePath']=$durableGenerated
@@ -173,16 +175,20 @@ try {
         $result['lifecyclePoliciesTested']=$stdout.Contains('Actual lifecycle Reset World order and state fixture completed')
         $result['lifecyclePureHooksTested']=$stdout.Contains('All fourteen lifecycle native hooks remain abstract')
         $result['lifecycleReadyInitializationInheritedTested']=$stdout.Contains('Actual lifecycle inherited Initialize refusal fixture completed')
+        $result['lifecycleDefaultCapacitySdkTested']=$stdout.Contains('Actual lifecycle default capacity SDK and const owner fixture completed')
+        $result['lifecycleDefaultCapacityTransportTested']=$stdout.Contains('Actual lifecycle default capacity range and refusal transport fixture completed')
+        $result['lifecycleDefaultCapacityResetOrderTested']=$stdout.Contains('Actual lifecycle default capacity inherited Reset order fixture completed')
+        $result['lifecycleDefaultCapacityPureHooksTested']=$stdout.Contains('Thirteen remaining default lifecycle native hooks remain abstract')
         $expectedBits=if($architecture -eq 'x86'){32}else{64}
-        if($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -ne 94 -or $result.pointerBits -ne $expectedBits -or
-            -not($result.lifecycleSingleGameTested -and $result.lifecycleSharedServicesHandlersTested -and $result.lifecyclePoliciesTested -and $result.lifecyclePureHooksTested -and $result.lifecycleReadyInitializationInheritedTested)) {
+        if($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -ne 132 -or $result.pointerBits -ne $expectedBits -or
+            -not($result.lifecycleSingleGameTested -and $result.lifecycleSharedServicesHandlersTested -and $result.lifecyclePoliciesTested -and $result.lifecyclePureHooksTested -and $result.lifecycleReadyInitializationInheritedTested -and $result.lifecycleDefaultCapacitySdkTested -and $result.lifecycleDefaultCapacityTransportTested -and $result.lifecycleDefaultCapacityResetOrderTested -and $result.lifecycleDefaultCapacityPureHooksTested)) {
             throw "$architecture lifecycle SDK checks or required graph/policy evidence failed"
         }
     }
-    foreach($marker in @('lifecycleSingleGameTested','lifecycleSharedServicesHandlersTested','lifecyclePoliciesTested','lifecyclePureHooksTested','lifecycleReadyInitializationInheritedTested')) {
+    foreach($marker in @('lifecycleSingleGameTested','lifecycleSharedServicesHandlersTested','lifecyclePoliciesTested','lifecyclePureHooksTested','lifecycleReadyInitializationInheritedTested','lifecycleDefaultCapacitySdkTested','lifecycleDefaultCapacityTransportTested','lifecycleDefaultCapacityResetOrderTested','lifecycleDefaultCapacityPureHooksTested')) {
         $record[$marker]=@($record.results|Where-Object{-not $_[$marker]}).Count -eq 0
     }
-    $record.success=$record.results.Count -eq 2 -and $record.lifecycleSingleGameTested -and $record.lifecycleSharedServicesHandlersTested -and $record.lifecyclePoliciesTested -and $record.lifecyclePureHooksTested -and $record.lifecycleReadyInitializationInheritedTested
+    $record.success=$record.results.Count -eq 2 -and $record.lifecycleSingleGameTested -and $record.lifecycleSharedServicesHandlersTested -and $record.lifecyclePoliciesTested -and $record.lifecyclePureHooksTested -and $record.lifecycleReadyInitializationInheritedTested -and $record.lifecycleDefaultCapacitySdkTested -and $record.lifecycleDefaultCapacityTransportTested -and $record.lifecycleDefaultCapacityResetOrderTested -and $record.lifecycleDefaultCapacityPureHooksTested
 
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {

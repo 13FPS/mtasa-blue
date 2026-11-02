@@ -255,6 +255,9 @@ namespace mta::game_de
         // Native pump facts are scoped to an actually entered request in this
         // owner generation. They do not certify player or network readiness.
         virtual ClockResult ReadStartupProgress(NativeStartupCompletionAccess::Value&) noexcept { return ClockResult::NotInitialized; }
+        // Read the genuine original BUILDING constructor capacity, separately
+        // from mutable pool size. Older owners explicitly refuse this surface.
+        virtual ClockResult ReadDefaultBuildingPoolCapacity(std::uint32_t&) noexcept { return ClockResult::NotInitialized; }
 
     protected:
         ~NativeGameTimingAccess() = default;

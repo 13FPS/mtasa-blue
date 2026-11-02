@@ -76,6 +76,9 @@
 #pragma warning(pop)
 #include <game/CGame.h>
 #include "../../Client/game_de/CGameStartupLifecycleDE.h"
+#include "../../Client/game_de/CGameBuildingPoolDefaultDE.h"
+#include "../../Client/game_de/NativeBuildingPoolDefaultMemory.h"
+#include "../../Client/game_de/NativeBuildingPoolDefaultProfile.h"
 #include <game/CFireManager.h>
 #include <game/CCamera.h>
 #include <game/CHud.h>
@@ -9076,6 +9079,7 @@ namespace
 #include "WidescreenOwnerTests.inl"
 #undef MTA_DE_CAMERA_WIDESCREEN_OWNER_BODY
 #include "MainTargetOwnerTests.inl"
+#include "BuildingPoolDefaultOwnerTests.inl"
 // The model fixture consumes the shared byte helpers defined by the earlier
 // private-association fixture; keep its consumer after those definitions.
 #include "../../Client/game_de/CModelInfoDE.h"
@@ -9174,6 +9178,7 @@ int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
     const bool presentTransitionClockOnly = argc == 3 && std::strcmp(argv[2], "--present-transition-clock") == 0;
+    const bool buildingPoolDefaultOnly = argc == 3 && std::strcmp(argv[2], "--building-pool-default") == 0;
     const bool startupLifecycleOnly = argc == 3 && std::strcmp(argv[2], "--startup-lifecycle") == 0;
     const bool startupInitializationReadinessOnly = argc == 3 && std::strcmp(argv[2], "--startup-initialization-readiness") == 0;
     const bool startupStreamingReceiverOnly = argc == 3 && std::strcmp(argv[2], "--startup-streaming-receiver") == 0;
@@ -9585,11 +9590,11 @@ int main(int argc, char** argv)
     const bool poseOnly = argc == 3 && std::strcmp(argv[2], "--ped-pose") == 0;
     const bool poolRegistryOnly = argc == 3 && std::strcmp(argv[2], "--ped-pool-registry") == 0;
     Check(
-        (argc == 2 || presentTransitionClockOnly || startupLifecycleOnly || startupInitializationReadinessOnly || startupStreamingReceiverOnly ||
-         startupNumericGaragesOnly || startupPreparationReadinessOnly || startupMenuOnly || startupCollisionOnly || pedCreationLifecycleOnly ||
-         constructorOnly || vehiclePredicatesOnly || modelTimeGetterOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly ||
-         poolRegistryOnly || poseOnly || waterOnly || animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly ||
-         areaOnly || specialOnly || fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly ||
+        (argc == 2 || presentTransitionClockOnly || buildingPoolDefaultOnly || startupLifecycleOnly || startupInitializationReadinessOnly ||
+         startupStreamingReceiverOnly || startupNumericGaragesOnly || startupPreparationReadinessOnly || startupMenuOnly || startupCollisionOnly ||
+         pedCreationLifecycleOnly || constructorOnly || vehiclePredicatesOnly || modelTimeGetterOnly || pedOwnerOnly || currentWeaponOnly || garageNamedOnly ||
+         garagePoolsOnly || poolRegistryOnly || poseOnly || waterOnly || animationOnly || animationNameOnly || animationManagerOnly || animationServicesOnly ||
+         areaSpecialOnly || areaOnly || specialOnly || fireCollisionOnly || fireOnly || collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly ||
          constructorServicesOnly || worldGroundOnly || worldLineOnly || worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly ||
          pedWeaponGrantOnly || worldIgnoreOnly || cameraSphereOnly || pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || pedMoveAnimOnly ||
          playerNativePrerequisitesOnly || animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly ||
@@ -9613,6 +9618,14 @@ int main(int argc, char** argv)
         ClockImageFixture fixture;
         fixture.Create(argv[1]);
         PresentTransitionClockFixture::Run(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (buildingPoolDefaultOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        BuildingPoolDefaultOwnerFixture::Run(fixture);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

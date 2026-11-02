@@ -20,10 +20,10 @@ $record = [ordered]@{
     schema='mta_camera_basics_sdk_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     results=@();failure=$null;scratchDirectory=$scratchRoot;scratchFilesRemaining=$null;scratchRemoved=$false;
-    scope='Actual camera Restore/rawBYTE selector and const Cam FOV over the same retained provider. Every finite FOV preserves bits, successful nonfinite becomes70; provider refusal always propagates. Full logicalDWORD dispatch and all14 statuses, default-refusing older providers, existing sphere regression. Includes selected actual JumpCut owner transport; its native two-step/deferred-yaw policy is verified by the owner fixture. Includes actual SetFOV finite open0..180 input policy, invalid no-provider no-ops and valid exact raw-bit/full-row dispatch. Includes actual signed mode/GetDirection/SetDirection policies: raw read, zero-or-one original-pair conditional repair, source wrapping and ACK-before-output alias order. No vector borrow or complete camera/GetCam factory.';
+    scope='Actual camera Restore/rawBYTE selector and const Cam FOV over the same retained provider. Every finite FOV preserves bits, successful nonfinite becomes70; provider refusal always propagates. Full logicalDWORD dispatch and all14 statuses, default-refusing older providers, existing sphere regression. Includes selected actual JumpCut owner transport; its native two-step/deferred-yaw policy is verified by the owner fixture. Includes actual SetFOV finite open0..180 input policy, invalid no-provider no-ops and valid exact raw-bit/full-row dispatch. Includes actual signed mode/GetDirection/SetDirection policies: raw read, zero-or-one original-pair conditional repair, source wrapping and ACK-before-output alias order. Includes actual retained partial-row SDK vector transport, unique acquisition and producer release, exact pointer identity/direct writes and refusal propagation. Native lifetime/field admission is tested separately by the owner fixture; no complete camera/GetCam factory.';
     ownedBuffersOnly=$true;nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;
     completeCameraReady=$false;completeCamReady=$false;fullMtaReady=$false;installationChanged=$false;
-    actualCameraBasicsSdkTested=$false;actualCameraJumpCutSdkTested=$false;actualCameraFovWriteSdkTested=$false;actualCameraDirectionSdkTested=$false
+    actualCameraBasicsSdkTested=$false;actualCameraJumpCutSdkTested=$false;actualCameraFovWriteSdkTested=$false;actualCameraDirectionSdkTested=$false;actualCameraRowBorrowSdkTested=$false
 
 }
 
@@ -78,7 +78,7 @@ function RunOwned([string]$Executable,[string[]]$Arguments,[string]$Directory,[s
 }
 
 try {
-    $productionSources=@('Client/game_de/CCameraSphereVisibleDE.cpp','Client/game_de/CCamFovDE.cpp')
+    $productionSources=@('Client/game_de/CCameraSphereVisibleDE.cpp','Client/game_de/CCamFovDE.cpp','Client/game_de/CCamRowDE.cpp')
     $sourceNames=$productionSources+@('Client/game_de/NativeCameraSphereVisibleAccess.h','Tests/definitive/CameraBasicsSdkTests.cpp','Tests/definitive/test_camera_basics_sdk.ps1','Tests/definitive/Write-CameraBasicsFixture.ps1')
     $pending=[Collections.Generic.Queue[string]]::new()
     $seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -99,10 +99,14 @@ try {
     . (Join-Path $PSScriptRoot 'Write-CameraBasicsFixture.ps1')
     $cameraGenerated=Join-Path $scratchRoot 'CameraBasicsFixture.generated.h'
     $camGenerated=Join-Path $scratchRoot 'CamFovFixture.generated.h'
+    $rowGenerated=Join-Path $scratchRoot 'CamRowFixture.generated.h'
     $record['cameraGeneratedFixture']=Write-CameraBasicsFixture $taskRoot $cameraGenerated
     $record['camGeneratedFixture']=Write-CamFovFixture $taskRoot $camGenerated
+    $record['rowGeneratedFixture']=Write-CamRowFixture $taskRoot $rowGenerated
     if($record.cameraGeneratedFixture.rejectingMethods -ne 31 -or @($record.cameraGeneratedFixture.inheritedProductionMethods).Count -ne 4){throw 'Actual camera SDK35-method partition changed'}
     if($record.camGeneratedFixture.rejectingMethods -ne 8 -or @($record.camGeneratedFixture.inheritedProductionMethods).Count -ne 5){throw 'Actual Cam SDK13-method partition changed'}
+    if($record.rowGeneratedFixture.rejectingMethods -ne 3 -or @($record.rowGeneratedFixture.inheritedProductionMethods).Count -ne 10){throw 'Actual retained Cam SDK13-method partition changed'}
+    Copy-Item -LiteralPath $rowGenerated -Destination (Join-Path $outputRoot ([IO.Path]::GetFileName($rowGenerated)))
     Copy-Item -LiteralPath $cameraGenerated -Destination (Join-Path $outputRoot ([IO.Path]::GetFileName($cameraGenerated)))
     Copy-Item -LiteralPath $camGenerated -Destination (Join-Path $outputRoot ([IO.Path]::GetFileName($camGenerated)))
 
@@ -160,11 +164,12 @@ try {
         $result['actualCameraJumpCutSdkTested']=$text.Contains('Actual camera JumpCut SDK fixture completed')
         $result['actualCameraFovWriteSdkTested']=$text.Contains('Actual Cam SetFOV SDK policy fixture completed')
         $result['actualCameraDirectionSdkTested']=$text.Contains('Actual Cam mode and direction SDK policy fixture completed')
+        $result['actualCameraRowBorrowSdkTested']=$text.Contains('Actual retained Cam row vector SDK fixture completed')
         $result['actualCamFovSdkTested']=$text.Contains('Actual Cam finite FOV SDK fixture completed')
         $result['cameraProviderRefusalTransportTested']=$text.Contains('Actual camera provider refusal transport fixture completed')
 
         $expectedBits = if ($architecture -eq 'x86') { 32 } else { 64 }
-        if ($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -ne 2525 -or $result.pointerBits -ne $expectedBits -or -not $result.actualCameraBasicsSdkTested -or -not $result.actualCameraJumpCutSdkTested -or -not $result.actualCameraFovWriteSdkTested -or -not $result.actualCameraDirectionSdkTested -or -not $result.actualCamFovSdkTested -or -not $result.cameraProviderRefusalTransportTested) {
+        if ($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -ne 2795 -or $result.pointerBits -ne $expectedBits -or -not $result.actualCameraBasicsSdkTested -or -not $result.actualCameraJumpCutSdkTested -or -not $result.actualCameraFovWriteSdkTested -or -not $result.actualCameraDirectionSdkTested -or -not $result.actualCameraRowBorrowSdkTested -or -not $result.actualCamFovSdkTested -or -not $result.cameraProviderRefusalTransportTested) {
             throw "$architecture actual camera basics SDK checks failed or summary/pointer-width evidence was missing."
         }
     }
@@ -173,9 +178,10 @@ try {
     $record.actualCameraJumpCutSdkTested=@($record.results|Where-Object{-not $_.actualCameraJumpCutSdkTested}).Count -eq 0
     $record.actualCameraFovWriteSdkTested=@($record.results|Where-Object{-not $_.actualCameraFovWriteSdkTested}).Count -eq 0
     $record.actualCameraDirectionSdkTested=@($record.results|Where-Object{-not $_.actualCameraDirectionSdkTested}).Count -eq 0
+    $record.actualCameraRowBorrowSdkTested=@($record.results|Where-Object{-not $_.actualCameraRowBorrowSdkTested}).Count -eq 0
     $record['actualCamFovSdkTested']=@($record.results|Where-Object{-not $_.actualCamFovSdkTested}).Count -eq 0
     $record['cameraProviderRefusalTransportTested']=@($record.results|Where-Object{-not $_.cameraProviderRefusalTransportTested}).Count -eq 0
-    $record.success = $record.results.Count -eq 2 -and $record.actualCameraBasicsSdkTested -and $record.actualCameraJumpCutSdkTested -and $record.actualCameraFovWriteSdkTested -and $record.actualCameraDirectionSdkTested -and $record.actualCamFovSdkTested -and $record.cameraProviderRefusalTransportTested
+    $record.success = $record.results.Count -eq 2 -and $record.actualCameraBasicsSdkTested -and $record.actualCameraJumpCutSdkTested -and $record.actualCameraFovWriteSdkTested -and $record.actualCameraDirectionSdkTested -and $record.actualCameraRowBorrowSdkTested -and $record.actualCamFovSdkTested -and $record.cameraProviderRefusalTransportTested
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {
     foreach ($name in $previousEnvironment.Keys) {

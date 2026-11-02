@@ -7,6 +7,8 @@
 #include "../../Client/game_de/NativeCameraFovWrite.h"
 #include "../../Client/game_de/NativeCameraDirection.h"
 #include "../../Client/game_de/NativeCameraDirectionProfile.h"
+#include "../../Client/game_de/NativeCameraRowBorrowProfile.h"
+#include "../../Client/game_de/CCamRowDE.h"
 #include "../../Client/game_de/CCamFovDE.h"
 #include "../../Client/game_de/NativeCameraDataMemory.h"
 #include "../../Client/game_de/NativeCameraDataProfile.h"
@@ -608,6 +610,7 @@ namespace camera_sphere_visible_fixture
 #include "CameraSphereVisibleFixture.generated.h"
 #include "CameraBasicsFixture.generated.h"
 #include "CamFovFixture.generated.h"
+#include "CamRowFixture.generated.h"
 
 namespace ClockCameraSphereOwnerTest
 {
@@ -8996,6 +8999,7 @@ namespace
 #include "JumpCutOwnerTests.inl"
 #include "FovWriteOwnerTests.inl"
 #include "DirectionOwnerTests.inl"
+#include "RowBorrowOwnerTests.inl"
 // The model fixture consumes the shared byte helpers defined by the earlier
 // private-association fixture; keep its consumer after those definitions.
 #include "../../Client/game_de/CModelInfoDE.h"
@@ -9152,6 +9156,15 @@ int main(int argc, char** argv)
         staticAssociationInitializationUnknown || (argc == 3 && std::strcmp(argv[2], "--static-association-initialization-success") == 0);
     const bool animationStaticAssociationReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-static-association-reads") == 0;
     const bool animationAssociationGroupReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-association-group-reads") == 0;
+    const bool cameraRowBorrowOnly = argc == 3 && std::strncmp(argv[2], "--camera-row-borrow-", 20) == 0;
+    unsigned   cameraRowBorrowScenario = 3;
+    if (cameraRowBorrowOnly)
+    {
+        const char* names[] = {"success", "refusals", "tokens"};
+        for (unsigned i = 0; i != 3; ++i)
+            if (std::strcmp(argv[2] + 20, names[i]) == 0)
+                cameraRowBorrowScenario = i;
+    }
     const bool cameraDirectionOnly = argc == 3 && std::strncmp(argv[2], "--camera-direction-", 19) == 0;
     unsigned   cameraDirectionScenario = 18;
     if (cameraDirectionOnly)
@@ -9453,10 +9466,10 @@ int main(int argc, char** argv)
            privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly ||
            sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly ||
            animationDefinitionBlockNamesOnly || animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly ||
-           cameraBasicsOnly || cameraJumpCutOnly || cameraFovWriteOnly || cameraDirectionOnly || applicationTimingOnly || emptyBlockRemovalOnly ||
-           blockRegistrationOnly || bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly ||
-           dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
-           groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
+           cameraBasicsOnly || cameraJumpCutOnly || cameraFovWriteOnly || cameraDirectionOnly || cameraRowBorrowOnly || applicationTimingOnly ||
+           emptyBlockRemovalOnly || blockRegistrationOnly || bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly ||
+           numericAssociationOnly || dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly ||
+           groupCopyAnimationOnly || groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
            animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
            privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
@@ -9636,6 +9649,15 @@ int main(int argc, char** argv)
         fixture.Create(argv[1]);
         // One real module-pinned lifetime needs one pristine host process.
         NativeAnimationBlocksOwnedSdk(fixture, &AnimationAssociationGroupChildProductsOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (cameraRowBorrowOnly)
+    {
+        Check(cameraRowBorrowScenario < 3, "exact finite camera row-borrow scenario required");
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        CameraRowBorrowOwnerFixture::Run(fixture, cameraRowBorrowScenario);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

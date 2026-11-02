@@ -7,6 +7,10 @@
 #include "NativeCameraFovWrite.h"
 #include "NativeCameraDirection.h"
 #include "NativeCameraDirectionProfile.h"
+#include "NativeCameraRowBorrowProfile.h"
+// CVector's inline SDK helpers require the existing shared float constants.
+#include <SharedUtil.Defines.h>
+#include <CVector.h>
 #include <intrin.h>
 #include "NativeCameraDataProfile.h"
 #include "NativeStreamingCompletionContext.h"
@@ -629,5 +633,170 @@ namespace mta::game_de
         receipt.effectsVerified = true;
         data.reset();
         return finish(ClockResult::Ok);
+    }
+}
+
+namespace mta::game_de
+{
+    namespace CameraRowBorrowDetail
+    {
+        namespace M = NativeCameraDataMemory;
+        namespace P = NativeCameraDataProfile;
+        namespace Q = NativeCameraRowBorrowProfile;
+        namespace D = NativeStreamingCompletionContext;
+        namespace I = NativeImageAccess;
+        using CheckOwner = NativeCameraDataMemory::CheckOwner;
+
+        // These are the actual SDK vector fields, not copies with a setter
+        // hidden behind them. Check the float-triple ABI before lending one.
+        static_assert(std::is_standard_layout_v<CVector> && sizeof(CVector) == 12 && alignof(CVector) == 4 && offsetof(CVector, fX) == 0 &&
+                      offsetof(CVector, fY) == 4 && offsetof(CVector, fZ) == 8);
+
+        bool Profile(std::uintptr_t image) noexcept
+        {
+            if (!M::Profile(image))
+                return false;
+            IMAGE_DOS_HEADER   dos{};
+            IMAGE_NT_HEADERS64 nt{};
+            if (!I::ReadImage(image, image, &dos, sizeof(dos)) || dos.e_lfanew <= 0 || static_cast<std::size_t>(dos.e_lfanew) > P::ImageBytes - sizeof(nt) ||
+                !I::ReadImage(image, image + static_cast<std::uintptr_t>(dos.e_lfanew), &nt, sizeof(nt)) ||
+                nt.FileHeader.SizeOfOptionalHeader < sizeof(IMAGE_OPTIONAL_HEADER64) || !nt.FileHeader.NumberOfSections || nt.FileHeader.NumberOfSections > 96)
+                return false;
+            const auto at = static_cast<std::size_t>(dos.e_lfanew) + offsetof(IMAGE_NT_HEADERS64, OptionalHeader) + nt.FileHeader.SizeOfOptionalHeader;
+            const auto bytes = static_cast<std::size_t>(nt.FileHeader.NumberOfSections) * sizeof(IMAGE_SECTION_HEADER);
+            std::array<IMAGE_SECTION_HEADER, 96> sections{};
+            if (at > P::ImageBytes || bytes > P::ImageBytes - at || !I::ReadImage(image, image + at, sections.data(), bytes))
+                return false;
+            for (const auto& pin : Q::Pins)
+            {
+                bool admitted = false;
+                for (std::size_t index = 0; index != nt.FileHeader.NumberOfSections; ++index)
+                    admitted =
+                        admitted || I::SectionContains(sections[index], pin.rva, pin.size, IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_WRITE);
+                std::array<unsigned char, Q::MaximumPinBytes> current{};
+                if (!admitted || !pin.size || pin.size > current.size() || !I::ReadImage(image, image + pin.rva, current.data(), pin.size, false, true) ||
+                    std::memcmp(current.data(), pin.bytes, pin.size))
+                    return false;
+            }
+            return true;
+        }
+
+        bool Fields(std::uintptr_t image, std::uint32_t logicalRow) noexcept
+        {
+            if (logicalRow >= P::RowCount || !M::Storage(image))
+                return false;
+            const auto rowOffset = P::ArrayOffset + static_cast<std::size_t>(logicalRow) * P::RowBytes;
+            for (const auto offset : Q::VectorOffsets)
+            {
+                if (offset > P::RowBytes || sizeof(CVector) > P::RowBytes - offset || rowOffset > P::CameraBytes || offset > P::CameraBytes - rowOffset ||
+                    sizeof(CVector) > P::CameraBytes - rowOffset - offset)
+                    return false;
+                const auto address = image + P::CameraRva + rowOffset + offset;
+                if (address % alignof(CVector) || !I::ImagePages(image, address, sizeof(CVector), true))
+                    return false;
+            }
+            // Mutable vector contents are deliberately not inspected. A real
+            // SDK caller may be acquiring these pointers in order to replace
+            // nonfinite or otherwise unwanted camera values in place.
+            return true;
+        }
+
+        ClockResult Sample(std::uintptr_t image, std::uint32_t row, CheckOwner owner, CheckOwner afterApplicationOwner, D::Value& output) noexcept
+        {
+            auto result = afterApplicationOwner();
+            if (result != ClockResult::Ok || (result = D::Owner(image, owner)) != ClockResult::Ok)
+                return result;
+            if (!Profile(image))
+                return ClockResult::UnsupportedBuild;
+            if (!Fields(image, row))
+                return ClockResult::BindingChanged;
+            D::Value next;
+            if ((result = D::Capture(image, next)) != ClockResult::Ok)
+                return result;
+            if (!D::Fence(image, next) || !Profile(image) || !Fields(image, row))
+                return ClockResult::BindingChanged;
+            output = next;
+            return ClockResult::Ok;
+        }
+    }
+}
+
+namespace mta::game_de::NativeCameraDataMemory
+{
+    ClockResult AcquireRowBorrow(std::uintptr_t image, std::uint32_t row, NativeCameraRowBorrow& ledger, const NativeCameraRowBorrow::Identity& identity,
+                                 CheckOwner owner, CheckOwner afterApplicationOwner, NativeCameraRowBorrow::Token& output) noexcept
+    {
+        namespace C = CameraRowBorrowDetail;
+        namespace D = NativeStreamingCompletionContext;
+        namespace P = NativeCameraDataProfile;
+        if (row >= P::RowCount || output)
+            return ClockResult::InvalidArgument;
+        if (!owner || !afterApplicationOwner)
+            return ClockResult::NotInitialized;
+        if (!image || image > (std::numeric_limits<std::uintptr_t>::max)() - P::ImageBytes)
+            return ClockResult::UnsupportedBuild;
+        if (identity.image != image)
+            return ClockResult::OwnerConflict;
+        if (!D::TryEnter())
+            return ClockResult::Busy;
+        D::Scope scope;
+        D::Value first, current;
+        auto     result = C::Sample(image, row, owner, afterApplicationOwner, first);
+        if (result != ClockResult::Ok)
+            return result;
+        // The ledger calls this while preparing its one admission commit. All
+        // fallible native checks stay before that commit, so a rejected row
+        // cannot strand a constructor hold on the engine callback thread.
+        const auto check = [&]() noexcept -> ClockResult
+        {
+            const auto status = C::Sample(image, row, owner, afterApplicationOwner, current);
+            if (status != ClockResult::Ok)
+                return status;
+            return D::Same(first, current, true) ? ClockResult::Ok : ClockResult::BindingChanged;
+        };
+        return ledger.AcquireChecked(identity, row, check, output);
+    }
+
+    ClockResult ReadRowVector(std::uintptr_t image, NativeCameraRowBorrow& ledger, const NativeCameraRowBorrow::Identity& identity,
+                              const NativeCameraRowBorrow::Token& token, CameraRowVectorKind kind, CheckOwner owner, CheckOwner afterApplicationOwner,
+                              CVector*& output) noexcept
+    {
+        namespace C = CameraRowBorrowDetail;
+        namespace D = NativeStreamingCompletionContext;
+        namespace P = NativeCameraDataProfile;
+        namespace Q = NativeCameraRowBorrowProfile;
+        const auto selection = static_cast<std::uint32_t>(kind);
+        if (!token || token.Row() >= P::RowCount || selection >= Q::VectorOffsets.size())
+            return ClockResult::InvalidArgument;
+        if (!owner || !afterApplicationOwner)
+            return ClockResult::NotInitialized;
+        if (!image || image > (std::numeric_limits<std::uintptr_t>::max)() - P::ImageBytes)
+            return ClockResult::UnsupportedBuild;
+        if (identity.image != image)
+            return ClockResult::OwnerConflict;
+        if (!D::TryEnter())
+            return ClockResult::Busy;
+        D::Scope scope;
+        auto     result = ledger.Validate(token, identity);
+        if (result != ClockResult::Ok)
+            return result;
+        const auto row = token.Row();
+        D::Value   first, current, confirmed;
+        if ((result = C::Sample(image, row, owner, afterApplicationOwner, first)) != ClockResult::Ok ||
+            (result = C::Sample(image, row, owner, afterApplicationOwner, current)) != ClockResult::Ok)
+            return result;
+        if (!D::Same(first, current, true))
+            return ClockResult::BindingChanged;
+        if ((result = C::Sample(image, row, owner, afterApplicationOwner, confirmed)) != ClockResult::Ok)
+            return result;
+        if (!D::Same(first, confirmed, true) || !D::Same(current, confirmed, true))
+            return ClockResult::BindingChanged;
+        if ((result = ledger.Validate(token, identity)) != ClockResult::Ok)
+            return result;
+        // The same private client still owns retention after the final native
+        // bookend. The host must drain that client synchronously before End;
+        // this pointer is never valid beyond the owning wrapper's lifetime.
+        output = reinterpret_cast<CVector*>(image + P::CameraRva + P::ArrayOffset + static_cast<std::size_t>(row) * P::RowBytes + Q::VectorOffsets[selection]);
+        return ClockResult::Ok;
     }
 }

@@ -59,6 +59,7 @@
 #include "NativeCameraDataMemory.h"
 #include "NativeCameraFovWrite.h"
 #include "NativeCameraDirection.h"
+#include "NativeCameraRowBorrow.h"
 #include "NativeCameraRestore.h"
 #include "CWorldLineDE.h"
 #include "NativeAnimationBlockMemory.h"
@@ -334,6 +335,9 @@ namespace mta::game_de
             ClockResult ReadCameraDirection(std::uint32_t, std::uint32_t&, std::uint32_t&) noexcept override;
             ClockResult ConditionalRepairCameraDirection(std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t) noexcept override;
             ClockResult WriteCameraDirection(std::uint32_t, std::uint32_t, std::uint32_t) noexcept override;
+            ClockResult AcquireCameraRowBorrow(std::uint32_t, NativeCameraRowBorrow::Token&) noexcept override;
+            ClockResult ReleaseCameraRowBorrow(NativeCameraRowBorrow::Token&) noexcept override;
+            ClockResult ReadCameraRowVector(const NativeCameraRowBorrow::Token&, CameraRowVectorKind, CVector*&) noexcept override;
             ClockResult RestoreCamera() noexcept override;
             ClockResult RestoreCameraWithJumpCut() noexcept override;
             ClockResult ReadStreamingModelGroups(NativeStreamingModelGroupsReader::Value&) noexcept override;
@@ -704,6 +708,7 @@ namespace mta::game_de
             // A bank's timestamp conversion owns no private allocation.
             // Retain only its actual entered/unknown operation journal; do
             // not hide that debt in the custom buffer retirement generation.
+            NativeCameraRowBorrow                             cameraRowBorrows;
             NativeCameraDirection                             cameraDirection;
             NativeCameraDirectionCalls::Receipt               cameraDirectionReceipt;
             NativeCameraFovWrite                              cameraFovWrite;
@@ -903,18 +908,22 @@ namespace mta::game_de
             return runtime.worldIgnoreGeneration.load() != 0;
         }
 
+        NativeCameraRowBorrow::Identity CameraRowBorrowIdentity() noexcept
+        {
+            return {runtime.generation.load(), runtime.admissionSerial.load(), runtime.image, runtime.producerThread};
+        }
         bool NativeLifetimeRetained() noexcept
         {
-            return runtime.associationGroupInitializationBusy.load() || runtime.staticAssociationInitializationBusy.load() ||
-                   runtime.staticAssociationInitializationRecovery.load() || runtime.presentationRecovery.Held() ||
-                   runtime.weatherOverridePeers.PresentationHeld() || runtime.startupMenuBusy.load() || runtime.startupMenuRetained.load() ||
-                   runtime.startupCollisionBusy.load() || runtime.startupCollisionRetained.load() || runtime.pedModelCreationBusy.load() ||
-                   runtime.pedModelCreationRetained.load() || runtime.modelBackingReferences.IsRetained() || runtime.pedReferences.IsRetained() ||
-                   WorldIgnoreRetained() || runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() ||
-                   runtime.privateAssociations.IsRetained() || runtime.groupCreations.IsRetained() || runtime.hierarchyUncompress.IsRetained() ||
-                   runtime.cameraRestore.IsRetained() || runtime.cameraFovWrite.IsRetained() || runtime.cameraDirection.IsRetained() ||
-                   runtime.hierarchyCacheRemove.IsRetained() || runtime.blockRegistration.IsRetained() || runtime.blockRemoval.IsRetained() ||
-                   runtime.customSequences.HasPendingCleanup();
+            return runtime.cameraRowBorrows.IsRetained() || runtime.associationGroupInitializationBusy.load() ||
+                   runtime.staticAssociationInitializationBusy.load() || runtime.staticAssociationInitializationRecovery.load() ||
+                   runtime.presentationRecovery.Held() || runtime.weatherOverridePeers.PresentationHeld() || runtime.startupMenuBusy.load() ||
+                   runtime.startupMenuRetained.load() || runtime.startupCollisionBusy.load() || runtime.startupCollisionRetained.load() ||
+                   runtime.pedModelCreationBusy.load() || runtime.pedModelCreationRetained.load() || runtime.modelBackingReferences.IsRetained() ||
+                   runtime.pedReferences.IsRetained() || WorldIgnoreRetained() || runtime.customSequences.IsRetained() ||
+                   runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained() || runtime.groupCreations.IsRetained() ||
+                   runtime.hierarchyUncompress.IsRetained() || runtime.cameraRestore.IsRetained() || runtime.cameraFovWrite.IsRetained() ||
+                   runtime.cameraDirection.IsRetained() || runtime.hierarchyCacheRemove.IsRetained() || runtime.blockRegistration.IsRetained() ||
+                   runtime.blockRemoval.IsRetained() || runtime.customSequences.HasPendingCleanup();
         }
 
         bool WeatherOverrideRetained() noexcept
@@ -958,6 +967,7 @@ namespace mta::game_de
             // Revocation can happen inside a native callback while the same
             // controller is busy. Its atomic epoch barrier never waits on or
             // re-enters that operation; later bookends reject public issuance.
+            runtime.cameraRowBorrows.CloseIssuance();
             runtime.privateAssociations.CloseFacadeIssuance(runtime.generation.load());
             runtime.active.store(false);
             runtime.stopping.store(true);
@@ -6146,6 +6156,24 @@ namespace mta::game_de
                 Stop(result);
             return result;
         }
+        ClockResult NativeAccess::AcquireCameraRowBorrow(std::uint32_t row, NativeCameraRowBorrow::Token& output) noexcept
+        {
+            return NativeCameraDataMemory::AcquireRowBorrow(runtime.image, row, runtime.cameraRowBorrows, CameraRowBorrowIdentity(), &CheckTimingOwner,
+                                                            &CheckApplicationTimingOwner, output);
+        }
+        ClockResult NativeAccess::ReleaseCameraRowBorrow(NativeCameraRowBorrow::Token& token) noexcept
+        {
+            // End/Shutdown run on this producer. No engine callback, native
+            // image access, repair or renewed operation authority is needed.
+            if (GetCurrentThreadId() != runtime.producerThread)
+                return ClockResult::WrongThread;
+            return runtime.cameraRowBorrows.Release(token);
+        }
+        ClockResult NativeAccess::ReadCameraRowVector(const NativeCameraRowBorrow::Token& token, CameraRowVectorKind kind, CVector*& output) noexcept
+        {
+            return NativeCameraDataMemory::ReadRowVector(runtime.image, runtime.cameraRowBorrows, CameraRowBorrowIdentity(), token, kind, &CheckTimingOwner,
+                                                         &CheckApplicationTimingOwner, output);
+        }
         ClockResult NativeAccess::RestoreCamera() noexcept
         {
             // Restore changes permanent engine camera reference cells. Only
@@ -10096,6 +10124,11 @@ namespace mta::game_de
         runtime.frameContext = frameMode ? context : nullptr;
         runtime.originalFrame = nullptr;
         bool valid = Image::CheckExecutableBuild() && CheckBinding(true);
+        // Only an actually qualified Begin opens row issuance. The existing
+        // guards above already proved prior-generation callback quiescence;
+        // a rejected executable must not bind a camera client generation.
+        if (valid)
+            valid = runtime.cameraRowBorrows.Open(CameraRowBorrowIdentity()) == ClockResult::Ok;
         if (!valid)
             Stop(ClockResult::UnsupportedBuild);
         HMODULE retained = nullptr;
@@ -10131,6 +10164,8 @@ namespace mta::game_de
             else
                 Stop(presentationRefusal == ClockResult::Ok ? ClockResult::PatchFailure : presentationRefusal);
         }
+        if (!valid)
+            runtime.cameraRowBorrows.CloseIssuance();
         ReadState(finalState);
         hasFinalState = true;
         state = finalState;

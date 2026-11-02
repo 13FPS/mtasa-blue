@@ -5,6 +5,7 @@
  ****************************************************************************/
 #include "../../Client/game_de/CCameraSphereVisibleDE.h"
 #include "../../Client/game_de/CCamFovDE.h"
+#include "../../Client/game_de/CCamRowDE.h"
 #include <array>
 #include <cfenv>
 #include <cmath>
@@ -15,6 +16,7 @@
 #include <type_traits>
 #include "CameraBasicsFixture.generated.h"
 #include "CamFovFixture.generated.h"
+#include "CamRowFixture.generated.h"
 using namespace mta::game_de;
 static_assert(std::is_same_v<decltype(&CameraBasicsObserver::RestoreWithJumpCut), decltype(&CCameraSphereVisibleDE::RestoreWithJumpCut)>);
 static_assert(std::is_same_v<decltype(&CameraBasicsObserver::Restore), decltype(&CCameraSphereVisibleDE::Restore)>);
@@ -26,6 +28,21 @@ static_assert(std::is_same_v<decltype(&CamFovObserver::SetDirection), decltype(&
 static_assert(std::is_same_v<decltype(&CamFovObserver::SetFOV), decltype(&CCamFovDE::SetFOV)>);
 static_assert(std::is_same_v<decltype(&CamFovObserver::GetFOV), decltype(&CCamFovDE::GetFOV)>);
 static_assert(std::is_abstract_v<CCameraSphereVisibleDE> && std::is_abstract_v<CCamFovDE>);
+static_assert(std::is_abstract_v<CCamRowDE> && !std::is_abstract_v<CamRowObserver>);
+static_assert(!std::is_copy_constructible_v<CamRowObserver> && !std::is_copy_assignable_v<CamRowObserver> && !std::is_move_constructible_v<CamRowObserver> &&
+              !std::is_move_assignable_v<CamRowObserver>);
+static_assert(!std::has_virtual_destructor_v<CCamRowDE> && std::is_nothrow_destructible_v<CamRowObserver>);
+static_assert(std::is_standard_layout_v<CVector> && sizeof(CVector) == 3 * sizeof(float) && alignof(CVector) == alignof(float));
+static_assert(std::is_same_v<decltype(&CamRowObserver::GetFront), decltype(&CCamRowDE::GetFront)>);
+static_assert(std::is_same_v<decltype(&CamRowObserver::GetUp), decltype(&CCamRowDE::GetUp)>);
+static_assert(std::is_same_v<decltype(&CamRowObserver::GetSource), decltype(&CCamRowDE::GetSource)>);
+static_assert(std::is_same_v<decltype(&CamRowObserver::GetFixedModeSource), decltype(&CCamRowDE::GetFixedModeSource)>);
+static_assert(std::is_same_v<decltype(&CamRowObserver::GetFixedModeVector), decltype(&CCamRowDE::GetFixedModeVector)>);
+static_assert(std::is_same_v<decltype(&CamRowObserver::GetFOV), decltype(&CCamFovDE::GetFOV)>);
+static_assert(std::is_same_v<decltype(&CamRowObserver::SetFOV), decltype(&CCamFovDE::SetFOV)>);
+static_assert(std::is_same_v<decltype(&CamRowObserver::GetMode), decltype(&CCamFovDE::GetMode)>);
+static_assert(std::is_same_v<decltype(&CamRowObserver::GetDirection), decltype(&CCamFovDE::GetDirection)>);
+static_assert(std::is_same_v<decltype(&CamRowObserver::SetDirection), decltype(&CCamFovDE::SetDirection)>);
 namespace
 {
     unsigned checks = 0;
@@ -509,6 +526,244 @@ namespace
         std::puts("Actual Cam mode and direction SDK policy fixture completed");
     }
 
+    struct RowAccess final : NativeCameraSphereVisibleAccess
+    {
+        NativeCameraRowBorrow           ledger;
+        NativeCameraRowBorrow::Identity identity;
+        std::array<CVector, 5>          vectors{}, replacements{};
+        ClockResult   opened = ClockResult::NotInitialized, acquireStatus = ClockResult::Ok, vectorStatus = ClockResult::Ok, releaseStatus = ClockResult::Ok;
+        unsigned      acquireCalls = 0, vectorCalls = 0, releaseCalls = 0, scalarCalls = 0;
+        std::uint32_t acquireRow = 0, vectorRow = 0, scalarRow = 0, writtenFov = 0, writtenH = 0, writtenV = 0;
+        std::uint64_t acquiredId = 0, vectorId = 0, releasedId = 0;
+        CameraRowVectorKind vectorKind = CameraRowVectorKind::Front;
+        bool                emptySuccess = false, nullSuccess = false, useReplacements = false;
+        RowAccess() noexcept
+        {
+            identity = {1, 1, reinterpret_cast<std::uintptr_t>(vectors.data()), GetCurrentThreadId()};
+            opened = ledger.Open(identity);
+        }
+        static ClockResult Current() noexcept { return ClockResult::Ok; }
+        ClockResult        AcquireCameraRowBorrow(std::uint32_t row, NativeCameraRowBorrow::Token& token) noexcept override
+        {
+            ++acquireCalls;
+            acquireRow = row;
+            if (acquireStatus != ClockResult::Ok || emptySuccess)
+                return acquireStatus;
+            const auto result = ledger.Acquire(identity, row, &Current, token);
+            if (result == ClockResult::Ok)
+                acquiredId = token.Id();
+            return result;
+        }
+        ClockResult ReleaseCameraRowBorrow(NativeCameraRowBorrow::Token& token) noexcept override
+        {
+            ++releaseCalls;
+            releasedId = token.Id();
+            return releaseStatus == ClockResult::Ok ? ledger.Release(token) : releaseStatus;
+        }
+        ClockResult ReadCameraRowVector(const NativeCameraRowBorrow::Token& token, CameraRowVectorKind kind, CVector*& output) noexcept override
+        {
+            ++vectorCalls;
+            vectorId = token.Id();
+            vectorRow = token.Row();
+            vectorKind = kind;
+            if (vectorStatus != ClockResult::Ok)
+                return vectorStatus;
+            const auto result = ledger.Validate(token, identity);
+            if (result != ClockResult::Ok)
+                return result;
+            const auto index = static_cast<std::uint32_t>(kind);
+            if (index >= vectors.size())
+                return ClockResult::InvalidArgument;
+            output = nullSuccess ? nullptr : &(useReplacements ? replacements : vectors)[index];
+            return ClockResult::Ok;
+        }
+        ClockResult ReadCameraFov(std::uint32_t row, std::uint32_t& bits) noexcept override
+        {
+            ++scalarCalls;
+            scalarRow = row;
+            bits = 0x428c0000u;
+            return ClockResult::Ok;
+        }
+        ClockResult WriteCameraFov(std::uint32_t row, std::uint32_t bits) noexcept override
+        {
+            ++scalarCalls;
+            scalarRow = row;
+            writtenFov = bits;
+            return ClockResult::Ok;
+        }
+        ClockResult ReadCameraMode(std::uint32_t row, std::uint16_t& word) noexcept override
+        {
+            ++scalarCalls;
+            scalarRow = row;
+            word = 0xffffu;
+            return ClockResult::Ok;
+        }
+        ClockResult ReadCameraDirection(std::uint32_t row, std::uint32_t& h, std::uint32_t& v) noexcept override
+        {
+            ++scalarCalls;
+            scalarRow = row;
+            h = 0x3f800000u;
+            v = 0xbf800000u;
+            return ClockResult::Ok;
+        }
+        ClockResult WriteCameraDirection(std::uint32_t row, std::uint32_t h, std::uint32_t v) noexcept override
+        {
+            ++scalarCalls;
+            scalarRow = row;
+            writtenH = h;
+            writtenV = v;
+            return ClockResult::Ok;
+        }
+    };
+    void RowBorrows()
+    {
+        // SDK transport uses owned vectors and the real CPU hold ledger. The
+        // native owner suite separately qualifies engine storage and End gates.
+        const auto before = checks;
+        using Getter = CVector* (CCam::*)() const;
+        struct Method
+        {
+            Getter              call;
+            CameraRowVectorKind kind;
+            const char*         name;
+        };
+        constexpr std::array<Method, 5>       methods{{{&CCam::GetFront, CameraRowVectorKind::Front, "GetFront"},
+                                                       {&CCam::GetUp, CameraRowVectorKind::Up, "GetUp"},
+                                                       {&CCam::GetSource, CameraRowVectorKind::Source, "GetSource"},
+                                                       {&CCam::GetFixedModeSource, CameraRowVectorKind::FixedModeSource, "GetFixedModeSource"},
+                                                       {&CCam::GetFixedModeVector, CameraRowVectorKind::FixedModeVector, "GetFixedModeVector"}}};
+        constexpr std::array<ClockResult, 14> refusals{ClockResult::InvalidArgument, ClockResult::NotInitialized,   ClockResult::WrongThread,
+                                                       ClockResult::BindingChanged,  ClockResult::ReadFailure,      ClockResult::WriteFailure,
+                                                       ClockResult::RestoreFailure,  ClockResult::PatchFailure,     ClockResult::Busy,
+                                                       ClockResult::Expired,         ClockResult::UnsupportedBuild, ClockResult::OwnerConflict,
+                                                       ClockResult::Stopped,         ClockResult::OriginalException};
+        for (std::uint32_t row = 0; row != 3; ++row)
+        {
+            RowAccess access;
+            Check(access.opened == ClockResult::Ok, "the SDK fixture owns its producer CPU ledger and buffers");
+            {
+                CamRowObserver camera(row, access);
+                CCam&          sdk = camera;
+                Check(access.acquireCalls == 1 && access.acquireRow == row && access.acquiredId && access.ledger.IsRetained() && !access.vectorCalls,
+                      "the actual row wrapper acquires its immutable row once before exposing any pointer");
+                for (std::size_t index = 0; index != methods.size(); ++index)
+                {
+                    const auto& method = methods[index];
+                    const auto  calls = access.vectorCalls;
+                    auto*       pointer = (sdk.*method.call)();
+                    Check(pointer == &access.vectors[index] && access.vectorCalls == calls + 1 && access.vectorId == access.acquiredId &&
+                              access.vectorKind == method.kind && access.vectorRow == row && access.acquireCalls == 1,
+                          "each base SDK getter borrows the selected provider vector and exact issued token once");
+                    const std::array<std::uint32_t, 3> raw{0x80000000u, 0x7fc12345u, 0x7f800000u};
+                    std::memcpy(&pointer->fX, &raw[0], sizeof(float));
+                    std::memcpy(&pointer->fY, &raw[1], sizeof(float));
+                    std::memcpy(&pointer->fZ, &raw[2], sizeof(float));
+                    Check(Bits(access.vectors[index].fX) == raw[0] && Bits(access.vectors[index].fY) == raw[1] && Bits(access.vectors[index].fZ) == raw[2],
+                          "returned pointers alias writable provider components without caches or finite-vector normalization");
+                    access.useReplacements = true;
+                    Check((sdk.*method.call)() == &access.replacements[index] && access.vectorCalls == calls + 2,
+                          "every getter reconsults its owner instead of returning a saved pointer");
+                    access.useReplacements = false;
+                }
+                const auto scalars = access.scalarCalls;
+                Check(Bits(sdk.GetFOV()) == 0x428c0000u && access.scalarCalls == scalars + 1 && access.scalarRow == row,
+                      "the retained row preserves the same inherited GetFOV owner and logical row");
+                sdk.SetFOV(80.0f);
+                Check(access.writtenFov == Bits(80.0f) && access.scalarCalls == scalars + 2 && access.scalarRow == row,
+                      "the retained row preserves the inherited FOV setter");
+                Check(sdk.GetMode() == 0xffffffffu && access.scalarCalls == scalars + 3 && access.scalarRow == row,
+                      "the retained row preserves inherited signed mode transport");
+                float h = 0, v = 0;
+                sdk.GetDirection(h, v);
+                Check(Bits(h) == 0x3f800000u && Bits(v) == 0xbf800000u && access.scalarCalls == scalars + 4,
+                      "the retained row preserves inherited finite direction observation");
+                sdk.SetDirection(1.0f, -1.0f);
+                Check(access.writtenH == 0x3f800000u && access.writtenV == 0xbf800000u && access.scalarCalls == scalars + 5,
+                      "the retained row preserves inherited ordered direction delegation");
+                access.ledger.CloseIssuance();
+                const auto vectors = access.vectorCalls;
+                Refuses([&] { sdk.GetFront(); }, "GetFront", ClockResult::Stopped);
+                Check(access.vectorCalls == vectors + 1 && access.ledger.IsRetained() && !access.releaseCalls,
+                      "Stop revokes pointer publication while preserving the existing wrapper's hold");
+                Refuses([&] { CamRowObserver later(row, access); }, "AcquireCameraRowBorrow", ClockResult::Stopped);
+                Check(access.acquireCalls == 2 && access.releaseCalls == 0 && access.ledger.IsRetained(),
+                      "a refused constructor neither releases the live row nor invents another token");
+            }
+            Check(access.releaseCalls == 1 && access.releasedId == access.acquiredId && !access.ledger.IsRetained(),
+                  "typed same-producer destruction releases exactly the issued hold after Stop");
+        }
+        for (const auto row : {3u, 0x10000u, 0xffffffffu})
+        {
+            RowAccess access;
+            Refuses([&] { CamRowObserver camera(row, access); }, "AcquireCameraRowBorrow", ClockResult::InvalidArgument);
+            Check(access.acquireCalls == 1 && access.acquireRow == row && !access.vectorCalls && !access.releaseCalls && !access.ledger.IsRetained(),
+                  "the full invalid logical DWORD reaches acquisition unchanged, with no partially constructed client");
+        }
+        {
+            Missing missing;
+            Refuses([&] { CamRowObserver camera(0, missing); }, "AcquireCameraRowBorrow", ClockResult::NotInitialized);
+        }
+        {
+            RowAccess access;
+            access.emptySuccess = true;
+            Refuses([&] { CamRowObserver camera(0, access); }, "AcquireCameraRowBorrow", ClockResult::BindingChanged);
+            Check(access.acquireCalls == 1 && !access.vectorCalls && !access.releaseCalls && !access.ledger.IsRetained(),
+                  "an empty successful token cannot manufacture a retained camera client");
+        }
+        for (const auto status : refusals)
+        {
+            RowAccess access;
+            access.acquireStatus = status;
+            Refuses([&] { CamRowObserver camera(1, access); }, "AcquireCameraRowBorrow", status);
+            Check(access.acquireCalls == 1 && access.acquireRow == 1 && !access.vectorCalls && !access.releaseCalls && !access.ledger.IsRetained(),
+                  "each acquisition refusal propagates once before pointer or destructor activity");
+        }
+        {
+            RowAccess access;
+            {
+                CamRowObserver camera(0, access);
+                const CCam&    sdk = camera;
+                const auto     original = access.vectors;
+                for (const auto status : refusals)
+                {
+                    access.vectorStatus = status;
+                    for (const auto& method : methods)
+                    {
+                        const auto calls = access.vectorCalls;
+                        Refuses([&] { (sdk.*method.call)(); }, method.name, status);
+                        Check(access.vectorCalls == calls + 1 && access.vectorId == access.acquiredId && access.vectorKind == method.kind &&
+                                  access.releaseCalls == 0 && access.ledger.IsRetained() &&
+                                  std::memcmp(original.data(), access.vectors.data(), sizeof(original)) == 0,
+                              "each getter refusal preserves native buffers and its live token without replay, release or fallback");
+                    }
+                }
+                access.vectorStatus = ClockResult::Ok;
+                access.nullSuccess = true;
+                for (const auto& method : methods)
+                {
+                    const auto calls = access.vectorCalls;
+                    Refuses([&] { (sdk.*method.call)(); }, method.name, ClockResult::BindingChanged);
+                    Check(access.vectorCalls == calls + 1 && !access.releaseCalls && access.ledger.IsRetained(),
+                          "an acquired row refuses a null successful pointer without fabricating vector storage");
+                }
+            }
+            Check(access.releaseCalls == 1 && access.releasedId == access.acquiredId && !access.ledger.IsRetained(),
+                  "getter errors do not bypass or duplicate the final producer release");
+        }
+        {
+            RowAccess access;
+            {
+                CamRowObserver camera(2, access);
+                access.releaseStatus = ClockResult::WrongThread;
+            }
+            Check(access.releaseCalls == 1 && access.releasedId == access.acquiredId && access.ledger.IsRetained(),
+                  "a refused destructor release is not retried or converted into a false dropped hold");
+        }
+        if (checks - before != 270)
+            throw std::runtime_error("row SDK case-count contract changed");
+        std::puts("Actual retained Cam row vector SDK fixture completed");
+    }
+
     void Cases()
     {
         Access               access;
@@ -617,6 +872,7 @@ namespace
         Check(invalid && access.sphereCalls == sphere, "existing null-center refusal stays before any native provider call");
         FovWrites();
         Directions();
+        RowBorrows();
         std::puts("Actual camera JumpCut SDK fixture completed");
         std::puts("Actual camera basics SDK fixture completed");
         std::puts("Actual Cam finite FOV SDK fixture completed");

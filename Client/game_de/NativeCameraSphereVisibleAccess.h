@@ -5,6 +5,7 @@
  *****************************************************************************/
 #pragma once
 #include <game/CGameClockService.h>
+#include "NativeCameraRowBorrow.h"
 #include <windows.h>
 #include <cstdint>
 #include <SharedUtil.Defines.h>
@@ -38,6 +39,14 @@ namespace mta::game_de
             return ClockResult::NotInitialized;
         }
         virtual ClockResult WriteCameraDirection(std::uint32_t, std::uint32_t, std::uint32_t) noexcept { return ClockResult::NotInitialized; }
+        // A current native row is borrowed by a unique retained client. The
+        // lease grants retention, not operation authority or copied vectors.
+        virtual ClockResult AcquireCameraRowBorrow(std::uint32_t, NativeCameraRowBorrow::Token&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult ReleaseCameraRowBorrow(NativeCameraRowBorrow::Token&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult ReadCameraRowVector(const NativeCameraRowBorrow::Token&, CameraRowVectorKind, CVector*&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
         // Ordinary Restore is one distinct native effect. Older owners must
         // refuse rather than substitute JumpCut, a field repair or a retry.
         virtual ClockResult RestoreCamera() noexcept { return ClockResult::NotInitialized; }

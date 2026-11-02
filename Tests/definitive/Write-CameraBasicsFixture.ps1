@@ -42,3 +42,21 @@ function Write-CamFovFixture([string]$RepositoryRoot,[string]$OutputPath) {
         inheritedProductionMethods=@($provided|ForEach-Object {$_.signature});source=$source;sourceSha256=(Get-FileHash -LiteralPath (Join-Path $RepositoryRoot $source) -Algorithm SHA256).Hash.ToLowerInvariant();
         productionCamConcrete=$false;nativeFactoryClaimed=$false;sharedSdkEdited=$false;polymorphicBaseDeletionExecuted=$false}
 }
+
+function Write-CamRowFixture([string]$RepositoryRoot,[string]$OutputPath) {
+    $source='Client/sdk/game/CCam.h'
+    $all=@(Get-CameraBasicsSdkMethods $RepositoryRoot $source)
+    $names=@('GetFOV','SetFOV','GetMode','GetDirection','SetDirection','GetFront','GetUp','GetSource','GetFixedModeSource','GetFixedModeVector')
+    $provided=@($all|Where-Object {$_.name -in $names})
+    $rejected=@($all|Where-Object {$_.name -notin $names})
+    if($all.Count -ne 13 -or $provided.Count -ne 10 -or $rejected.Count -ne 3){throw 'Actual retained Cam13-method partition changed'}
+    $lines=@('#pragma once','#include <cstdlib>','#pragma warning(push)','#pragma warning(disable : 4100)',
+        'class CamRowObserver final : public mta::game_de::CCamRowDE {public:',
+        'CamRowObserver(std::uint32_t row,mta::game_de::NativeCameraSphereVisibleAccess& owner) : CCamRowDE(row,owner) {}')
+    $lines+=@($rejected|ForEach-Object {$_.signature+' override {std::abort();}'})
+    $lines+=@('};','#pragma warning(pop)')
+    [IO.File]::WriteAllLines($OutputPath,$lines,[Text.UTF8Encoding]::new($false))
+    [ordered]@{path=$OutputPath;sha256=(Get-FileHash -LiteralPath $OutputPath -Algorithm SHA256).Hash.ToLowerInvariant();rejectingMethods=$rejected.Count;
+        inheritedProductionMethods=@($provided|ForEach-Object {$_.signature});source=$source;sourceSha256=(Get-FileHash -LiteralPath (Join-Path $RepositoryRoot $source) -Algorithm SHA256).Hash.ToLowerInvariant();
+        productionCamConcrete=$false;nativeFactoryClaimed=$false;sharedSdkEdited=$false;polymorphicBaseDeletionExecuted=$false}
+}

@@ -5,10 +5,17 @@
  ****************************************************************************/
 #pragma once
 #include <game/CGameClockService.h>
+#include "NativeCameraRowBorrow.h"
 #include <cstdint>
+class CVector;
 namespace mta::game_de::NativeCameraDataMemory
 {
     using CheckOwner = ClockResult (*)() noexcept;
+    ClockResult AcquireRowBorrow(std::uintptr_t image, std::uint32_t row, NativeCameraRowBorrow& ledger, const NativeCameraRowBorrow::Identity& identity,
+                                 CheckOwner owner, CheckOwner afterApplicationOwner, NativeCameraRowBorrow::Token& output) noexcept;
+    ClockResult ReadRowVector(std::uintptr_t image, NativeCameraRowBorrow& ledger, const NativeCameraRowBorrow::Identity& identity,
+                              const NativeCameraRowBorrow::Token& token, CameraRowVectorKind kind, CheckOwner owner, CheckOwner afterApplicationOwner,
+                              CVector*& output) noexcept;
     // These owned scalar observations grant no camera row, writable vector,
     // native lifetime lease or setter. Refusal leaves the caller unchanged.
     // New scalar roles have a separate source profile; their addition does

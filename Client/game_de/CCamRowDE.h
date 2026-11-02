@@ -22,6 +22,7 @@ namespace mta::game_de
         CVector*   GetSource() const override;
         CVector*   GetFixedModeSource() const override;
         CVector*   GetFixedModeVector() const override;
+        CVector*   GetTargetHistoryPos() const override;
 
     protected:
         // Acquire the same provider's row hold before any actual native vector
@@ -34,7 +35,7 @@ namespace mta::game_de
         NativeCameraRowBorrow::Token     token;
     };
     // The shared SDK has no virtual destructor. Only typed destruction is
-    // supported here; History and both entity methods intentionally stay pure.
+    // supported here; both entity methods intentionally stay pure.
     static_assert(std::is_abstract_v<CCamRowDE> && std::is_base_of_v<CCamFovDE, CCamRowDE> && !std::is_copy_constructible_v<CCamRowDE> &&
                   !std::is_copy_assignable_v<CCamRowDE> && !std::is_move_constructible_v<CCamRowDE> && !std::is_move_assignable_v<CCamRowDE>);
 }

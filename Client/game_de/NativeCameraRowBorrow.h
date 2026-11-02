@@ -20,7 +20,8 @@ namespace mta::game_de
         Up,
         Source,
         FixedModeSource,
-        FixedModeVector
+        FixedModeVector,
+        TargetHistory
     };
     namespace NativeCameraRowBorrowDetail
     {

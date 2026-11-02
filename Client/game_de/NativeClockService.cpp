@@ -6171,6 +6171,11 @@ namespace mta::game_de
         }
         ClockResult NativeAccess::ReadCameraRowVector(const NativeCameraRowBorrow::Token& token, CameraRowVectorKind kind, CVector*& output) noexcept
         {
+            // The new array role has separate source/span qualification.
+            // Do not strengthen the existing five-vector getter paths.
+            if (kind == CameraRowVectorKind::TargetHistory)
+                return NativeCameraDataMemory::ReadRowHistory(runtime.image, runtime.cameraRowBorrows, CameraRowBorrowIdentity(), token, &CheckTimingOwner,
+                                                              &CheckApplicationTimingOwner, output);
             return NativeCameraDataMemory::ReadRowVector(runtime.image, runtime.cameraRowBorrows, CameraRowBorrowIdentity(), token, kind, &CheckTimingOwner,
                                                          &CheckApplicationTimingOwner, output);
         }

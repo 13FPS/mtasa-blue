@@ -46,10 +46,10 @@ function Write-CamFovFixture([string]$RepositoryRoot,[string]$OutputPath) {
 function Write-CamRowFixture([string]$RepositoryRoot,[string]$OutputPath) {
     $source='Client/sdk/game/CCam.h'
     $all=@(Get-CameraBasicsSdkMethods $RepositoryRoot $source)
-    $names=@('GetFOV','SetFOV','GetMode','GetDirection','SetDirection','GetFront','GetUp','GetSource','GetFixedModeSource','GetFixedModeVector')
+    $names=@('GetFOV','SetFOV','GetMode','GetDirection','SetDirection','GetFront','GetUp','GetSource','GetFixedModeSource','GetFixedModeVector','GetTargetHistoryPos')
     $provided=@($all|Where-Object {$_.name -in $names})
     $rejected=@($all|Where-Object {$_.name -notin $names})
-    if($all.Count -ne 13 -or $provided.Count -ne 10 -or $rejected.Count -ne 3){throw 'Actual retained Cam13-method partition changed'}
+    if($all.Count -ne 13 -or $provided.Count -ne 11 -or $rejected.Count -ne 2){throw 'Actual retained Cam13-method partition changed'}
     $lines=@('#pragma once','#include <cstdlib>','#pragma warning(push)','#pragma warning(disable : 4100)',
         'class CamRowObserver final : public mta::game_de::CCamRowDE {public:',
         'CamRowObserver(std::uint32_t row,mta::game_de::NativeCameraSphereVisibleAccess& owner) : CCamRowDE(row,owner) {}')

@@ -16,6 +16,8 @@ namespace mta::game_de::NativeCameraDataMemory
     ClockResult ReadRowVector(std::uintptr_t image, NativeCameraRowBorrow& ledger, const NativeCameraRowBorrow::Identity& identity,
                               const NativeCameraRowBorrow::Token& token, CameraRowVectorKind kind, CheckOwner owner, CheckOwner afterApplicationOwner,
                               CVector*& output) noexcept;
+    ClockResult ReadRowHistory(std::uintptr_t image, NativeCameraRowBorrow& ledger, const NativeCameraRowBorrow::Identity& identity,
+                               const NativeCameraRowBorrow::Token& token, CheckOwner owner, CheckOwner afterApplicationOwner, CVector*& output) noexcept;
     // These owned scalar observations grant no camera row, writable vector,
     // native lifetime lease or setter. Refusal leaves the caller unchanged.
     // New scalar roles have a separate source profile; their addition does

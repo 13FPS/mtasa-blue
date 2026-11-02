@@ -57,4 +57,10 @@ namespace mta::game_de
     {
         return Read(CameraRowVectorKind::FixedModeVector, "GetFixedModeVector");
     }
+    CVector* CCamRowDE::GetTargetHistoryPos() const
+    {
+        // The gravity caller mutates native history in place. The provider
+        // qualifies the whole array under this existing row client hold.
+        return Read(CameraRowVectorKind::TargetHistory, "GetTargetHistoryPos");
+    }
 }

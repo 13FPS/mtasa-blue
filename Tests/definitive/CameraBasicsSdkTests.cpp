@@ -28,6 +28,7 @@ static_assert(std::is_same_v<decltype(&CamFovObserver::SetDirection), decltype(&
 static_assert(std::is_same_v<decltype(&CamFovObserver::SetFOV), decltype(&CCamFovDE::SetFOV)>);
 static_assert(std::is_same_v<decltype(&CamFovObserver::GetFOV), decltype(&CCamFovDE::GetFOV)>);
 static_assert(std::is_abstract_v<CCameraSphereVisibleDE> && std::is_abstract_v<CCamFovDE>);
+static_assert(std::is_same_v<decltype(&CamRowObserver::GetTargetHistoryPos), decltype(&CCamRowDE::GetTargetHistoryPos)>);
 static_assert(std::is_abstract_v<CCamRowDE> && !std::is_abstract_v<CamRowObserver>);
 static_assert(!std::is_copy_constructible_v<CamRowObserver> && !std::is_copy_assignable_v<CamRowObserver> && !std::is_move_constructible_v<CamRowObserver> &&
               !std::is_move_assignable_v<CamRowObserver>);
@@ -531,6 +532,7 @@ namespace
         NativeCameraRowBorrow           ledger;
         NativeCameraRowBorrow::Identity identity;
         std::array<CVector, 5>          vectors{}, replacements{};
+        std::array<CVector, 4>          history{}, historyReplacements{};
         ClockResult   opened = ClockResult::NotInitialized, acquireStatus = ClockResult::Ok, vectorStatus = ClockResult::Ok, releaseStatus = ClockResult::Ok;
         unsigned      acquireCalls = 0, vectorCalls = 0, releaseCalls = 0, scalarCalls = 0;
         std::uint32_t acquireRow = 0, vectorRow = 0, scalarRow = 0, writtenFov = 0, writtenH = 0, writtenV = 0;
@@ -571,6 +573,11 @@ namespace
             const auto result = ledger.Validate(token, identity);
             if (result != ClockResult::Ok)
                 return result;
+            if (kind == CameraRowVectorKind::TargetHistory)
+            {
+                output = nullSuccess ? nullptr : (useReplacements ? historyReplacements.data() : history.data());
+                return ClockResult::Ok;
+            }
             const auto index = static_cast<std::uint32_t>(kind);
             if (index >= vectors.size())
                 return ClockResult::InvalidArgument;
@@ -764,6 +771,102 @@ namespace
         std::puts("Actual retained Cam row vector SDK fixture completed");
     }
 
+    void HistoryPointers()
+    {
+        // The actual SDK exposes four writable CVector elements, not a copy
+        // of a currently populated prefix. Native admission is tested by the
+        // owner fixture; this transport fixture owns the entire 48-byte array.
+        const auto before = checks;
+        static_assert(sizeof(std::array<CVector, 4>) == 48);
+        constexpr std::array<std::array<std::uint32_t, 3>, 4> patterns{
+            {{0x80000000u, 0x7fc12345u, 0x7f800000u}, {1u, 0xff800000u, 0x3f800000u}, {0x007fffffu, 0xbf800001u, 0xffc12345u}, {0x7f7fffffu, 0x80800000u, 0u}}};
+        for (std::uint32_t row = 0; row != 3; ++row)
+        {
+            RowAccess access;
+            Check(access.opened == ClockResult::Ok, "history transport owns its CPU row ledger and full four-vector buffers");
+            {
+                CamRowObserver camera(row, access);
+                const CCam&    sdk = camera;
+                Check(access.acquireCalls == 1 && access.acquireRow == row && access.acquiredId && access.ledger.IsRetained(),
+                      "history borrows the already acquired row without another lifetime token");
+                const auto  vectorsBefore = access.vectors, replacementsBefore = access.replacements;
+                const auto  untouchedHistory = access.historyReplacements;
+                const auto  calls = access.vectorCalls;
+                auto* const history = sdk.GetTargetHistoryPos();
+                Check(history == access.history.data() && access.vectorCalls == calls + 1 && access.vectorKind == CameraRowVectorKind::TargetHistory &&
+                          access.vectorId == access.acquiredId && access.vectorRow == row && access.acquireCalls == 1,
+                      "actual const SDK history getter returns the same provider's first vector with the exact token and appended history kind");
+                for (std::size_t index = 0; index != patterns.size(); ++index)
+                {
+                    const auto& raw = patterns[index];
+                    std::memcpy(&history[index].fX, &raw[0], sizeof(float));
+                    std::memcpy(&history[index].fY, &raw[1], sizeof(float));
+                    std::memcpy(&history[index].fZ, &raw[2], sizeof(float));
+                    Check(Bits(access.history[index].fX) == raw[0] && Bits(access.history[index].fY) == raw[1] && Bits(access.history[index].fZ) == raw[2] &&
+                              reinterpret_cast<std::uintptr_t>(history + index) == reinterpret_cast<std::uintptr_t>(history) + index * sizeof(CVector),
+                          "caller elements0/1 and the full four-vector SDK extent alias all component bits without normalization or cached storage");
+                }
+                Check(std::memcmp(vectorsBefore.data(), access.vectors.data(), sizeof(vectorsBefore)) == 0 &&
+                          std::memcmp(replacementsBefore.data(), access.replacements.data(), sizeof(replacementsBefore)) == 0 &&
+                          std::memcmp(untouchedHistory.data(), access.historyReplacements.data(), sizeof(untouchedHistory)) == 0,
+                      "writes through the exact48-byte history span preserve the other provider vectors and replacement buffer");
+                Check(
+                    sdk.GetTargetHistoryPos() == history && access.vectorCalls == calls + 2 && access.acquireCalls == 1 && access.vectorId == access.acquiredId,
+                    "repeated history access revalidates the same hold instead of acquiring another token");
+                access.useReplacements = true;
+                Check(sdk.GetTargetHistoryPos() == access.historyReplacements.data() && access.vectorCalls == calls + 3 && access.acquireCalls == 1 &&
+                          Bits(access.history[0].fY) == patterns[0][1] && Bits(access.history[3].fX) == patterns[3][0],
+                      "history getter reconsults its provider and never substitutes a saved pointer or cached vector contents");
+                access.useReplacements = false;
+                Check(sdk.GetFront() == &access.vectors[0] && access.vectorCalls == calls + 4 && access.vectorKind == CameraRowVectorKind::Front &&
+                          access.acquireCalls == 1,
+                      "the appended history kind does not change the existing vector channel or row lifetime");
+                access.ledger.CloseIssuance();
+                Refuses([&] { sdk.GetTargetHistoryPos(); }, "GetTargetHistoryPos", ClockResult::Stopped);
+                Check(access.vectorCalls == calls + 5 && access.ledger.IsRetained() && !access.releaseCalls,
+                      "Stop revokes history publication while the same actual row hold stays live");
+            }
+            Check(access.releaseCalls == 1 && access.releasedId == access.acquiredId && !access.ledger.IsRetained(),
+                  "typed row destruction releases the same hold once after history access and Stop");
+        }
+        {
+            RowAccess access;
+            {
+                CamRowObserver                        camera(1, access);
+                const CCam&                           sdk = camera;
+                const auto                            original = access.history;
+                constexpr std::array<ClockResult, 14> refusals{ClockResult::InvalidArgument, ClockResult::NotInitialized,   ClockResult::WrongThread,
+                                                               ClockResult::BindingChanged,  ClockResult::ReadFailure,      ClockResult::WriteFailure,
+                                                               ClockResult::RestoreFailure,  ClockResult::PatchFailure,     ClockResult::Busy,
+                                                               ClockResult::Expired,         ClockResult::UnsupportedBuild, ClockResult::OwnerConflict,
+                                                               ClockResult::Stopped,         ClockResult::OriginalException};
+                for (const auto status : refusals)
+                {
+                    access.vectorStatus = status;
+                    const auto calls = access.vectorCalls;
+                    CVector*   output = &access.vectors[1];
+                    Refuses([&] { output = sdk.GetTargetHistoryPos(); }, "GetTargetHistoryPos", status);
+                    Check(output == &access.vectors[1] && access.vectorCalls == calls + 1 && access.vectorKind == CameraRowVectorKind::TargetHistory &&
+                              access.vectorId == access.acquiredId && access.vectorRow == 1 && access.acquireCalls == 1 && !access.releaseCalls &&
+                              access.ledger.IsRetained() && std::memcmp(original.data(), access.history.data(), sizeof(original)) == 0,
+                          "every history refusal preserves caller output, full history storage and the same row hold without retry or fallback");
+                }
+                access.vectorStatus = ClockResult::Ok;
+                access.nullSuccess = true;
+                const auto calls = access.vectorCalls;
+                CVector*   output = &access.vectors[1];
+                Refuses([&] { output = sdk.GetTargetHistoryPos(); }, "GetTargetHistoryPos", ClockResult::BindingChanged);
+                Check(output == &access.vectors[1] && access.vectorCalls == calls + 1 && !access.releaseCalls && access.ledger.IsRetained(),
+                      "an acquired row refuses null history success without manufacturing a buffer or dropping its hold");
+            }
+            Check(access.releaseCalls == 1 && access.releasedId == access.acquiredId && !access.ledger.IsRetained(),
+                  "history refusal paths do not duplicate or bypass the same producer release");
+        }
+        if (checks - before != 73)
+            throw std::runtime_error("history SDK case-count contract changed");
+        std::puts("Actual Cam target history SDK fixture completed");
+    }
+
     void Cases()
     {
         Access               access;
@@ -873,6 +976,7 @@ namespace
         FovWrites();
         Directions();
         RowBorrows();
+        HistoryPointers();
         std::puts("Actual camera JumpCut SDK fixture completed");
         std::puts("Actual camera basics SDK fixture completed");
         std::puts("Actual Cam finite FOV SDK fixture completed");

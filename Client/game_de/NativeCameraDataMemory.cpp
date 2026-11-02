@@ -8,6 +8,7 @@
 #include "NativeCameraDirection.h"
 #include "NativeCameraDirectionProfile.h"
 #include "NativeCameraRowBorrowProfile.h"
+#include "NativeCameraHistoryProfile.h"
 // CVector's inline SDK helpers require the existing shared float constants.
 #include <SharedUtil.Defines.h>
 #include <CVector.h>
@@ -797,6 +798,126 @@ namespace mta::game_de::NativeCameraDataMemory
         // bookend. The host must drain that client synchronously before End;
         // this pointer is never valid beyond the owning wrapper's lifetime.
         output = reinterpret_cast<CVector*>(image + P::CameraRva + P::ArrayOffset + static_cast<std::size_t>(row) * P::RowBytes + Q::VectorOffsets[selection]);
+        return ClockResult::Ok;
+    }
+}
+
+namespace mta::game_de
+{
+    namespace CameraHistoryDetail
+    {
+        namespace C = CameraRowBorrowDetail;
+        namespace P = NativeCameraDataProfile;
+        namespace Q = NativeCameraHistoryProfile;
+        namespace D = NativeStreamingCompletionContext;
+        namespace I = NativeImageAccess;
+        using CheckOwner = NativeCameraDataMemory::CheckOwner;
+
+        static_assert(Q::VectorBytes == sizeof(CVector) && Q::ArrayBytes == Q::VectorCount * sizeof(CVector));
+
+        bool Profile(std::uintptr_t image) noexcept
+        {
+            // The existing row profile still owns its five vector roles. Only
+            // this history path admits the additional temporal consumer body.
+            if (!C::Profile(image))
+                return false;
+            IMAGE_DOS_HEADER   dos{};
+            IMAGE_NT_HEADERS64 nt{};
+            if (!I::ReadImage(image, image, &dos, sizeof(dos)) || dos.e_lfanew <= 0 || static_cast<std::size_t>(dos.e_lfanew) > P::ImageBytes - sizeof(nt) ||
+                !I::ReadImage(image, image + static_cast<std::uintptr_t>(dos.e_lfanew), &nt, sizeof(nt)) ||
+                nt.FileHeader.SizeOfOptionalHeader < sizeof(IMAGE_OPTIONAL_HEADER64) || !nt.FileHeader.NumberOfSections || nt.FileHeader.NumberOfSections > 96)
+                return false;
+            const auto at = static_cast<std::size_t>(dos.e_lfanew) + offsetof(IMAGE_NT_HEADERS64, OptionalHeader) + nt.FileHeader.SizeOfOptionalHeader;
+            const auto bytes = static_cast<std::size_t>(nt.FileHeader.NumberOfSections) * sizeof(IMAGE_SECTION_HEADER);
+            std::array<IMAGE_SECTION_HEADER, 96> sections{};
+            if (at > P::ImageBytes || bytes > P::ImageBytes - at || !I::ReadImage(image, image + at, sections.data(), bytes))
+                return false;
+            for (const auto& pin : Q::Pins)
+            {
+                bool admitted = false;
+                for (std::size_t index = 0; index != nt.FileHeader.NumberOfSections; ++index)
+                    admitted =
+                        admitted || I::SectionContains(sections[index], pin.rva, pin.size, IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_WRITE);
+                std::array<unsigned char, Q::MaximumPinBytes> current{};
+                if (!admitted || !pin.size || pin.size > current.size() || !I::ReadImage(image, image + pin.rva, current.data(), pin.size, false, true) ||
+                    std::memcmp(current.data(), pin.bytes, pin.size))
+                    return false;
+            }
+            return true;
+        }
+
+        bool Storage(std::uintptr_t image, std::uint32_t row) noexcept
+        {
+            if (row >= P::RowCount || !C::Fields(image, row))
+                return false;
+            const auto offset = P::ArrayOffset + static_cast<std::size_t>(row) * P::RowBytes;
+            if (Q::HistoryOffset > P::RowBytes || Q::ArrayBytes > P::RowBytes - Q::HistoryOffset || offset > P::CameraBytes ||
+                Q::HistoryOffset > P::CameraBytes - offset || Q::ArrayBytes > P::CameraBytes - offset - Q::HistoryOffset)
+                return false;
+            const auto target = image + P::CameraRva + offset + Q::HistoryOffset;
+            // The SDK exposes the array start. Validate all four constructed
+            // triples, even though the existing gravity caller uses only0/1.
+            // Timestamps begin immediately after this span and are not lent.
+            return !(target % alignof(CVector)) && I::ImagePages(image, target, Q::ArrayBytes, true);
+        }
+
+        ClockResult Sample(std::uintptr_t image, std::uint32_t row, CheckOwner owner, CheckOwner afterApplicationOwner, D::Value& output) noexcept
+        {
+            D::Value   next;
+            const auto result = C::Sample(image, row, owner, afterApplicationOwner, next);
+            if (result != ClockResult::Ok)
+                return result;
+            if (!Profile(image))
+                return ClockResult::UnsupportedBuild;
+            if (!Storage(image, row) || !D::Fence(image, next))
+                return ClockResult::BindingChanged;
+            if (!Profile(image) || !Storage(image, row) || !D::Fence(image, next))
+                return ClockResult::BindingChanged;
+            output = next;
+            return ClockResult::Ok;
+        }
+    }
+}
+
+namespace mta::game_de::NativeCameraDataMemory
+{
+    ClockResult ReadRowHistory(std::uintptr_t image, NativeCameraRowBorrow& ledger, const NativeCameraRowBorrow::Identity& identity,
+                               const NativeCameraRowBorrow::Token& token, CheckOwner owner, CheckOwner afterApplicationOwner, CVector*& output) noexcept
+    {
+        namespace C = CameraHistoryDetail;
+        namespace D = NativeStreamingCompletionContext;
+        namespace P = NativeCameraDataProfile;
+        namespace Q = NativeCameraHistoryProfile;
+        if (!token || token.Row() >= P::RowCount)
+            return ClockResult::InvalidArgument;
+        if (!owner || !afterApplicationOwner)
+            return ClockResult::NotInitialized;
+        if (!image || image > (std::numeric_limits<std::uintptr_t>::max)() - P::ImageBytes)
+            return ClockResult::UnsupportedBuild;
+        if (identity.image != image)
+            return ClockResult::OwnerConflict;
+        if (!D::TryEnter())
+            return ClockResult::Busy;
+        D::Scope scope;
+        auto     result = ledger.Validate(token, identity);
+        if (result != ClockResult::Ok)
+            return result;
+        const auto row = token.Row();
+        D::Value   first, current, confirmed;
+        if ((result = C::Sample(image, row, owner, afterApplicationOwner, first)) != ClockResult::Ok ||
+            (result = C::Sample(image, row, owner, afterApplicationOwner, current)) != ClockResult::Ok)
+            return result;
+        if (!D::Same(first, current, true))
+            return ClockResult::BindingChanged;
+        if ((result = C::Sample(image, row, owner, afterApplicationOwner, confirmed)) != ClockResult::Ok)
+            return result;
+        if (!D::Same(first, confirmed, true) || !D::Same(current, confirmed, true))
+            return ClockResult::BindingChanged;
+        if ((result = ledger.Validate(token, identity)) != ClockResult::Ok)
+            return result;
+        // This is the native array under the same live client, not reconstructed
+        // history. No timestamp, count, normalization or camera routine runs.
+        output = reinterpret_cast<CVector*>(image + P::CameraRva + P::ArrayOffset + static_cast<std::size_t>(row) * P::RowBytes + Q::HistoryOffset);
         return ClockResult::Ok;
     }
 }

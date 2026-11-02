@@ -6,6 +6,7 @@
 #include "../../Client/definitive/CoreStartupReference.h"
 #include "../../Client/definitive/NativeFrontendHost.h"
 #include "../../Client/definitive/NativeFrontendActivation.h"
+#include "../../Client/definitive/NativeFrontendStartupIntent.h"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -72,6 +73,15 @@ namespace deonline
 {
     struct CoreStartupReferenceTestAccess
     {
+        static bool RuntimeCache(const CoreStartupReference& worker, FrontendRuntimeReport::Snapshot& output) noexcept
+        {
+            return worker.runtimeCache.Capture(output);
+        }
+        static bool AdmissionCache(const CoreStartupReference& worker, FrontendAdmissionSample::Snapshot& output) noexcept
+        {
+            return worker.frontendAdmissionCache.Capture(output);
+        }
+
         static SRWLOCK&      InputLock(CoreStartupReference& worker) noexcept { return worker.inputLock; }
         static std::uint32_t PublishedPhase(const CoreStartupReference& worker) noexcept { return worker.publishedRenderV6[DefinitiveRenderReference::Phase]; }
         static std::uint32_t PublishedGuiPhase(const CoreStartupReference& worker) noexcept
@@ -111,6 +121,19 @@ namespace deonline
             return worker.Start(address, true, false, false, 0, 1, false, false, false, false, false, false, false, false, false, false, false, true, true);
         }
     };
+}
+
+// Only the owned host build substitutes keyboard/focus observations. The
+// shipping controller retains its original Win32 reads and ownership policy.
+namespace deonline::NativeFrontendHostTestContext
+{
+    std::atomic<bool>          focused{false};
+    std::atomic<std::uint32_t> keys{0};
+    void                       Read(bool& outFocused, std::uint32_t& outKeys) noexcept
+    {
+        outFocused = focused.load();
+        outKeys = keys.load();
+    }
 }
 
 namespace
@@ -202,7 +225,8 @@ namespace
                   L"MTA_CORE_FIXTURE_FAIL_ATTACH", L"MTA_CORE_FIXTURE_INPUT_MODE", L"MTA_CORE_FIXTURE_RENDER_MODE", L"MTA_CORE_FIXTURE_GUI_MODE",
                   L"MTA_CORE_FIXTURE_SURFACE_MODE", L"MTA_CORE_FIXTURE_CLOCK_MODE", L"MTA_CORE_FIXTURE_FRONTEND_CLOCK_MODE", L"MTA_CORE_FIXTURE_RUNTIME_MODE",
                   L"MTA_CORE_FIXTURE_LOCAL_RUNTIME_MODE", L"MTA_CORE_FIXTURE_APPLICATION_FRAME_MODE", L"MTA_CORE_FIXTURE_STARTUP_OBSERVATION_MODE",
-                  L"MTA_CORE_FIXTURE_BINDING_PERSISTENCE_MODE", L"MTA_CORE_FIXTURE_VIEW_ADMISSION_MODE"})
+                  L"MTA_CORE_FIXTURE_BINDING_PERSISTENCE_MODE", L"MTA_CORE_FIXTURE_VIEW_ADMISSION_MODE", L"MTA_CORE_FIXTURE_AUTO_ADMISSION",
+                  L"MTA_CORE_FIXTURE_AUTO_ENABLED"})
                 Set(name, L"0");
         }
         ~Fixture()
@@ -864,6 +888,8 @@ namespace
               "persistence admission stays on the worker before views/input and leaves no Core module");
     }
 
+#include "LoadedWorldFrontendStartupTests.inl"
+
     void TestNativeActivation()
     {
         using A = deonline::NativeFrontendActivation;
@@ -929,7 +955,7 @@ namespace
         if (scenario == 2)
             request.flags |= N::LocalInput;
         auto invalid = request;
-        invalid.flags = 4;
+        invalid.flags = 8;
         Check(!host.Start(nullptr, request) && !host.Start(&anchor, invalid), "invalid native startup requests create no controller thread");
         Check(Fast([&] { return host.Start(&anchor, request); }) && !host.Start(&anchor, request),
               "native startup is nonblocking and admits exactly one controller for the process");
@@ -2162,7 +2188,8 @@ int wmain(int argc, wchar_t** argv)
         static deonline::CoreStartupReference worker;
         Check(worker.Poll() == -1 && !worker.Cancel() && !worker.IsPending(), "fresh worker is idle");
         const bool nativeHost = std::wstring(argv[2]).find(L"native-host-") == 0;
-        if (nativeHost)
+        const bool loadedHost = std::wstring(argv[2]).find(L"loaded-world-host-") == 0;
+        if (nativeHost || loadedHost)
         {
             // The historical Begin negative reserves its caller's thread even
             // when rejecting a null anchor. Keep that isolated from the cold
@@ -2174,7 +2201,20 @@ int wmain(int argc, wchar_t** argv)
             Check(!worker.Begin(nullptr), "null anchor must be rejected");
         for (unsigned field = 0; field < 20; ++field)
             Check(worker.Read(field) == 0, "idle cache must be neutral");
-        if (nativeHost)
+        if (std::wstring(argv[2]) == L"loaded-world-intent")
+        {
+            TestLoadedWorldIntent();
+        }
+        else if (std::wstring(argv[2]) == L"actual-loaded-world-admission")
+        {
+            TestActualLoadedWorldAdmission(worker);
+        }
+        else if (loadedHost)
+        {
+            Check(argc == 4, "loaded-world host fixture requires its controlled Core DLL");
+            TestLoadedWorldHost(worker, root, argv[2], argv[3]);
+        }
+        else if (nativeHost)
         {
             Check(argc == 4, "native host fixture requires its controlled Core DLL");
             TestNativeFrontendHost(worker, root, argv[2], argv[3]);

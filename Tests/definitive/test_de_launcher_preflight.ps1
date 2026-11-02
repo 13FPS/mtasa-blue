@@ -16,6 +16,7 @@ param(
     [switch]$AdmissionOnly
 )
 $ErrorActionPreference='Stop'
+. (Join-Path $PSScriptRoot 'Hide-CoreAdmissionExportFixture.ps1')
 Set-StrictMode -Version Latest
 $root=(Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 if(-not $PackageDirectory){$PackageDirectory=Join-Path $root 'Build/definitive-package/Smoke'}
@@ -58,6 +59,7 @@ $sourceNames=@('Client/launch/Main.cpp','Client/launch/StdInc.cpp','Client/launc
     'Client/launch/DefinitivePreflight/StrictJson.c','Client/launch/DefinitivePreflight/premake5.lua',
     'Tests/definitive/DePreflightMissingExport.cpp','Tests/definitive/test_de_launcher_preflight.ps1')
 $sourceNames+=@(Get-ChildItem -LiteralPath (Join-Path $root 'vendor/json-c') -File | Where-Object {$_.Extension -in @('.h','.c') -or $_.Name -eq 'premake5.lua'} | ForEach-Object {[IO.Path]::GetRelativePath($root,$_.FullName).Replace('\','/')})
+$sourceNames+=@('Client/definitive/NativeFrontendPackage.ps1','Tests/definitive/Hide-CoreAdmissionExportFixture.ps1')
 $sourceHashes=[ordered]@{}
 foreach($name in $sourceNames){$sourceHashes[$name]=Sha (Join-Path $root $name)}
 $checks=0
@@ -234,7 +236,7 @@ foreach($spec in @(@{name='gui36';path=$GuiPackageDirectory;count=36},@{name='fr
         Check ($utf8.GetString($extraBytes).Contains('export const MTA_CORE_FRONTEND_NATIVE_HOST = true;')) 'Native admission fixture must be an explicitly armed package.'
         # Rehash deliberately incoherent owned bytes: admission must inspect the
         # startup policy as well as hashes before loading any executable module.
-        foreach($change in @('ini-mismatch','duplicate-native-marker','malformed-native-marker','native-without-runtime')){
+        foreach($change in @('ini-mismatch','duplicate-native-marker','malformed-native-marker','native-without-runtime','auto-show-without-native-host','duplicate-auto-show-marker','malformed-auto-show-marker','auto-show-ini-mismatch')){
             [IO.File]::WriteAllBytes($extraConfig,$extraBytes);[IO.File]::WriteAllBytes($iniPath,$iniBytes)
             $text=$utf8.GetString($extraBytes)
             $status='native_frontend_configuration_invalid'
@@ -243,6 +245,19 @@ foreach($spec in @(@{name='gui36';path=$GuiPackageDirectory;count=36},@{name='fr
                 'duplicate-native-marker' {$text+="`nexport const MTA_CORE_FRONTEND_NATIVE_HOST = false;`n";$status='gui_configuration_marker_invalid'}
                 'malformed-native-marker' {$text=$text.Replace('export const MTA_CORE_FRONTEND_NATIVE_HOST = true;','export const MTA_CORE_FRONTEND_NATIVE_HOST = 1;');$status='gui_configuration_marker_invalid'}
                 'native-without-runtime' {$text=$text.Replace('export const MTA_CORE_FRONTEND_RUNTIME = true;','export const MTA_CORE_FRONTEND_RUNTIME = false;')}
+                'auto-show-without-native-host' {
+                    $text=[regex]::Replace($text,'(?m)^export const MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW = (?:true|false);\r?\n?','')+"`nexport const MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW = true;`n"
+                    $text=$text.Replace('export const MTA_CORE_FRONTEND_NATIVE_HOST = true;','export const MTA_CORE_FRONTEND_NATIVE_HOST = false;')
+                }
+                'duplicate-auto-show-marker' {$text+="`nexport const MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW = true;`nexport const MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW = false;`n";$status='gui_configuration_marker_invalid'}
+                'malformed-auto-show-marker' {
+                    $text=[regex]::Replace($text,'(?m)^export const MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW = (?:true|false);\r?\n?','')+"`nexport const MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW = 1;`n"
+                    $status='gui_configuration_marker_invalid'
+                }
+                'auto-show-ini-mismatch' {
+                    $text=[regex]::Replace($text,'(?m)^export const MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW = (?:true|false);\r?\n?','')+"`nexport const MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW = true;`n"
+                    [IO.File]::WriteAllText($iniPath,[regex]::Replace($utf8.GetString($iniBytes),'(?m)^LoadedWorldAutoShow=1\r?\n?',''),$utf8)
+                }
             }
             [IO.File]::WriteAllText($extraConfig,$text,$utf8)
             $bad=$extraText|ConvertFrom-Json
@@ -255,6 +270,26 @@ foreach($spec in @(@{name='gui36';path=$GuiPackageDirectory;count=36},@{name='fr
         }
         [IO.File]::WriteAllBytes($extraConfig,$extraBytes);[IO.File]::WriteAllBytes($iniPath,$iniBytes)
         [IO.File]::WriteAllText($extraManifest,$extraText,$utf8)
+        $corePath=Join-Path $extraBundle 'CLEO/de-online/core.dll'
+        $coreBytes=[IO.File]::ReadAllBytes($corePath)
+        try {
+            Hide-MtaCoreAdmissionExportFixture $corePath $output|Out-Null
+            foreach($auto in @($false,$true)) {
+                $text=[regex]::Replace($utf8.GetString($extraBytes),'(?m)^export const MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW = (?:true|false);\r?\n?','')+
+                    "`nexport const MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW = $($auto.ToString().ToLowerInvariant());`n"
+                $ini=[regex]::Replace($utf8.GetString($iniBytes),'(?m)^LoadedWorldAutoShow=1\r?\n?','')
+                if($auto){$ini+="LoadedWorldAutoShow=1`n"}
+                [IO.File]::WriteAllText($extraConfig,$text,$utf8);[IO.File]::WriteAllText($iniPath,$ini,$utf8)
+                $bad=$extraText|ConvertFrom-Json
+                foreach($path in @('CLEO/de-online/config.mjs','MtaDefinitive.ini','CLEO/de-online/core.dll')){($bad.files|Where-Object path -eq $path).sha256=Sha (Join-Path $extraBundle $path)}
+                [IO.File]::WriteAllText($extraManifest,($bad|ConvertTo-Json -Depth 12),$utf8)
+                if($auto){Invoke-Case ($spec.name+'-auto-show-old-Core-export-refused') $extraArguments 4 'native_frontend_core_admission_export_required'}
+                else{Invoke-Case ($spec.name+'-manual-old-Core-export-compatible') $extraArguments 0 'preflight_valid' $hostRoot $spec.count}
+            }
+        } finally {
+            [IO.File]::WriteAllBytes($corePath,$coreBytes);[IO.File]::WriteAllBytes($extraConfig,$extraBytes);[IO.File]::WriteAllBytes($iniPath,$iniBytes)
+            [IO.File]::WriteAllText($extraManifest,$extraText,$utf8)
+        }
         $bad=$extraText|ConvertFrom-Json;($bad.files|Where-Object path -eq 'MtaDefinitive.ini').path='unowned.ini'
         [IO.File]::WriteAllText($extraManifest,($bad|ConvertTo-Json -Depth 12),$utf8)
         Invoke-Case ($spec.name+'-partial-native-group-same-count') $extraArguments 4 'exact_owned_group_count_required'
@@ -263,7 +298,8 @@ foreach($spec in @(@{name='gui36';path=$GuiPackageDirectory;count=36},@{name='fr
         $text=$utf8.GetString($extraBytes).Replace("export const MODE = 'smoke';","export const MODE = 'diagnostic';").
             Replace('export const MTA_CORE_FRONTEND_NATIVE_HOST = true;','export const MTA_CORE_FRONTEND_NATIVE_HOST = false;').
             Replace('export const MTA_CORE_FRONTEND_RUNTIME = true;','export const MTA_CORE_FRONTEND_RUNTIME = false;').
-            Replace('export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE = true;','export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE = false;')
+            Replace('export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE = true;','export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE = false;').
+            Replace('export const MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW = true;','export const MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW = false;')
         [IO.File]::WriteAllText($extraConfig,$text,$utf8)
         [IO.File]::WriteAllText($iniPath,"[MTA]`nEnabled=0`nLocalInput=1`nBindingPersistence=0`n",$utf8)
         $bad=$extraText|ConvertFrom-Json;$bad.mode='Diagnostic'

@@ -7,7 +7,7 @@ param([ValidateSet('Diagnostic', 'Smoke', 'Online')][string]$Mode = 'Smoke',
     [switch]$MtaNativePadReference, [switch]$MtaNativeMovementTrial, [switch]$MtaCoreStartupReference, [switch]$MtaCoreInputReference,
     [switch]$MtaCoreMovementReference, [switch]$MtaCoreRenderReference, [switch]$MtaCoreRenderGpuReference, [switch]$MtaCoreRenderCustomPresentReference, [switch]$MtaCoreRenderFrameBoundaryReference, [switch]$MtaCoreRenderNativeDispatchReference,
     [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11', [switch]$MtaCoreGuiStartupReference, [switch]$MtaCoreGuiSurfaceReference, [switch]$MtaCoreGuiFrontendReference, [switch]$MtaCoreGuiFrontendInputReference, [switch]$MtaCoreGuiFrontendStartupReference, [switch]$MtaCorePersistentFrontend, [switch]$MtaCoreFrontendRuntime,
-    [switch]$MtaCoreFrontendBindingPersistence, [switch]$MtaCoreFrontendNativeHost,
+    [switch]$MtaCoreFrontendBindingPersistence, [switch]$MtaCoreFrontendNativeHost, [switch]$MtaCoreFrontendLoadedWorldAutoShow,
     [switch]$MtaCoreClockReference, [switch]$MtaCoreClockSetReference, [switch]$MtaCoreApplicationFrameReference, [switch]$MtaCoreStartupObservationReference,
     [string]$OutputDirectory)
 
@@ -17,7 +17,7 @@ Set-StrictMode -Version Latest
 # Runtime owns one completed Core across views. Its selection must never inherit
 # another native lifetime merely because those packages share frontend assets.
 $runtimeConflicts = @($PSBoundParameters.Keys | Where-Object {
-    $_ -match '^(Native|Matched|Lock|Mta)' -and $_ -notin @('MtaCoreFrontendRuntime','MtaCoreFrontendBindingPersistence','MtaCoreFrontendNativeHost') -and
+    $_ -match '^(Native|Matched|Lock|Mta)' -and $_ -notin @('MtaCoreFrontendRuntime','MtaCoreFrontendBindingPersistence','MtaCoreFrontendNativeHost','MtaCoreFrontendLoadedWorldAutoShow') -and
     $PSBoundParameters[$_] -is [Management.Automation.SwitchParameter] -and $PSBoundParameters[$_].IsPresent
 })
 if ($MtaCoreFrontendRuntime -and ($Mode -ne 'Smoke' -or $runtimeConflicts.Count -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
@@ -27,6 +27,9 @@ if ($MtaCoreFrontendBindingPersistence -and -not $MtaCoreFrontendRuntime) {
     throw 'Saved MTA movement bindings require MtaCoreFrontendRuntime.'
 }
 if ($MtaCoreFrontendNativeHost -and -not $MtaCoreFrontendRuntime) { throw 'Native MTA startup requires MtaCoreFrontendRuntime.' }
+if ($MtaCoreFrontendLoadedWorldAutoShow -and -not ($MtaCoreFrontendNativeHost -and $MtaCoreFrontendRuntime)) {
+    throw 'Loaded-world auto-show requires MtaCoreFrontendNativeHost and MtaCoreFrontendRuntime.'
+}
 # Native clock ownership excludes other native service lifetimes. Reject a
 # mixed package before touching build outputs or downloading dependencies.
 $clockConflicts = @($PSBoundParameters.Keys | Where-Object {
@@ -331,6 +334,13 @@ if ($MtaCoreFrontendRuntime) {
         foreach ($name in $pair.names) { if (-not $exports.Contains($name)) { throw "Required frontend runtime export missing: $name" } }
     }
 }
+if ($MtaCoreFrontendLoadedWorldAutoShow) {
+    # Only this explicit mode needs the new read-only admission export. Keep
+    # older manual packages compatible, but never stage an auto-show promise
+    # over a Core that cannot provide a fresh eligible-local observation.
+    $exports = Get-Amd64Exports $corePath
+    if (-not $exports.Contains('MTA_ReadDEFrontendRuntimeAdmissionV1')) { throw 'Loaded-world auto-show Core admission export is missing; rebuild the frontend.' }
+}
 $guiSources = @()
 if ($MtaCoreFrontendNativeHost) {
     $nativeAsiPath = Join-Path $repositoryRoot 'Build/definitive-online/MtaDefinitive.asi'
@@ -594,6 +604,10 @@ $nativeHostMarker = 'export const MTA_CORE_FRONTEND_NATIVE_HOST = false;'
 if ([regex]::Matches($configText, [regex]::Escape($nativeHostMarker)).Count -ne 1) { throw 'Expected disabled native frontend host in source configuration.' }
 $configText = $configText.Replace($nativeHostMarker,
     "export const MTA_CORE_FRONTEND_NATIVE_HOST = $($MtaCoreFrontendNativeHost.IsPresent.ToString().ToLowerInvariant());")
+$autoShowMarker = 'export const MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW = false;'
+if ([regex]::Matches($configText, [regex]::Escape($autoShowMarker)).Count -ne 1) { throw 'Expected disabled loaded-world MTA frontend auto-show in source configuration.' }
+$configText = $configText.Replace($autoShowMarker,
+    "export const MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW = $($MtaCoreFrontendLoadedWorldAutoShow.IsPresent.ToString().ToLowerInvariant());")
 $bindingPersistenceMarker = 'export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE = false;'
 if ([regex]::Matches($configText, [regex]::Escape($bindingPersistenceMarker)).Count -ne 1) { throw 'Expected disabled saved movement bindings in source configuration.' }
 $configText = $configText.Replace($bindingPersistenceMarker,
@@ -609,7 +623,7 @@ $configText = $configText.Replace($frontendStartupMarker,
 [IO.File]::WriteAllText($configPath, $configText, $utf8)
 if ($MtaCoreFrontendNativeHost) {
     [IO.File]::Copy($nativeAsiPath, (Join-Path $stagingRoot 'Win64/MtaDefinitive.asi'), $false)
-    [IO.File]::WriteAllText((Join-Path $stagingRoot 'Win64/MtaDefinitive.ini'), (New-MtaNativeFrontendIni $true $MtaCoreFrontendBindingPersistence.IsPresent), $utf8)
+    [IO.File]::WriteAllText((Join-Path $stagingRoot 'Win64/MtaDefinitive.ini'), (New-MtaNativeFrontendIni $true $MtaCoreFrontendBindingPersistence.IsPresent $MtaCoreFrontendLoadedWorldAutoShow.IsPresent), $utf8)
 }
 foreach ($name in @('sa_unreal.json', 'unknown_x64.json')) {
     [IO.File]::Copy($downloads[$name], (Join-Path $configDirectory $name), $false)

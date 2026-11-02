@@ -60,7 +60,10 @@ int wmain(int argc, wchar_t** argv)
     {
         namespace F = NativeFrontendASIFixture;
         namespace N = deonline::NativeFrontendHostProtocol;
-        Check(argc == 2 && sizeof(void*) == 8, "owned x64 ASI host requires an absolute staged ASI path");
+        Check((argc == 2 || argc == 3) && sizeof(void*) == 8, "owned x64 ASI host requires an absolute staged ASI path");
+        const auto expectedFlags = argc == 3 ? static_cast<std::uint32_t>(std::stoul(std::wstring(argv[2]))) : N::BindingPersistence | N::LocalInput;
+        Check(expectedFlags == (N::BindingPersistence | N::LocalInput) || expectedFlags == (N::BindingPersistence | N::LocalInput | N::LoadedWorldAutoShow),
+              "ASI fixture accepts only default/manual or explicit auto-show request flags");
         const auto asiPath = std::filesystem::path(argv[1]);
         Check(asiPath.is_absolute() && asiPath.filename() == L"MtaDefinitive.asi", "ASI path must identify the owned staged shipping artifact");
         Check(std::filesystem::current_path() != asiPath.parent_path(), "ASI must resolve paths independently from the process working directory");
@@ -88,8 +91,7 @@ int wmain(int argc, wchar_t** argv)
         Check(controlledStartMs >= 1400 && fixture.Read(F::Complete) == 1 && fixture.Read(F::Calls) == 1,
               "shipping ASI must start exactly once despite repeated initialization during a slow Bridge call");
         Check(fixture.Read(F::RequestSize) == static_cast<LONG>(sizeof(N::RequestV1)) && fixture.Read(F::RequestVersion) == static_cast<LONG>(N::ApiVersion) &&
-                  fixture.Read(F::RequestFlags) == static_cast<LONG>(N::BindingPersistence | N::LocalInput) && !fixture.Read(F::RequestReserved) &&
-                  !fixture.Read(F::InvalidArgument),
+                  fixture.Read(F::RequestFlags) == static_cast<LONG>(expectedFlags) && !fixture.Read(F::RequestReserved) && !fixture.Read(F::InvalidArgument),
               "shipping ASI did not deliver the coherent API1 durable/local-input request");
         Check(static_cast<DWORD>(fixture.Read(F::CallerThread)) != GetCurrentThreadId() && fixture.Read(F::CallerThread) != 0,
               "Bridge startup must run on a bootstrap thread independently from the ASI entry caller");
@@ -104,11 +106,11 @@ int wmain(int argc, wchar_t** argv)
               "controlled ASI glue test must not claim or create actual MTA/native game services");
         std::printf(
             "{\"success\":true,\"checks\":%d,\"initialize_ms\":%llu,\"repeat_ms\":%llu,\"during_start_ms\":%llu,"
-            "\"controlled_start_ms\":%ld,\"start_calls\":1,\"request_api\":1,\"request_flags\":3,\"bootstrap_thread_verified\":true,"
+            "\"controlled_start_ms\":%ld,\"start_calls\":1,\"request_api\":1,\"request_flags\":%lu,\"bootstrap_thread_verified\":true,"
             "\"absolute_bridge_path_verified\":true,\"shipping_asi_executed\":true,\"bridge_is_controlled_fixture\":true,"
             "\"game_launched\":false,\"native_hooks_installed\":false,\"full_mta_startup_verified\":false}\n",
             checks, static_cast<unsigned long long>(firstMs), static_cast<unsigned long long>(repeatMs), static_cast<unsigned long long>(duringStartMs),
-            controlledStartMs);
+            controlledStartMs, static_cast<unsigned long>(expectedFlags));
         return 0;
     }
     catch (const std::exception& error)

@@ -26,7 +26,10 @@ namespace
             const auto enabled = GetPrivateProfileIntW(L"MTA", L"Enabled", 0, ini.c_str());
             const auto persistence = GetPrivateProfileIntW(L"MTA", L"BindingPersistence", 0, ini.c_str());
             const auto input = GetPrivateProfileIntW(L"MTA", L"LocalInput", 0, ini.c_str());
-            if (enabled != 1 || persistence > 1 || input > 1)
+            // Manual and historical packages omit this choice and remain hidden
+            // until their physical request. Only an owned opt-in adds the flag.
+            const auto autoShow = GetPrivateProfileIntW(L"MTA", L"LoadedWorldAutoShow", 0, ini.c_str());
+            if (enabled != 1 || persistence > 1 || input > 1 || autoShow > 1)
                 return 0;
             const auto bridgePath = root / L"CLEO" / L"de-online" / L"de_client_bridge.dll";
             const auto bridge = LoadLibraryExW(bridgePath.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -34,8 +37,9 @@ namespace
                 return 0;
             const auto start = reinterpret_cast<deonline::NativeFrontendHostProtocol::Start>(GetProcAddress(bridge, "DE_NativeFrontendStartV1"));
             deonline::NativeFrontendHostProtocol::RequestV1 request;
-            request.flags =
-                (persistence ? deonline::NativeFrontendHostProtocol::BindingPersistence : 0u) | (input ? deonline::NativeFrontendHostProtocol::LocalInput : 0u);
+            request.flags = (persistence ? deonline::NativeFrontendHostProtocol::BindingPersistence : 0u) |
+                            (input ? deonline::NativeFrontendHostProtocol::LocalInput : 0u) |
+                            (autoShow ? deonline::NativeFrontendHostProtocol::LoadedWorldAutoShow : 0u);
             if (!start || start(&request) != 1)
                 FreeLibrary(bridge);
             // A successful start pins Bridge and this ASI for the controller and

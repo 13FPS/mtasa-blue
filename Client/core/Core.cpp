@@ -321,6 +321,13 @@ CORE_API DefinitiveFrontendRuntime::Status MTA_ReadDEFrontendRuntime(void* handl
     return DefinitiveFrontendRuntime::ReadOwner(handle, output, count);
 }
 
+// Optional observation stays on the existing Core owner. It cannot attach a
+// view or lend native input merely because startup intent is pending.
+CORE_API DefinitiveFrontendRuntime::Status MTA_ReadDEFrontendRuntimeAdmissionV1(void* handle, mta::game_de::FrontendAdmissionStateV1* output)
+{
+    return DefinitiveFrontendRuntime::ReadAdmissionOwner(handle, output);
+}
+
 CORE_API DefinitiveFrontendRuntime::Status MTA_PulseDEFrontendRuntime(void* handle)
 {
     return DefinitiveFrontendRuntime::PulseOwner(handle);

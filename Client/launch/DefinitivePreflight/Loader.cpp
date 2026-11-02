@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <utility>
 
 namespace
 {
@@ -182,6 +183,67 @@ namespace
             Require(section.VirtualAddress <= optional.SizeOfImage && mapped <= optional.SizeOfImage - section.VirtualAddress,
                     "pe_section_image_bounds_invalid");
         }
+    }
+
+    bool HasDirectExport(const std::vector<unsigned char>& bytes, std::string_view name)
+    {
+        // These are the complete bytes already hashed under ReadFile's one
+        // read-only handle, not a second path read or an executed Core module.
+        if (bytes.empty())
+            return false;
+        const auto nt = ReadValue<std::uint32_t>(bytes, 0x3c);
+        const auto header = ReadValue<IMAGE_FILE_HEADER>(bytes, nt + 4);
+        const auto optional = ReadValue<IMAGE_OPTIONAL_HEADER64>(bytes, nt + 24);
+        if (optional.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_EXPORT)
+            return false;
+        const auto exports = optional.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+        if (!exports.VirtualAddress || exports.Size < sizeof(IMAGE_EXPORT_DIRECTORY))
+            return false;
+        Require(header.NumberOfSections && header.NumberOfSections <= 96, "pe_export_sections_invalid");
+        std::array<IMAGE_SECTION_HEADER, 96> sections{};
+        for (std::size_t index = 0; index < header.NumberOfSections; ++index)
+            sections[index] =
+                ReadValue<IMAGE_SECTION_HEADER>(bytes, static_cast<std::size_t>(nt) + 24 + header.SizeOfOptionalHeader + index * sizeof(IMAGE_SECTION_HEADER));
+        const auto offset = [&](std::uint32_t rva, std::uint64_t count)
+        {
+            for (std::size_t index = 0; index < header.NumberOfSections; ++index)
+            {
+                const auto& section = sections[index];
+                if (rva < section.VirtualAddress)
+                    continue;
+                const auto delta = static_cast<std::uint64_t>(rva) - section.VirtualAddress;
+                const auto raw = static_cast<std::uint64_t>(section.PointerToRawData) + delta;
+                if (delta <= section.SizeOfRawData && count <= section.SizeOfRawData - delta && raw <= bytes.size() && count <= bytes.size() - raw)
+                    return static_cast<std::size_t>(raw);
+            }
+            throw std::runtime_error("pe_export_file_bounds_invalid");
+        };
+        const auto directory = ReadValue<IMAGE_EXPORT_DIRECTORY>(bytes, offset(exports.VirtualAddress, sizeof(IMAGE_EXPORT_DIRECTORY)));
+        if (!directory.NumberOfFunctions || !directory.NumberOfNames)
+            return false;
+        Require(directory.NumberOfFunctions <= 65536 && directory.NumberOfNames <= 65536, "pe_export_count_invalid");
+        const auto functions = offset(directory.AddressOfFunctions, std::uint64_t{directory.NumberOfFunctions} * sizeof(std::uint32_t));
+        const auto names = offset(directory.AddressOfNames, std::uint64_t{directory.NumberOfNames} * sizeof(std::uint32_t));
+        const auto ordinals = offset(directory.AddressOfNameOrdinals, std::uint64_t{directory.NumberOfNames} * sizeof(std::uint16_t));
+        for (std::size_t index = 0; index < directory.NumberOfNames; ++index)
+        {
+            const auto  rva = ReadValue<std::uint32_t>(bytes, names + index * sizeof(std::uint32_t));
+            const auto  at = offset(rva, 1);
+            std::size_t length = 0;
+            while (length < 512 && at + length < bytes.size() && bytes[at + length])
+                ++length;
+            Require(length && length < 512 && at + length < bytes.size(), "pe_export_name_invalid");
+            static_cast<void>(offset(rva, length + 1));
+            if (std::string_view(reinterpret_cast<const char*>(bytes.data() + at), length) != name)
+                continue;
+            const auto ordinal = ReadValue<std::uint16_t>(bytes, ordinals + index * sizeof(std::uint16_t));
+            Require(ordinal < directory.NumberOfFunctions, "pe_export_ordinal_invalid");
+            const auto function = ReadValue<std::uint32_t>(bytes, functions + ordinal * sizeof(std::uint32_t));
+            // A forwarder names somebody else's implementation and cannot
+            // establish this owned Core's optional admission capability.
+            return function && (function < exports.VirtualAddress || std::uint64_t{function} >= std::uint64_t{exports.VirtualAddress} + exports.Size);
+        }
+        return false;
     }
 
     struct FileResult
@@ -465,6 +527,7 @@ namespace
         std::string                configuration;
         std::string                nativeIni;
         std::set<std::string_view> seen;
+        std::vector<unsigned char> coreImage;
         std::uint64_t              total = 0;
         for (std::size_t index = 0; index < ownedPaths.size(); ++index)
         {
@@ -490,12 +553,18 @@ namespace
                         "installed_owned_path_mismatch");
             // MODE coherence must inspect the whole configuration, including
             // any appended assignment beyond the retained header-sized buffer.
-            const auto file = ReadFile(path, relative == "CLEO/de-online/config.mjs" ? 65536 : relative == "MtaDefinitive.ini" ? 1024 : 64 * 1024 * 1024);
+            auto file = ReadFile(path,
+                                 relative == "CLEO/de-online/config.mjs" ? 65536
+                                 : relative == "MtaDefinitive.ini"       ? 1024
+                                                                         : 64 * 1024 * 1024,
+                                 relative == "CLEO/de-online/core.dll");
             total += file.size;
             Require(total <= 256 * 1024 * 1024 && file.sha256 == expected, "owned_file_hash_mismatch");
             const auto extension = path.extension().wstring();
             if (extension == L".dll" || extension == L".asi" || extension == L".cleo")
                 Pe64(file.prefix, file.size, true);
+            if (relative == "CLEO/de-online/core.dll")
+                coreImage = std::move(file.prefix);
             if (relative == "CLEO/de-online/config.mjs")
             {
                 configuration.assign(reinterpret_cast<const char*>(file.prefix.data()), file.prefix.size());
@@ -556,13 +625,17 @@ namespace
         const bool runtime = flag("MTA_CORE_FRONTEND_RUNTIME", false);
         const bool bindingPersistence = flag("MTA_CORE_FRONTEND_BINDING_PERSISTENCE", false);
         const bool nativeHost = flag("MTA_CORE_FRONTEND_NATIVE_HOST", nativeCount != 0);
+        const bool loadedWorldAutoShow = flag("MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW", false);
+        Require(!loadedWorldAutoShow || nativeHost, "native_frontend_configuration_invalid");
         Require(!request.launch || nativeHost, "enabled_native_frontend_required");
         Require(!bindingPersistence || runtime, "gui_mode_conflict");
         Require(!nativeHost || (nativeCount == NativeFrontendPaths.size() && runtime && mode == "Smoke"), "native_frontend_configuration_invalid");
+        Require(!loadedWorldAutoShow || HasDirectExport(coreImage, "MTA_ReadDEFrontendRuntimeAdmissionV1"), "native_frontend_core_admission_export_required");
         if (nativeCount)
         {
-            const auto expectedIni =
-                std::string("[MTA]\nEnabled=") + (nativeHost ? "1" : "0") + "\nLocalInput=1\nBindingPersistence=" + (bindingPersistence ? "1" : "0") + "\n";
+            const auto expectedIni = std::string("[MTA]\nEnabled=") + (nativeHost ? "1" : "0") +
+                                     "\nLocalInput=1\nBindingPersistence=" + (bindingPersistence ? "1" : "0") + "\n" +
+                                     (loadedWorldAutoShow ? "LoadedWorldAutoShow=1\n" : "");
             Require(nativeIni == expectedIni, "native_frontend_configuration_invalid");
         }
         if (startup || surface || frontend || frontendInput || frontendStartup || persistentFrontend || runtime)

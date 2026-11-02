@@ -12,7 +12,10 @@
 namespace deonline::NativeFrontendHostProtocol
 {
     inline constexpr std::uint32_t ApiVersion = 1;
-    inline constexpr std::uint32_t BindingPersistence = 1, LocalInput = 2, SupportedFlags = BindingPersistence | LocalInput;
+    // Automatic first Show is an explicit normal-host choice; old manual
+    // and diagnostic callers retain their unchanged zero/default flags.
+    inline constexpr std::uint32_t BindingPersistence = 1, LocalInput = 2, LoadedWorldAutoShow = 4,
+                                   SupportedFlags = BindingPersistence | LocalInput | LoadedWorldAutoShow;
     struct RequestV1
     {
         std::uint32_t size = sizeof(RequestV1), version = ApiVersion, flags = 0, reserved = 0;

@@ -25,6 +25,7 @@ $compiles = [Collections.Generic.List[object]]::new()
 $inputAsi = $null
 $artifacts = @()
 $run = $null
+$runs = @()
 $failure = $null
 $cleanupError = $null
 $previousTemp = [Environment]::GetEnvironmentVariable('TEMP','Process')
@@ -69,24 +70,36 @@ try {
     Compile 'controlled-bridge' (Join-Path $PSScriptRoot 'NativeFrontendASIBridgeFixture.cpp') $bridgePath @('/LD')
     $hostPath = Join-Path $outputRoot 'owned-host/NativeFrontendASIHost.exe'
     Compile 'owned-host' (Join-Path $PSScriptRoot 'NativeFrontendASIHostTests.cpp') $hostPath
-    $stagedAsi = Join-Path $gameRoot 'MtaDefinitive.asi'
-    Copy-Item -LiteralPath $asiSource -Destination $stagedAsi
-    if ((Hash $stagedAsi) -ne $inputAsi.sha256) { throw 'Staged shipping ASI differs.' }
-    $iniPath = Join-Path $gameRoot 'MtaDefinitive.ini'
-    "[MTA]`nEnabled=1`nLocalInput=1`nBindingPersistence=1`n" | Set-Content -LiteralPath $iniPath -Encoding utf8NoBOM
-    foreach ($path in @($stagedAsi,$bridgePath,$hostPath,$iniPath)) {
-        $artifacts += [ordered]@{path=$path;sha256=(Hash $path);bytes=(Get-Item -LiteralPath $path).Length}
-    }
     $foreignWorkingDirectory = Join-Path $outputRoot 'foreign-working-directory'
     New-Item -ItemType Directory -Path $foreignWorkingDirectory | Out-Null
-    $stdout = Join-Path $outputRoot 'host-stdout.json'
-    $stderr = Join-Path $outputRoot 'host-stderr.txt'
-    $process = Start-Process -FilePath $hostPath -ArgumentList @('"'+$stagedAsi+'"') -WorkingDirectory $foreignWorkingDirectory -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-    if (-not $process.WaitForExit(15000)) { $process.Kill(); $process.WaitForExit(); throw 'Owned ASI host timed out.' }
-    $exit = $process.ExitCode
-    $result = Get-Content -LiteralPath $stdout -Raw | ConvertFrom-Json
-    $run = [ordered]@{exit_code=$exit;result=$result;stdout=$stdout;stdout_sha256=(Hash $stdout);stderr=$stderr;stderr_sha256=(Hash $stderr);working_directory=$foreignWorkingDirectory}
-    if ($exit -ne 0 -or -not $result.success) { throw "Shipping ASI entry test failed; see $stdout and $stderr" }
+    foreach($case in @(@{name='manual-default';flags=3;auto=$false},@{name='loaded-world-auto-show';flags=7;auto=$true})) {
+        $caseRoot=if($case.auto){Join-Path $outputRoot 'fixture-game-auto'}else{$gameRoot}
+        $caseBridge=Join-Path $caseRoot 'CLEO/de-online/de_client_bridge.dll'
+        if($case.auto){
+            New-Item -ItemType Directory -Path (Split-Path $caseBridge) -Force|Out-Null
+            Copy-Item -LiteralPath $bridgePath -Destination $caseBridge
+        }
+        $stagedAsi=Join-Path $caseRoot 'MtaDefinitive.asi'
+        Copy-Item -LiteralPath $asiSource -Destination $stagedAsi
+        if((Hash $stagedAsi) -ne $inputAsi.sha256){throw 'Staged shipping ASI differs.'}
+        $iniPath=Join-Path $caseRoot 'MtaDefinitive.ini'
+        $ini="[MTA]`nEnabled=1`nLocalInput=1`nBindingPersistence=1`n"
+        if($case.auto){$ini+="LoadedWorldAutoShow=1`n"}
+        [IO.File]::WriteAllText($iniPath,$ini,[Text.UTF8Encoding]::new($false))
+        foreach($path in @($stagedAsi,$caseBridge,$hostPath,$iniPath)){
+            $artifacts += [ordered]@{path=$path;sha256=(Hash $path);bytes=(Get-Item -LiteralPath $path).Length}
+        }
+        $stdout=Join-Path $outputRoot ($case.name+'-host-stdout.json')
+        $stderr=Join-Path $outputRoot ($case.name+'-host-stderr.txt')
+        $process=Start-Process -FilePath $hostPath -ArgumentList @('"'+$stagedAsi+'"',[string]$case.flags) -WorkingDirectory $foreignWorkingDirectory -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        if(-not $process.WaitForExit(15000)){$process.Kill();$process.WaitForExit();throw 'Owned ASI host timed out.'}
+        $exit=$process.ExitCode
+        $result=Get-Content -LiteralPath $stdout -Raw|ConvertFrom-Json
+        $entry=[ordered]@{name=$case.name;exit_code=$exit;result=$result;stdout=$stdout;stdout_sha256=(Hash $stdout);stderr=$stderr;stderr_sha256=(Hash $stderr);working_directory=$foreignWorkingDirectory}
+        $runs+=@($entry)
+        if(-not $case.auto){$run=$entry}
+        if($exit -ne 0 -or -not $result.success -or $result.request_flags -ne $case.flags){throw "Shipping ASI entry test failed; see $stdout and $stderr"}
+    }
 } catch { $failure = $_.Exception.Message }
 finally {
     [Environment]::SetEnvironmentVariable('TEMP',$previousTemp,'Process')
@@ -111,9 +124,9 @@ if ($inputAsi -and (Hash $inputAsi.path) -ne $inputAsi.sha256) { $unchanged=$fal
 foreach ($artifact in $artifacts) { if ((Hash $artifact.path) -ne $artifact.sha256) { $unchanged=$false } }
 $record = [ordered]@{
     recorded_at=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=($null -eq $failure -and $null -eq $cleanupError -and $unchanged -and $null -ne $run);
-    failure=$failure;source_hashes=$sourceHashes;input_asi=$inputAsi;sources_and_artifacts_unchanged=$unchanged;compiles=$compiles;artifacts=$artifacts;run=$run;
+    failure=$failure;source_hashes=$sourceHashes;input_asi=$inputAsi;sources_and_artifacts_unchanged=$unchanged;compiles=$compiles;artifacts=$artifacts;run=$run;runs=$runs;
     scratch_directory=$scratchRoot;scratch_removed=(-not (Test-Path -LiteralPath $scratchRoot));scratch_cleanup_error=$cleanupError;
-    positive_integration_cases=1;game_launched=$false;game_process_attached=$false;game_memory_read=$false;installed_files_changed=$false;
+    positive_integration_cases=2;default_manual_flags_verified=($runs.Count -eq 2 -and $runs[0].result.request_flags -eq 3);explicit_loaded_world_auto_show_flag_verified=($runs.Count -eq 2 -and $runs[1].result.request_flags -eq 7);game_launched=$false;game_process_attached=$false;game_memory_read=$false;installed_files_changed=$false;
     full_mta_startup_verified=$false;
     scope='Exact shipping MtaDefinitive.asi InitializeASI plus a deliberately delayed controlled Bridge in one owned x64 host. Verifies asynchronous entry, repeat admission, typed request and absolute package path independent of working directory. No actual Core, game adapter, GUI, native hooks or GTA workload.'
 }

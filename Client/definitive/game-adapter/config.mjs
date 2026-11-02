@@ -93,6 +93,10 @@ export const MTA_CORE_FRONTEND_RUNTIME = false;
 // menu. In this selection the script yields ownership without arming a worker.
 export const MTA_CORE_FRONTEND_NATIVE_HOST = false;
 
+// Explicit normal-host option: show the existing menu once local gameplay is
+// ready. Manual trials and historical packages keep their physical activation.
+export const MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW = false;
+
 // Apply saves only MTA's six movement controls in the user's definitive data
 // folder. Keep this additive choice explicit so existing diagnostic sessions
 // retain their original session-only configuration contract.

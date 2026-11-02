@@ -7,6 +7,7 @@
 
 #include "DefinitiveFrontendStartup.h"
 #include "DefinitivePersistentFrontend.h"
+#include <game/CGameFrontendAdmission.h>
 
 namespace DefinitiveFrontendRuntime
 {
@@ -80,6 +81,9 @@ namespace DefinitiveFrontendRuntime
     // CPU/GUI borrowing consumes that same counter without native admission.
     using Begin = void* (*)(std::uint32_t);
     using Read = Status (*)(void*, std::uint32_t*, std::uint32_t);
+    // Auto first-Show samples the existing owner without allocating a view
+    // or input borrower; a failed observation never publishes stale eligibility.
+    using ReadAdmission = Status (*)(void*, mta::game_de::FrontendAdmissionStateV1*);
     using Pulse = Status (*)(void*);
     // Stopped with no publication and an unchanged, completely hidden owner
     // also denotes a qualified context deferral before a view is attached.
@@ -95,6 +99,7 @@ namespace DefinitiveFrontendRuntime
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
     void*  BeginOwner() noexcept;
     Status ReadOwner(void* handle, std::uint32_t* output, std::uint32_t count) noexcept;
+    Status ReadAdmissionOwner(void* handle, mta::game_de::FrontendAdmissionStateV1* output) noexcept;
     Status PulseOwner(void* handle) noexcept;
     Status RunViewOwner(void* handle, const DefinitivePersistentFrontend::RequestV1* request) noexcept;
     Status ShutdownOwner(void* handle) noexcept;

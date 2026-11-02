@@ -214,7 +214,7 @@ if ($bindingPersistenceMarkers.Count -gt 1 -or
 if ($bindingPersistenceMarkers.Count -eq 1 -and $bindingPersistenceMarkers[0].Groups[1].Value -eq 'true' -and
     ($runtimeMarkers.Count -ne 1 -or $runtimeMarkers[0].Groups[1].Value -ne 'true')) { throw 'Saved MTA movement bindings require the retained frontend runtime.' }
 if ($runtimeMarkers.Count -eq 1 -and $runtimeMarkers[0].Groups[1].Value -eq 'true') {
-    $runtimeConflicts = @([regex]::Matches($configText, 'export const ((?:GAIT_|INPUT_|MTA_)[A-Z0-9_]+) = true;') | Where-Object {$_.Groups[1].Value -notin @('MTA_CORE_FRONTEND_RUNTIME','MTA_CORE_FRONTEND_BINDING_PERSISTENCE','MTA_CORE_FRONTEND_NATIVE_HOST')})
+    $runtimeConflicts = @([regex]::Matches($configText, 'export const ((?:GAIT_|INPUT_|MTA_)[A-Z0-9_]+) = true;') | Where-Object {$_.Groups[1].Value -notin @('MTA_CORE_FRONTEND_RUNTIME','MTA_CORE_FRONTEND_BINDING_PERSISTENCE','MTA_CORE_FRONTEND_NATIVE_HOST','MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW')})
     if ($frontendCount -ne 22 -or $guiCount -ne 13 -or $relativePaths.Count -ne (58+$nativeCount+$messageBoxCount) -or $Mode -ne 'Smoke' -or $runtimeConflicts.Count) {
         throw 'MTA frontend runtime requires complete frontend ownership and separate opt-in Smoke mode.'
     }

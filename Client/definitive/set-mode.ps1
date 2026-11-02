@@ -18,7 +18,7 @@ param(
     [switch]$MtaCoreRenderCustomPresentReference, [switch]$MtaCoreRenderFrameBoundaryReference, [switch]$MtaCoreRenderNativeDispatchReference,
     [switch]$MtaCoreGuiStartupReference, [switch]$MtaCoreGuiSurfaceReference, [switch]$MtaCoreGuiFrontendReference, [switch]$MtaCoreGuiFrontendInputReference, [switch]$MtaCoreGuiFrontendStartupReference, [switch]$MtaCorePersistentFrontend, [switch]$MtaCoreFrontendRuntime,
     [ValidateSet('D3D11', 'D3D12')][string]$MtaCoreRenderRoute = 'D3D11',
-    [switch]$MtaCoreFrontendBindingPersistence, [switch]$MtaCoreFrontendNativeHost,
+    [switch]$MtaCoreFrontendBindingPersistence, [switch]$MtaCoreFrontendNativeHost, [switch]$MtaCoreFrontendLoadedWorldAutoShow,
     [switch]$MtaCoreClockReference, [switch]$MtaCoreClockSetReference, [switch]$MtaCoreApplicationFrameReference, [switch]$MtaCoreStartupObservationReference,
     [string]$GameDirectory = 'C:\Program Files (x86)\Steam\steamapps\common\GTA San Andreas - The Definitive Edition\Gameface\Binaries\Win64'
 )
@@ -29,7 +29,7 @@ Set-StrictMode -Version Latest
 # Runtime owns one completed Core across views. Its selection must never inherit
 # another native lifetime merely because those packages share frontend assets.
 $runtimeConflicts = @($PSBoundParameters.Keys | Where-Object {
-    $_ -match '^(Native|Matched|Lock|Mta)' -and $_ -notin @('MtaCoreFrontendRuntime','MtaCoreFrontendBindingPersistence','MtaCoreFrontendNativeHost') -and
+    $_ -match '^(Native|Matched|Lock|Mta)' -and $_ -notin @('MtaCoreFrontendRuntime','MtaCoreFrontendBindingPersistence','MtaCoreFrontendNativeHost','MtaCoreFrontendLoadedWorldAutoShow') -and
     $PSBoundParameters[$_] -is [Management.Automation.SwitchParameter] -and $PSBoundParameters[$_].IsPresent
 })
 if ($MtaCoreFrontendRuntime -and ($Mode -ne 'Smoke' -or $runtimeConflicts.Count -or $PSBoundParameters.ContainsKey('MtaCoreRenderRoute'))) {
@@ -39,6 +39,9 @@ if ($MtaCoreFrontendBindingPersistence -and -not $MtaCoreFrontendRuntime) {
     throw 'Saved MTA movement bindings require MtaCoreFrontendRuntime.'
 }
 if ($MtaCoreFrontendNativeHost -and -not $MtaCoreFrontendRuntime) { throw 'Native MTA startup requires MtaCoreFrontendRuntime.' }
+if ($MtaCoreFrontendLoadedWorldAutoShow -and -not ($MtaCoreFrontendNativeHost -and $MtaCoreFrontendRuntime)) {
+    throw 'Loaded-world auto-show requires MtaCoreFrontendNativeHost and MtaCoreFrontendRuntime.'
+}
 $clockConflicts = @($PSBoundParameters.Keys | Where-Object {
     $_ -match '^(Native|Matched|Lock|Mta)' -and $_ -notin @('MtaCoreClockReference', 'MtaCoreClockSetReference', 'MtaCoreApplicationFrameReference', 'MtaCoreStartupObservationReference') -and
         $PSBoundParameters[$_] -is [Management.Automation.SwitchParameter] -and $PSBoundParameters[$_].IsPresent
@@ -467,6 +470,20 @@ if ($nativeHostMatches -eq 1) {
     $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $nativeHostPattern,
         "export const MTA_CORE_FRONTEND_NATIVE_HOST = $($MtaCoreFrontendNativeHost.IsPresent.ToString().ToLowerInvariant());"))
 }
+$autoShowPattern = 'export const MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW = (true|false);'
+$autoShowMatches = [regex]::Matches($configText, $autoShowPattern).Count
+if ($autoShowMatches -gt 1 -or
+    [regex]::Matches($configText, 'export const MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW\b').Count -ne $autoShowMatches -or
+    ($MtaCoreFrontendLoadedWorldAutoShow -and $autoShowMatches -ne 1)) { throw 'Update the adapter before selecting loaded-world MTA frontend auto-show.' }
+if ($MtaCoreFrontendLoadedWorldAutoShow) {
+    $coreEntry=@($installed.files|Where-Object {$_.path -ceq 'CLEO/de-online/core.dll'})
+    if($coreEntry.Count -ne 1){throw 'Loaded-world auto-show requires the owned Core module.'}
+    Assert-MtaNativeFrontendAutoShowCore (Join-Path $gameRoot 'CLEO/de-online/core.dll') $coreEntry[0].sha256
+}
+if ($autoShowMatches -eq 1) {
+    $newConfig = $utf8.GetBytes([regex]::Replace($utf8.GetString($newConfig), $autoShowPattern,
+        "export const MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW = $($MtaCoreFrontendLoadedWorldAutoShow.IsPresent.ToString().ToLowerInvariant());"))
+}
 $bindingPersistencePattern = 'export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE = (true|false);'
 $bindingPersistenceMatches = [regex]::Matches($configText, $bindingPersistencePattern).Count
 if ($bindingPersistenceMatches -gt 1 -or
@@ -487,7 +504,7 @@ if ($configEntry.Count -ne 1) { throw 'Missing owned configuration record.' }
 $configEntry[0].sha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($newConfig)).ToLowerInvariant()
 $newNativeIni = $null
 if ($nativeCount) {
-    $newNativeIni = $utf8.GetBytes((New-MtaNativeFrontendIni $MtaCoreFrontendNativeHost.IsPresent $MtaCoreFrontendBindingPersistence.IsPresent))
+    $newNativeIni = $utf8.GetBytes((New-MtaNativeFrontendIni $MtaCoreFrontendNativeHost.IsPresent $MtaCoreFrontendBindingPersistence.IsPresent $MtaCoreFrontendLoadedWorldAutoShow.IsPresent))
     $nativeIniEntry = @($installed.files | Where-Object { $_.path -eq 'MtaDefinitive.ini' })
     if ($nativeIniEntry.Count -ne 1) { throw 'Missing owned native startup configuration record.' }
     $nativeIniEntry[0].sha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($newNativeIni)).ToLowerInvariant()
@@ -526,7 +543,7 @@ try {
 }
 if ($MtaCoreFrontendRuntime) {
     $bindingLifetime = if ($MtaCoreFrontendBindingPersistence) { 'Applied movement bindings are saved for later launches.' } else { 'Applied bindings survive hide/show for this session.' }
-    $entryChoice = if ($MtaCoreFrontendNativeHost) { 'Native entry starts Core hidden on the next launch; hold Ctrl+Shift+F9 for three seconds and release to show/hide.' } else { 'Ctrl+Shift+F9 toggles views after release.' }
+    $entryChoice = if ($MtaCoreFrontendLoadedWorldAutoShow) { 'Native entry starts Core on the next launch and opens the menu after a save is loaded. Ctrl+Shift+F9 toggles views after release.' } elseif ($MtaCoreFrontendNativeHost) { 'Native entry starts Core hidden on the next launch; hold Ctrl+Shift+F9 for three seconds and release to show/hide.' } else { 'Ctrl+Shift+F9 toggles views after release.' }
     Write-Host ('Installed adapter mode: Smoke, retained MTA frontend runtime. ' + $entryChoice + ' Quit/Escape hides, Ctrl+Shift+End stops. ' + $bindingLifetime)
 } elseif ($MtaCorePersistentFrontend) {
     Write-Host 'Installed adapter mode: Smoke, renewable MTA frontend. Ctrl+Shift+F9 starts after release; Quit/Escape/End closes it. Focus loss or heartbeat expiry requests cleanup.'

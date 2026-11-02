@@ -422,6 +422,30 @@ namespace DefinitiveFrontendStartup
             return status;
         }
 
+        Status ReadRuntimeAdmission(mta::game_de::FrontendAdmissionStateV1& output) noexcept
+        {
+            const auto admitted = CheckLocalAdmission();
+            if (admitted != Status::Ok)
+                return admitted;
+            if (!core->LocalInputAllowsFrontend())
+                return Status::Busy;
+            // The owner lock pins this completely hidden Core. Binding reuses
+            // its existing reader; sampling must not pulse, attach a GUI or
+            // retire an independent local-input owner merely to become ready.
+            if (Bind() != Status::Ok)
+                return Status::Failed;
+            mta::game_de::FrontendAdmissionStateV1 next;
+            if (core->m_DefinitiveAdapter.ReadFrontendAdmission(next) != mta::game_de::Status::Ok)
+            {
+                state[LastFailure] = static_cast<std::uint32_t>(Failure::ViewAdmission);
+                return Status::Failed;
+            }
+            // Both EligibleLocal and Deferred are successful fresh native
+            // observations. Missing evidence remains Failed with output intact.
+            output = next;
+            return Status::Ok;
+        }
+
         Status CheckLocalAdmission() const noexcept
         {
             if (!runtimeMode)
@@ -899,6 +923,17 @@ namespace DefinitiveFrontendStartup
         }
     }
 
+    Status ReadRuntimeAdmissionOwner(void* handle, mta::game_de::FrontendAdmissionStateV1* output) noexcept
+    {
+        Operation  operation;
+        const auto status = operation.Validate(handle);
+        if (status != Status::Ok)
+            return status;
+        if (!output || output->size != sizeof(*output) || output->version != mta::game_de::FrontendAdmissionVersionV1 || output->reserved)
+            return Status::InvalidArgument;
+        return activeStartup->ReadRuntimeAdmission(*output);
+    }
+
     Status PulseRuntimeOwner(void* handle) noexcept
     {
         Operation  operation;
@@ -1055,6 +1090,10 @@ namespace DefinitiveFrontendRuntime
     Status ReadOwner(void* handle, std::uint32_t* output, std::uint32_t count) noexcept
     {
         return DefinitiveFrontendStartup::ReadRuntimeOwner(handle, output, count);
+    }
+    Status ReadAdmissionOwner(void* handle, mta::game_de::FrontendAdmissionStateV1* output) noexcept
+    {
+        return DefinitiveFrontendStartup::ReadRuntimeAdmissionOwner(handle, output);
     }
     Status PulseOwner(void* handle) noexcept
     {

@@ -149,11 +149,11 @@ namespace deonline
                                      bool configuredGuiSurface, bool configuredGuiFrontend, bool configuredGuiFrontendInput, bool configuredFrontendStartup,
                                      bool configuredPersistentFrontend, bool configuredClock, bool configuredClockSet, bool configuredClockBeforeFrontend,
                                      bool configuredFrontendRuntime, bool configuredLocalInputRuntime, bool configuredApplicationFrame,
-                                     bool configuredStartupObservation, bool configuredBindingPersistence) noexcept
+                                     bool configuredStartupObservation, bool configuredBindingPersistence, bool configuredLoadedWorldAutoShow) noexcept
     {
         DWORD      expected = 0;
         const auto current = GetCurrentThreadId();
-        if (((configuredLocalInputRuntime || configuredBindingPersistence) && !configuredFrontendRuntime) ||
+        if (((configuredLocalInputRuntime || configuredBindingPersistence || configuredLoadedWorldAutoShow) && !configuredFrontendRuntime) ||
             (configuredClockBeforeFrontend && !configuredFrontendStartup) ||
             (static_cast<unsigned>(configuredMovement) + static_cast<unsigned>(configuredRender) + static_cast<unsigned>(configuredGuiStartup) +
                  static_cast<unsigned>(configuredGuiSurface) + static_cast<unsigned>(configuredGuiFrontend) +
@@ -178,6 +178,8 @@ namespace deonline
         frontendRuntimeRequested = configuredFrontendRuntime;
         localInputRuntimeRequested = configuredLocalInputRuntime;
         bindingPersistenceRequested = configuredBindingPersistence;
+        loadedWorldAutoShowRequested = configuredLoadedWorldAutoShow;
+        frontendAdmissionCache.Reset();
         localInputRuntimeCache.Reset();
         capturedLocalInputRuntime = {};
         runtimeCache.Reset();
@@ -836,12 +838,21 @@ namespace deonline
         return Start(moduleAddress, true, false, false, 0, 1, false, false, false, false, false, true) ? persistentHostLease.Generation() : 0;
     }
 
-    std::uint32_t CoreStartupReference::BeginFrontendRuntime(const void* moduleAddress, bool localInput, bool bindingPersistence) noexcept
+    std::uint32_t CoreStartupReference::BeginFrontendRuntime(const void* moduleAddress, bool localInput, bool bindingPersistence,
+                                                             bool loadedWorldAutoShow) noexcept
     {
         return Start(moduleAddress, true, false, false, 0, 1, false, false, false, false, false, false, false, false, false, true, localInput, false, false,
-                     bindingPersistence)
+                     bindingPersistence, loadedWorldAutoShow)
                    ? runtimeMailbox.Generation()
                    : 0;
+    }
+
+    bool CoreStartupReference::ReadFrontendAdmissionSample(std::uint32_t generation, FrontendAdmissionSample::Snapshot& output) const noexcept
+    {
+        // This optional cache is value-only and shares the original host owner;
+        // it does not repurpose reserved words in any legacy runtime report.
+        return loadedWorldAutoShowRequested && frontendRuntimeRequested && generation && generation == runtimeMailbox.Generation() &&
+               ownerThread.load() == GetCurrentThreadId() && frontendAdmissionCache.Capture(output);
     }
 
     bool CoreStartupReference::CaptureLocalInputRuntime() noexcept
@@ -1275,6 +1286,7 @@ namespace deonline
         const auto begin = reinterpret_cast<C::Begin>(GetProcAddress(core, "MTA_BeginDEFrontendRuntime"));
         const auto read = reinterpret_cast<C::Read>(GetProcAddress(core, "MTA_ReadDEFrontendRuntime"));
         const auto pulse = reinterpret_cast<C::Pulse>(GetProcAddress(core, "MTA_PulseDEFrontendRuntime"));
+        const auto admission = reinterpret_cast<C::ReadAdmission>(GetProcAddress(core, "MTA_ReadDEFrontendRuntimeAdmissionV1"));
         const auto view = reinterpret_cast<C::RunView>(GetProcAddress(core, "MTA_RunDEFrontendRuntimeView"));
         const auto shutdown = reinterpret_cast<C::Shutdown>(GetProcAddress(core, "MTA_ShutdownDEFrontendRuntime"));
         const auto release = reinterpret_cast<C::Release>(GetProcAddress(core, "MTA_ReleaseDEFrontendRuntime"));
@@ -1298,6 +1310,8 @@ namespace deonline
         bool          bindingPersistenceEnabled = false;
         std::uint32_t bindingLoadsHighWater = 1;
         std::uint64_t coreGeneration = 0;
+        std::uint64_t admissionSerial = 0, lastAdmissionTick = 0;
+        bool          admissionObserved = false;
         const auto    fail = [&](R::Failure failure, R::StopReason reason = R::StopReason::ViewFault) noexcept
         {
             if (!runtimeReport[R::LastFailure])
@@ -1500,6 +1514,12 @@ namespace deonline
         try
         {
             if (!version || !begin || !read || !pulse || !view || !shutdown || !release || !setMta || !setGta || version() != C::ApiVersion)
+            {
+                fail(R::Failure::Exports, R::StopReason::LoaderFault);
+                inputOwner = nullptr;
+                return;
+            }
+            if (loadedWorldAutoShowRequested && !admission)
             {
                 fail(R::Failure::Exports, R::StopReason::LoaderFault);
                 inputOwner = nullptr;
@@ -1745,6 +1765,57 @@ namespace deonline
                         acknowledge(next, R::Acknowledgement::Failed);
                     runtimeReport[R::WorkerPhase] = static_cast<std::uint32_t>(R::Phase::Hidden);
                     if (localInputRuntimeRequested && runtimeMailbox.Pending().command != R::Command::Stop && !configureLocal())
+                    {
+                        fail(R::Failure::CoreState);
+                        break;
+                    }
+                }
+                else if (loadedWorldAutoShowRequested && !runtimeReport[R::ShowAcknowledgements])
+                {
+                    namespace A = FrontendAdmissionSample;
+                    const auto now = GetTickCount64();
+                    if (!admissionObserved || now < lastAdmissionTick || now - lastAdmissionTick >= A::PollMs)
+                    {
+                        if (admissionSerial == UINT64_MAX)
+                        {
+                            fail(R::Failure::CommandExhausted);
+                            break;
+                        }
+                        mta::game_de::FrontendAdmissionStateV1 observed;
+                        Status                                 observedStatus = Status::Failed;
+                        try
+                        {
+                            observedStatus = admission(handle, &observed);
+                        }
+                        catch (...)
+                        {
+                            observedStatus = Status::Failed;
+                        }
+                        if (observedStatus == Status::Ok &&
+                            (observed.size != sizeof(observed) || observed.version != mta::game_de::FrontendAdmissionVersionV1 || observed.reserved ||
+                             observed.producerThread != GetCurrentThreadId() ||
+                             (observed.admission != static_cast<std::uint32_t>(mta::game_de::FrontendAdmission::EligibleLocal) &&
+                              observed.admission != static_cast<std::uint32_t>(mta::game_de::FrontendAdmission::Deferred))))
+                            observedStatus = Status::Failed;
+                        // Every attempt replaces old eligibility, including
+                        // failed/unsupported startup observations. It remains
+                        // a failed observation, never a Deferred success.
+                        FrontendAdmissionSample::Snapshot sample{};
+                        sample[A::Version] = A::ApiVersion;
+                        sample[A::RuntimeGeneration] = runtimeMailbox.Generation();
+                        sample[A::WorkerThread] = GetCurrentThreadId();
+                        sample[A::Status] = static_cast<std::uint32_t>(observedStatus);
+                        sample[A::Admission] = observedStatus == Status::Ok ? observed.admission : 0u;
+                        const auto serial = ++admissionSerial, tick = GetTickCount64();
+                        sample[A::SerialLow] = static_cast<std::uint32_t>(serial);
+                        sample[A::SerialHigh] = static_cast<std::uint32_t>(serial >> 32);
+                        sample[A::TickLow] = static_cast<std::uint32_t>(tick);
+                        sample[A::TickHigh] = static_cast<std::uint32_t>(tick >> 32);
+                        frontendAdmissionCache.Publish(sample);
+                        admissionObserved = true;
+                        lastAdmissionTick = tick;
+                    }
+                    if (pulse(handle) != Status::Ok)
                     {
                         fail(R::Failure::CoreState);
                         break;

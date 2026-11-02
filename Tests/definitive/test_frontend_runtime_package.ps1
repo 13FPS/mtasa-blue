@@ -11,9 +11,11 @@ param(
     [Parameter(Mandatory)][string]$GameExecutable,
     [switch]$BindingPersistenceOnly,
     [switch]$NativeHostOnly,
+    [switch]$LoadedWorldAutoShowOnly,
     [switch]$MessageBoxAssetsOnly
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'Hide-CoreAdmissionExportFixture.ps1')
 Set-StrictMode -Version Latest
 $repositoryRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $id = (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N')
@@ -299,7 +301,7 @@ function Transition([string]$Name,$Selection) {
     }
     Check ($Name+':loader-preserved') ((Sha (Join-Path $fakeGame 'version.dll')) -ceq $loaderHash)
     Check ($Name+':unowned-preserved') ((Sha $unowned) -ceq $unownedHash)
-    if ($NativeHostOnly -or $MessageBoxAssetsOnly) { Check ($Name+':saved-data-preserved') ((Sha $nativeSavedData) -ceq $nativeSavedDataHash) }
+    if ($NativeHostOnly -or $MessageBoxAssetsOnly -or $LoadedWorldAutoShowOnly) { Check ($Name+':saved-data-preserved') ((Sha $nativeSavedData) -ceq $nativeSavedDataHash) }
     Check ($Name+':game-preserved') ((Sha (Join-Path $fakeGame 'SanAndreas.exe')) -ceq $knownGameHash)
     $backups.Add([ordered]@{name=$Name;directory=$backup;originalManifestSha256=$priorManifest;orderedChanges=$changes;
         savedOriginals=$savedOriginals;removedPaths=@($removed | ForEach-Object path);addedPaths=@($added | ForEach-Object path)})
@@ -319,7 +321,7 @@ function Selection([string]$Directory) {
 }
 function Flags-Switches([string]$Script) {
     @((Get-Command -Name $Script).Parameters.Values | Where-Object {
-        $_.Name -match '^(Native|Matched|Lock|Mta)' -and $_.Name -notin @('MtaCoreFrontendRuntime','MtaCoreFrontendBindingPersistence','MtaCoreFrontendNativeHost') -and
+        $_.Name -match '^(Native|Matched|Lock|Mta)' -and $_.Name -notin @('MtaCoreFrontendRuntime','MtaCoreFrontendBindingPersistence','MtaCoreFrontendNativeHost','MtaCoreFrontendLoadedWorldAutoShow') -and
         $_.ParameterType -eq [Management.Automation.SwitchParameter]
     } | ForEach-Object Name | Sort-Object)
 }
@@ -388,13 +390,17 @@ function Native-Variant([string]$Name,[string]$Source,[scriptblock]$Change) {
     [IO.File]::Copy((Join-Path $target 'Win64/CLEO/de-online/config.mjs'),(Join-Path $outputRoot ($Name+'-config.mjs')),$true)
     $target
 }
-function Native-State([string]$Name,[bool]$Runtime,[bool]$Enabled,[bool]$Persistent) {
+function Native-State([string]$Name,[bool]$Runtime,[bool]$Enabled,[bool]$Persistent,[bool]$AutoShow=$false) {
     $text = [IO.File]::ReadAllText((Join-Path $fakeGame 'CLEO/de-online/config.mjs'))
     foreach ($pair in @(@('MTA_CORE_FRONTEND_RUNTIME',$Runtime),@('MTA_CORE_FRONTEND_NATIVE_HOST',$Enabled),@('MTA_CORE_FRONTEND_BINDING_PERSISTENCE',$Persistent))) {
         $marker = [regex]::Matches($text,('export const '+$pair[0]+' = (true|false);'))
         Check ($Name+':marker:'+ $pair[0]) ($marker.Count -eq 1 -and $marker[0].Groups[1].Value -ceq $pair[1].ToString().ToLowerInvariant())
     }
+    $autoMarkers=[regex]::Matches($text,'export const MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW = (true|false);')
+    Check ($Name+':auto-show-marker') (($autoMarkers.Count -eq 0 -and -not $AutoShow) -or
+        ($autoMarkers.Count -eq 1 -and $autoMarkers[0].Groups[1].Value -ceq $AutoShow.ToString().ToLowerInvariant()))
     $expected = "[MTA]`nEnabled=$([int]$Enabled)`nLocalInput=1`nBindingPersistence=$([int]$Persistent)`n"
+    if($AutoShow){$expected+="LoadedWorldAutoShow=1`n"}
     Check ($Name+':INI-and-marker-agree') ([IO.File]::ReadAllText((Join-Path $fakeGame 'MtaDefinitive.ini')).Replace("`r`n","`n") -ceq $expected)
     $count=@((Get-Content -LiteralPath (Join-Path $fakeGame 'de-online-install-manifest.json') -Raw | ConvertFrom-Json).files).Count
     Check ($Name+':complete-native-ownership') ($count -in @(60,64))
@@ -432,11 +438,11 @@ function Partial-MessageBoxPackage([string]$Name,$Source,[int]$Keep) {
 try {
     foreach($name in @('Client/definitive/install.ps1','Client/definitive/update.ps1','Client/definitive/uninstall.ps1',
         'Client/definitive/set-mode.ps1','Client/definitive/package.ps1','Client/definitive/NativeFrontendPackage.ps1','Client/definitive/game-adapter/index.js',
-        'Client/definitive/game-adapter/config.mjs','Tests/definitive/test_frontend_runtime_package.ps1')) {
+        'Client/definitive/game-adapter/config.mjs','Tests/definitive/test_frontend_runtime_package.ps1','Tests/definitive/Hide-CoreAdmissionExportFixture.ps1')) {
         $sourcePins[$name]=Sha (Join-Path $repositoryRoot $name)
     }
     $GameExecutable=(Resolve-Path -LiteralPath $GameExecutable).Path
-    if (@(@($NativeHostOnly,$BindingPersistenceOnly,$MessageBoxAssetsOnly) | Where-Object {$_}).Count -gt 1) { throw 'Choose one focused package ownership selector.' }
+    if (@(@($NativeHostOnly,$BindingPersistenceOnly,$MessageBoxAssetsOnly,$LoadedWorldAutoShowOnly) | Where-Object {$_}).Count -gt 1) { throw 'Choose one focused package ownership selector.' }
     Check 'known-source-executable' ((Sha $GameExecutable) -ceq $knownGameHash)
     $runtimeCount=@((Get-Content -LiteralPath (Join-Path $RuntimePackageDirectory 'manifest.json') -Raw | ConvertFrom-Json).files).Count
     Check 'known-session-runtime-package-size' ($runtimeCount -in @(58,62))
@@ -484,7 +490,83 @@ try {
         nonboolean={param($text)$text.Replace('export const MTA_CORE_FRONTEND_RUNTIME = true;','export const MTA_CORE_FRONTEND_RUNTIME = 1;')}
         malformed={param($text)$text.Replace('export const MTA_CORE_FRONTEND_RUNTIME = true;','export const MTA_CORE_FRONTEND_RUNTIME = "true";')}
     }
-    if ($MessageBoxAssetsOnly) {
+    if ($LoadedWorldAutoShowOnly) {
+        if(-not $NativeRuntimePackageDirectory){throw 'Loaded-world auto-show checks require their explicit native opt-in package.'}
+        $nativeCount=@((Get-Content -LiteralPath (Join-Path $NativeRuntimePackageDirectory 'manifest.json') -Raw|ConvertFrom-Json).files).Count
+        Check 'auto-show-native-package-size' ($nativeCount -in @(60,64))
+        $native=Package-Info $NativeRuntimePackageDirectory $nativeCount 'loaded-world-auto-show-package'
+        $nativeText=[IO.File]::ReadAllText((Join-Path $native.root 'Win64/CLEO/de-online/config.mjs'))
+        $nativePersistent=$nativeText.Contains('export const MTA_CORE_FRONTEND_BINDING_PERSISTENCE = true;')
+        $expectedFlags=@('MTA_CORE_FRONTEND_RUNTIME','MTA_CORE_FRONTEND_NATIVE_HOST','MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW')
+        if($nativePersistent){$expectedFlags+='MTA_CORE_FRONTEND_BINDING_PERSISTENCE'}
+        $actualFlags=@([regex]::Matches($nativeText,'export const ((?:GAIT_|INPUT_|MTA_)[A-Z0-9_]+) = true;')|ForEach-Object{$_.Groups[1].Value})
+        Check 'auto-show-only-explicit-runtime-options' (@(Compare-Object $actualFlags $expectedFlags).Count -eq 0)
+        $legacy=Native-Variant 'auto-show-historical-native-omission' $native.root {param($root,$manifest)
+            $config=Join-Path $root 'Win64/CLEO/de-online/config.mjs'
+            [IO.File]::WriteAllText($config,[regex]::Replace([IO.File]::ReadAllText($config),'(?m)^export const MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW = true;\r?\n?',''),$utf8)
+            $ini=Join-Path $root 'Win64/MtaDefinitive.ini'
+            [IO.File]::WriteAllText($ini,[regex]::Replace([IO.File]::ReadAllText($ini),'(?m)^LoadedWorldAutoShow=1\r?\n?',''),$utf8)
+        }
+        Fresh-Game
+        Run 'auto-show-install-explicit-selection' $install @('-Mode','Smoke','-PackageDirectory',$native.root,'-GameDirectory',$fakeGame) $true|Out-Null
+        Native-State 'auto-show-initial-install-enabled' $true $true $nativePersistent $true
+        Run 'auto-show-initial-uninstall' $uninstall @('-GameDirectory',$fakeGame) $true|Out-Null
+        Check 'auto-show-initial-owned-files-retired' (-not(Test-Path -LiteralPath (Join-Path $fakeGame 'de-online-install-manifest.json')))
+        Run 'auto-show-install-historical-default' $install @('-Mode','Smoke','-PackageDirectory',$legacy,'-GameDirectory',$fakeGame) $true|Out-Null
+        Native-State 'auto-show-historical-default' $true $true $nativePersistent $false
+        $loaderHash=Sha (Join-Path $fakeGame 'version.dll')
+        $manifestPath=Join-Path $fakeGame 'de-online-install-manifest.json'
+        $unowned=Join-Path $fakeGame 'CLEO/user-kept.txt'
+        [IO.File]::WriteAllText($unowned,'Unowned content survives explicit auto-show changes.',$utf8)
+        $unownedHash=Sha $unowned
+        $nativeSavedData=Join-Path $fakeGame 'CLEO/de-online/mta/config/user-saved-movement-bindings.xml'
+        [IO.File]::WriteAllText($nativeSavedData,'<definitive_keybinds version="1"><keybinds /></definitive_keybinds>',$utf8)
+        $nativeSavedDataHash=Sha $nativeSavedData
+        $nativeArguments=@('-Mode','Smoke','-MtaCoreFrontendRuntime','-MtaCoreFrontendNativeHost','-GameDirectory',$fakeGame)
+        if($nativePersistent){$nativeArguments+='-MtaCoreFrontendBindingPersistence'}
+        $autoArguments=$nativeArguments+@('-MtaCoreFrontendLoadedWorldAutoShow')
+        Unchanged-Run 'auto-show-historical-selection-needs-update' $setMode $autoArguments $false
+        Unchanged-Run 'auto-show-mode-requires-native-host' $setMode @('-Mode','Smoke','-MtaCoreFrontendRuntime','-MtaCoreFrontendLoadedWorldAutoShow','-GameDirectory',$fakeGame) $false
+        $rejectedOutput=Join-Path $scratchRoot 'must-not-stage-auto-show'
+        Unchanged-Run 'auto-show-package-requires-native-host-before-staging' $package @('-Mode','Smoke','-MtaCoreFrontendRuntime','-MtaCoreFrontendLoadedWorldAutoShow','-OutputDirectory',$rejectedOutput) $false
+        Check 'auto-show-refused-package-does-not-stage' (-not(Test-Path -LiteralPath $rejectedOutput))
+        $manualOldCore=Native-Variant 'auto-show-manual-package-with-old-Core-capability' $native.root {param($root,$manifest)
+            $config=Join-Path $root 'Win64/CLEO/de-online/config.mjs'
+            [IO.File]::WriteAllText($config,[IO.File]::ReadAllText($config).Replace('MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW = true','MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW = false'),$utf8)
+            $ini=Join-Path $root 'Win64/MtaDefinitive.ini'
+            [IO.File]::WriteAllText($ini,[regex]::Replace([IO.File]::ReadAllText($ini),'(?m)^LoadedWorldAutoShow=1\r?\n?',''),$utf8)
+            Hide-MtaCoreAdmissionExportFixture (Join-Path $root 'Win64/CLEO/de-online/core.dll') $scratchRoot|Out-Null
+        }
+        Transition 'auto-show-manual-old-Core-capability-accepted' (Selection $manualOldCore)
+        Native-State 'auto-show-manual-old-Core-stays-hidden' $true $true $nativePersistent $false
+        Unchanged-Run 'auto-show-old-Core-enable-refused-before-mutation' $setMode $autoArguments $false
+        Unchanged-Run 'auto-show-old-Core-WhatIf-still-refuses-capability' $setMode ($autoArguments+@('-WhatIf')) $false
+        Transition 'auto-show-explicit-owned-update' $native
+        Native-State 'auto-show-updated-enabled' $true $true $nativePersistent $true
+        Unchanged-Run 'auto-show-disarm-WhatIf-no-writes' $setMode ($nativeArguments+@('-WhatIf')) $true
+        Run 'auto-show-explicit-manual-mode' $setMode $nativeArguments $true|Out-Null
+        Native-State 'auto-show-manual-default-restored' $true $true $nativePersistent $false
+        Run 'auto-show-explicit-enable-mode' $setMode $autoArguments $true|Out-Null
+        Native-State 'auto-show-mode-enabled' $true $true $nativePersistent $true
+        foreach($kind in @('duplicate','nonboolean','without-native-host','without-runtime','ini-mismatch')) {
+            $variant=Native-Variant ('auto-show-invalid-'+$kind) $native.root {param($root,$manifest)
+                $config=Join-Path $root 'Win64/CLEO/de-online/config.mjs'
+                $value=[IO.File]::ReadAllText($config)
+                switch($kind) {
+                    'duplicate' {$value+="`nexport const MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW = false;`n"}
+                    'nonboolean' {$value=$value.Replace('MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW = true','MTA_CORE_FRONTEND_LOADED_WORLD_AUTO_SHOW = 1')}
+                    'without-native-host' {$value=$value.Replace('MTA_CORE_FRONTEND_NATIVE_HOST = true','MTA_CORE_FRONTEND_NATIVE_HOST = false')}
+                    'without-runtime' {$value=$value.Replace('MTA_CORE_FRONTEND_RUNTIME = true','MTA_CORE_FRONTEND_RUNTIME = false')}
+                    'ini-mismatch' {
+                        $ini=Join-Path $root 'Win64/MtaDefinitive.ini'
+                        [IO.File]::WriteAllText($ini,[IO.File]::ReadAllText($ini).Replace('LoadedWorldAutoShow=1','LoadedWorldAutoShow=0'),$utf8)
+                    }
+                }
+                [IO.File]::WriteAllText($config,$value,$utf8)
+            }
+            Unchanged-Run ('auto-show-update-refuses-'+$kind) $update @('-PackageDirectory',$variant,'-GameDirectory',$fakeGame) $false
+        }
+    } elseif ($MessageBoxAssetsOnly) {
         if (-not $NativeRuntimePackageDirectory) { throw 'Focused message-box checks require their actual64-file native package.' }
         Check 'message-box-runtime-package-has62-files' ($runtimeCount -eq 62)
         $native=Package-Info $NativeRuntimePackageDirectory 64 'message-box-native-package'
@@ -895,7 +977,7 @@ try {
     Run 'final-uninstall-removes-only-owned-files' $uninstall @('-GameDirectory',$fakeGame) $true | Out-Null
     Check 'uninstall-kept-game' ((Sha (Join-Path $fakeGame 'SanAndreas.exe')) -ceq $knownGameHash)
     Check 'uninstall-kept-unowned-sentinel' ((Sha $unowned) -ceq $unownedHash)
-    if ($NativeHostOnly -or $MessageBoxAssetsOnly) {
+    if ($NativeHostOnly -or $MessageBoxAssetsOnly -or $LoadedWorldAutoShowOnly) {
         Check 'native-uninstall-kept-unowned-saved-binding-data' ((Sha $nativeSavedData) -ceq $nativeSavedDataHash)
         Check 'native-uninstall-retired-ASI-and-INI' (-not(Test-Path -LiteralPath (Join-Path $fakeGame 'MtaDefinitive.asi')) -and
             -not(Test-Path -LiteralPath (Join-Path $fakeGame 'MtaDefinitive.ini')))
@@ -934,6 +1016,7 @@ $record=[ordered]@{
     scope='Actual install/update/set-mode/uninstall validation against one owned Build/tmp game copy. No game, DLL, GUI, native hook or network is executed.'
     bindingPersistenceOnly=$BindingPersistenceOnly.IsPresent
     nativeHostOnly=$NativeHostOnly.IsPresent
+    loadedWorldAutoShowOnly=$LoadedWorldAutoShowOnly.IsPresent
     messageBoxAssetsOnly=$MessageBoxAssetsOnly.IsPresent
 }
 $resultPath=Join-Path $outputRoot 'test-result.json'

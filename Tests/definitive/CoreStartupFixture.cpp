@@ -712,6 +712,35 @@ extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_DisableDELocalIn
 }
 #endif
 
+#if !defined(CORE_FIXTURE_MISSING_AUTO_ADMISSION_EXPORT)
+extern "C"
+    __declspec(dllexport) DefinitiveFrontendRuntime::Status MTA_ReadDEFrontendRuntimeAdmissionV1(void* handle, mta::game_de::FrontendAdmissionStateV1* output)
+{
+    namespace S = DefinitiveFrontendStartup;
+    using Status = DefinitiveFrontend::Status;
+    if (handle != &runtimeOwner || !output || output->size != sizeof(*output) || output->version != mta::game_de::FrontendAdmissionVersionV1 ||
+        output->reserved)
+        return Status::InvalidArgument;
+    Call(63);
+    if (!counters || static_cast<DWORD>(counters[0]) != GetCurrentThreadId())
+        return Status::WrongThread;
+    // Model only the existing read-only Bind/admission edge. No view counter,
+    // input owner or GUI publication is created by these controlled reads.
+    runtimeOwner[S::ExactImageBound] = 1;
+    runtimeOwner[S::CapabilitiesLow] |= 64;
+    const auto state = Setting(L"MTA_CORE_FIXTURE_AUTO_ADMISSION");
+    if (!state)
+        return Status::Failed;
+    mta::game_de::FrontendAdmissionStateV1 value;
+    value.producerThread = GetCurrentThreadId();
+    value.systemState = state == 1 ? 6u : 9u;
+    value.admission = static_cast<std::uint32_t>(state == 1 ? mta::game_de::FrontendAdmission::Deferred : mta::game_de::FrontendAdmission::EligibleLocal);
+    value.contextKnownMask = value.contextFlags = state == 1 ? 0u : 1u;
+    *output = value;
+    return Status::Ok;
+}
+#endif
+
 extern "C"
     __declspec(dllexport) DefinitiveFrontendRuntime::Status MTA_RunDEFrontendRuntimeView(void* handle, const DefinitivePersistentFrontend::RequestV1* request)
 {
@@ -730,6 +759,20 @@ extern "C"
     if (handle != &runtimeOwner || !request || !request->cancelled || !request->publish || !request->heartbeat ||
         request->generation != runtimeOwner[C::ViewGenerationLow] + 1)
         return DefinitiveFrontend::Status::InvalidArgument;
+#if !defined(CORE_FIXTURE_MISSING_AUTO_ADMISSION_EXPORT)
+    if (Setting(L"MTA_CORE_FIXTURE_AUTO_ENABLED"))
+    {
+        mta::game_de::FrontendAdmissionStateV1 current;
+        const auto                             observed = MTA_ReadDEFrontendRuntimeAdmissionV1(handle, &current);
+        if (observed != DefinitiveFrontend::Status::Ok)
+        {
+            runtimeOwner[S::LastFailure] = static_cast<std::uint32_t>(S::Failure::ViewAdmission);
+            return DefinitiveFrontend::Status::Failed;
+        }
+        if (current.admission == static_cast<std::uint32_t>(mta::game_de::FrontendAdmission::Deferred))
+            return DefinitiveFrontend::Status::Stopped;
+    }
+#endif
     const auto admission = Setting(L"MTA_CORE_FIXTURE_VIEW_ADMISSION_MODE");
     if (admission && ++runtimeViewCalls == 1)
     {

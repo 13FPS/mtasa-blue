@@ -4,11 +4,19 @@
  *****************************************************************************/
 #include "NativeFrontendHost.h"
 #include "NativeFrontendActivation.h"
+#include "NativeFrontendStartupIntent.h"
 #include "CoreStartupReference.h"
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <process.h>
+
+#if defined(MTA_TEST_NATIVE_FRONTEND_HOST_CONTEXT)
+namespace deonline::NativeFrontendHostTestContext
+{
+    void Read(bool& focused, std::uint32_t& keys) noexcept;
+}
+#endif
 
 namespace deonline
 {
@@ -162,7 +170,8 @@ namespace deonline
                 }
             }
             Publish();
-            generation = runtime.BeginFrontendRuntime(moduleAddress, (report[N::Flags] & N::LocalInput) != 0, (report[N::Flags] & N::BindingPersistence) != 0);
+            generation = runtime.BeginFrontendRuntime(moduleAddress, (report[N::Flags] & N::LocalInput) != 0, (report[N::Flags] & N::BindingPersistence) != 0,
+                                                      (report[N::Flags] & N::LoadedWorldAutoShow) != 0);
             if (!generation)
                 Fail(N::Failure::RuntimeBegin);
             else
@@ -175,8 +184,13 @@ namespace deonline
             Fail(N::Failure::Exception);
         }
         Publish();
-        NativeFrontendActivation activation;
-        bool                     togglePending = false, stopSent = false;
+        NativeFrontendActivation          activation;
+        NativeFrontendStartupIntent       startupIntent((report[N::Flags] & N::LoadedWorldAutoShow) != 0, generation);
+        FrontendRuntimeReport::Snapshot   runtimeSample{};
+        FrontendAdmissionSample::Snapshot admissionSample{};
+        std::uint32_t                     loggedAdmissionStatus = UINT32_MAX, loggedAdmissionKind = UINT32_MAX;
+        bool                              loggedIntentPending = startupIntent.Pending();
+        bool                              togglePending = false, stopSent = false;
         while (generation)
         {
             runtime.HeartbeatFrontendRuntime(generation);
@@ -185,6 +199,9 @@ namespace deonline
             if (captured)
             {
                 const auto read = [&](std::uint32_t field) { return runtime.ReadFrontendRuntime(field); };
+                for (std::uint32_t field = 0; field < runtimeSample.size(); ++field)
+                    runtimeSample[field] = runtime.ReadFrontendRuntime(field);
+                startupIntent.Observe(runtimeSample);
                 report[N::WorkerCaptured] = 1;
                 for (const auto fields : {std::array<std::uint32_t, 2>{N::WorkerPhase, R::WorkerPhase},
                                           {N::WorkerFailure, R::LastFailure},
@@ -217,10 +234,14 @@ namespace deonline
                     report[N::HostPhase] = static_cast<std::uint32_t>(N::Phase::Stopped);
                 break;
             }
-            DWORD         process = 0;
-            const auto    window = GetForegroundWindow();
-            const bool    focused = window && GetWindowThreadProcessId(window, &process) && process == GetCurrentProcessId();
+            bool          focused = false;
             std::uint32_t keys = 0;
+#if defined(MTA_TEST_NATIVE_FRONTEND_HOST_CONTEXT)
+            NativeFrontendHostTestContext::Read(focused, keys);
+#else
+            DWORD      process = 0;
+            const auto window = GetForegroundWindow();
+            focused = window && GetWindowThreadProcessId(window, &process) && process == GetCurrentProcessId();
             if (focused)
                 for (const auto entry : {std::array<int, 2>{VK_CONTROL, NativeFrontendActivation::Control},
                                          {VK_SHIFT, NativeFrontendActivation::Shift},
@@ -228,6 +249,7 @@ namespace deonline
                                          {VK_END, NativeFrontendActivation::End}})
                     if (GetAsyncKeyState(entry[0]) & 0x8000)
                         keys |= static_cast<std::uint32_t>(entry[1]);
+#endif
             report[N::Focused] = focused ? 1u : 0u;
             report[N::KeyMask] = keys;
             const auto action = activation.Update(focused, keys, GetTickCount64());
@@ -235,6 +257,28 @@ namespace deonline
                 stopRequested.store(true);
             if (action == NativeFrontendActivation::Action::Toggle)
                 togglePending = true;
+            if (stopRequested.load())
+                startupIntent.Stop();
+            const bool admissionCaptured = (report[N::Flags] & N::LoadedWorldAutoShow) && runtime.ReadFrontendAdmissionSample(generation, admissionSample);
+            if (admissionCaptured && log != INVALID_HANDLE_VALUE &&
+                (loggedAdmissionStatus != admissionSample[FrontendAdmissionSample::Status] ||
+                 loggedAdmissionKind != admissionSample[FrontendAdmissionSample::Admission] || loggedIntentPending != startupIntent.Pending()))
+            {
+                char       line[400]{};
+                const auto length = std::snprintf(
+                    line, sizeof(line),
+                    "{\"schema\":\"mta_loaded_world_frontend_admission_v1\",\"generation\":%u,\"status\":%u,\"admission\":%u,\"intent_pending\":%s}\n",
+                    generation, admissionSample[FrontendAdmissionSample::Status], admissionSample[FrontendAdmissionSample::Admission],
+                    startupIntent.Pending() ? "true" : "false");
+                DWORD written = 0;
+                if (length > 0 && static_cast<std::size_t>(length) < sizeof(line) && WriteFile(log, line, static_cast<DWORD>(length), &written, nullptr) &&
+                    written == static_cast<DWORD>(length) && FlushFileBuffers(log))
+                {
+                    loggedAdmissionStatus = admissionSample[FrontendAdmissionSample::Status];
+                    loggedAdmissionKind = admissionSample[FrontendAdmissionSample::Admission];
+                    loggedIntentPending = startupIntent.Pending();
+                }
+            }
             const auto command = [&](R::Command value) noexcept
             {
                 auto sequence = report[N::CommandSequence];
@@ -264,6 +308,12 @@ namespace deonline
                     togglePending = !command(R::Command::Show);
                 else if (phase == R::Phase::Visible)
                     togglePending = !command(R::Command::Hide);
+            }
+            else if (captured && admissionCaptured &&
+                     startupIntent.ShouldShow(runtimeSample, admissionSample, focused, togglePending || keys != 0, GetTickCount64()))
+            {
+                if (command(R::Command::Show))
+                    startupIntent.Submitted(admissionSample);
             }
             Publish();
             Sleep(20);

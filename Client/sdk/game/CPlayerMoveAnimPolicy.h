@@ -6,6 +6,7 @@
 #pragma once
 #include <cstdint>
 #include "CPed.h"
+#include "CAnimBlock.h"
 
 namespace MtaGame
 {
@@ -51,6 +52,52 @@ namespace MtaGame
                 default:
                     return {Kind::Custom, "ped"};
             }
+        }
+
+        template <class Operations>
+        static void SetMoveAnim(std::uint32_t group, Operations& operations)
+        {
+            const auto selection = SelectRequest(group);
+            if (selection.kind == Kind::Invalid)
+                return;
+            if (selection.kind == Kind::Default)
+            {
+                operations.ClearOverride();
+                return;
+            }
+
+            // Preserve the classic name construction and both distinct block
+            // facade lifetimes. These callbacks supply actual owner operations;
+            // this itinerary grants no native ownership, reference or rollback.
+            typename Operations::BlockName blockName;
+            blockName = selection.blockName;
+            if (!operations.IsGroupLoaded(group))
+            {
+                auto block = operations.GetAnimationBlock(blockName);
+                if (block && !block->IsLoaded())
+                {
+                    block->Request(BLOCKING, true);
+                    operations.RecordBlockReference(blockName);  // Request added the native reference.
+                }
+                if (!operations.IsGroupLoaded(group))
+                    return;
+            }
+            if (!operations.IsGroupValid(group))
+                return;
+
+            // Lookup still occurs when the module already recorded this name.
+            // Insertion precedes AddRef, so an exception keeps accepted intent.
+            auto block = operations.GetAnimationBlock(blockName);
+            if (!block)
+                return;
+            if (!operations.HasBlockReference(blockName))
+            {
+                operations.RecordBlockReference(blockName);
+                block->AddRef();
+            }
+            operations.StoreOverride(group);
+            operations.StoreNativeGroup(group);
+            operations.Reapply();
         }
 
         static constexpr int ChooseProcessAnimGroup(int requested, int custom) noexcept

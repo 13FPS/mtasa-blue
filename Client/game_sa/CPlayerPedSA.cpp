@@ -225,68 +225,40 @@ bool IsBlendAssocGroupValid(int iGroup)
 
 void CPlayerPedSA::SetMoveAnim(eMoveAnim iAnimGroup)
 {
-    using Policy = MtaGame::CPlayerMoveAnimPolicy;
-    const auto selection = Policy::SelectRequest(static_cast<std::uint32_t>(iAnimGroup));
-    if (selection.kind == Policy::Kind::Invalid)
-        return;
-
-    if (selection.kind == Policy::Kind::Default)
+    // Only the ordered MTA itinerary is shared. Each native operation remains
+    // in this classic owner, including its exact field write and original call.
+    struct Operations
     {
-        m_iCustomMoveAnim = 0;
-        return;
-    }
+        using BlockName = SString;
+        CPlayerPedSA&    owner;
+        CPedSAInterface* pedInterface = nullptr;
 
-    // Only the shared CPU choice moves; classic keeps every native load,
-    // validation, reference intent, field write and immediate reapply in order.
-    SString strBlockName;
-    strBlockName = selection.blockName;
-
-    // Need to load ?
-    if (!IsBlendAssocGroupLoaded(iAnimGroup))
-    {
-        std::unique_ptr<CAnimBlock> pAnimBlock = pGame->GetAnimManager()->GetAnimationBlock(strBlockName);
-
-        // Try load
-        if (pAnimBlock && !pAnimBlock->IsLoaded())
+        void                        ClearOverride() { owner.m_iCustomMoveAnim = 0; }
+        bool                        IsGroupLoaded(std::uint32_t group) { return IsBlendAssocGroupLoaded(static_cast<int>(group)); }
+        bool                        IsGroupValid(std::uint32_t group) { return IsBlendAssocGroupValid(static_cast<int>(group)); }
+        std::unique_ptr<CAnimBlock> GetAnimationBlock(const SString& name) { return pGame->GetAnimManager()->GetAnimationBlock(name); }
+        bool                        HasBlockReference(const SString& name) { return MapContains(ms_DoneAnimBlockRefMap, name); }
+        void                        RecordBlockReference(const SString& name) { MapInsert(ms_DoneAnimBlockRefMap, name); }
+        void                        StoreOverride(std::uint32_t group) { owner.m_iCustomMoveAnim = static_cast<int>(group); }
+        void                        StoreNativeGroup(std::uint32_t group)
         {
-            pAnimBlock->Request(BLOCKING, true);
-            MapInsert(ms_DoneAnimBlockRefMap, strBlockName);  // Request() adds a ref for us
+            pedInterface = (CPedSAInterface*)owner.GetInterface();
+            pedInterface->iMoveAnimGroup = static_cast<int>(group);
         }
-
-        // Load fail?
-        if (!IsBlendAssocGroupLoaded(iAnimGroup))
-            return;
-    }
-
-    // Check it all looks good
-    if (!IsBlendAssocGroupValid(iAnimGroup))
-        return;
-
-    // Ensure we add a ref to this block, even if it wasn't loaded by us
-    std::unique_ptr<CAnimBlock> pAnimBlock = pGame->GetAnimManager()->GetAnimationBlock(strBlockName);
-    if (!pAnimBlock)
-        return;
-    if (!MapContains(ms_DoneAnimBlockRefMap, strBlockName))
-    {
-        MapInsert(ms_DoneAnimBlockRefMap, strBlockName);
-        pAnimBlock->AddRef();
-    }
-
-    m_iCustomMoveAnim = iAnimGroup;
-
-    // Set the the new move animation group now, although it does get updated through the hooks as well
-    CPedSAInterface* pedInterface = (CPedSAInterface*)GetInterface();
-    pedInterface->iMoveAnimGroup = (int)iAnimGroup;
-
-    DWORD dwThis = (DWORD)pedInterface;
-    DWORD dwFunc = FUNC_CPlayerPed_ReApplyMoveAnims;
-    // clang-format off
-    __asm
-    {
-        mov     ecx, dwThis
-        call    dwFunc
-    }
-    // clang-format on
+        void Reapply()
+        {
+            DWORD dwThis = (DWORD)pedInterface;
+            DWORD dwFunc = FUNC_CPlayerPed_ReApplyMoveAnims;
+            // clang-format off
+            __asm
+            {
+                mov     ecx, dwThis
+                call    dwFunc
+            }
+            // clang-format on
+        }
+    } operations{*this};
+    MtaGame::CPlayerMoveAnimPolicy::SetMoveAnim(static_cast<std::uint32_t>(iAnimGroup), operations);
 }
 
 CEntity* CPlayerPedSA::GetTargetedEntity() const

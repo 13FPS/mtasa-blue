@@ -26,6 +26,8 @@ namespace
     }
 }
 
+#include "PlayerMoveAnimItineraryTests.inl"
+
 int main()
 {
     static_assert(Policy::ChooseProcessAnimGroup(MOVE_CSAW_M, MOVE_PLAYER_F) == MOVE_CSAW_F);
@@ -107,6 +109,7 @@ int main()
     Check(Policy::ChooseDefaultMotionGroup(MOVE_JETPACK, MOVE_PLAYER_F) == MOVE_PLAYER_F, "clothes intentionally has no process-hook jetpack exception");
     Check(Policy::ChooseDefaultMotionGroup(-77, MOVE_ARMED_M) == MOVE_PLAYER_M, "qualified custom physique wins even when the clothes request is opaque");
     Check(Policy::ChooseProcessAnimGroup(-77, MOVE_PLAYER_F) == MOVE_PLAYER_F, "an opaque process request cannot supply a pose for physique blending");
+    TestPlayerMoveAnimItinerary();
     std::printf("Passed %u shared MTA player move-animation policy checks (%u-bit)\n", checks, static_cast<unsigned>(sizeof(void*) * 8));
     return EXIT_SUCCESS;
 }

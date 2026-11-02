@@ -26,7 +26,8 @@ $record = [ordered]@{
     foreignProcessAccessed=$false;nativeLifecycleReady=$false;fullMtaReady=$false;
     clientDllLoaded=$false;installationChanged=$false;
     playerMoveAnimPolicyTested=$false;playerMoveAnimSelectionTested=$false;
-    playerMoveAnimProcessHookPolicyTested=$false;playerMoveAnimClothesHookPolicyTested=$false
+    playerMoveAnimProcessHookPolicyTested=$false;playerMoveAnimClothesHookPolicyTested=$false;
+    playerMoveAnimSetterItineraryTested=$false;playerMoveAnimAcceptedPrefixesTested=$false
 }
 
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -88,6 +89,7 @@ try {
         'Client/sdk/game/CPedSound.h',
         'Client/sdk/game/CPhysical.h',
         'Client/sdk/game/CPlayerMoveAnimPolicy.h',
+        'Client/sdk/game/CAnimBlock.h',
         'Client/sdk/game/CWeaponInfo.h',
         'Client/sdk/game/Common.h',
         'Shared/sdk/enums/EntityType.h',
@@ -95,6 +97,7 @@ try {
         'Shared/sdk/enums/PedPieceTypes.h',
         'Shared/sdk/enums/PedState.h',
         'Tests/definitive/PlayerMoveAnimPolicyTests.cpp',
+        'Tests/definitive/PlayerMoveAnimItineraryTests.inl',
         'Tests/definitive/test_player_move_anim_policy.ps1')
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
@@ -135,7 +138,7 @@ try {
         $arguments = @('/nologo','/std:c++17','/EHsc','/W4','/WX','/O2','/MD','/DNOMINMAX','/DWIN32_LEAN_AND_MEAN',
             ('/I'+(Join-Path $taskRoot 'Shared/sdk')),('/I'+(Join-Path $taskRoot 'Client/sdk')),
             (Join-Path $PSScriptRoot 'PlayerMoveAnimPolicyTests.cpp'),
-            ('/Fo'+$directory+[IO.Path]::DirectorySeparatorChar),('/Fe'+$executable))
+            ('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fe'+$executable))
         $result = [ordered]@{architecture=$architecture;environment=$environmentResult;compile=$null;test=$null;
             checks=0;pointerBits=$null;executable=$executable;executableSha256=$null}
         $record.results += $result
@@ -150,15 +153,17 @@ try {
             $result.pointerBits = [int]$summary.Groups[2].Value
         }
         $expectedBits = if ($architecture -eq 'x86') { 32 } else { 64 }
-        if ($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -ne 99 -or $result.pointerBits -ne $expectedBits) {
+        if ($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -ne 134 -or $result.pointerBits -ne $expectedBits) {
             throw "$architecture shared MTA player move-animation policy checks failed or summary/pointer-width evidence was missing."
         }
     }
-    $record.success = $record.results.Count -eq 2 -and @($record.results | Where-Object {$_.checks -ne 99}).Count -eq 0
+    $record.success = $record.results.Count -eq 2 -and @($record.results | Where-Object {$_.checks -ne 134}).Count -eq 0
     $record.playerMoveAnimPolicyTested = $record.success
     $record.playerMoveAnimSelectionTested = $record.success
     $record.playerMoveAnimProcessHookPolicyTested = $record.success
     $record.playerMoveAnimClothesHookPolicyTested = $record.success
+    $record.playerMoveAnimSetterItineraryTested = $record.success
+    $record.playerMoveAnimAcceptedPrefixesTested = $record.success
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {
     foreach ($name in $previousEnvironment.Keys) {

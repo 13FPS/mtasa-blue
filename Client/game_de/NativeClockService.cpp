@@ -49,6 +49,7 @@
 #include "NativePedClothesCalls.h"
 #include "NativePedRebuildCalls.h"
 #include "NativePedMoveAnimReader.h"
+#include "NativePlayerMoveAnimReapply.h"
 #include "NativeClothesDescriptorCalls.h"
 #include "NativeStreamingSpecialModelCalls.h"
 #include "NativeWorldGroundCalls.h"
@@ -318,6 +319,7 @@ namespace mta::game_de
             ClockResult ReadPedMetadata(const NativePedReferenceToken&, NativePedMetadata&) noexcept override;
             ClockResult ReadPedRender(const NativePedReferenceToken&, std::uintptr_t&) noexcept override;
             ClockResult ReadPedMoveAnim(const NativePedReferenceToken&, std::int32_t&) noexcept override;
+            ClockResult ReapplyCurrentPlayerMoveAnim(const NativePedReferenceToken&) noexcept override;
             ClockResult InitializePedClothesDescriptor(NativeClothesDescriptorStorage&) noexcept override;
             ClockResult ReadReferencedPedIntelligence(const NativePedReferenceToken&, NativePedIntelligenceReader::Value&) noexcept override;
             ClockResult ReadTaskPoolEntry(std::uintptr_t, NativeTaskPoolReader::Value&) noexcept override;
@@ -725,18 +727,22 @@ namespace mta::game_de
             // A bank's timestamp conversion owns no private allocation.
             // Retain only its actual entered/unknown operation journal; do
             // not hide that debt in the custom buffer retirement generation.
-            NativePreparedGameBorrow                          preparedGameBorrow;
-            NativeCameraRowBorrow                             cameraRowBorrows;
-            NativeCameraDirection                             cameraDirection;
-            NativeCameraDirectionCalls::Receipt               cameraDirectionReceipt;
-            NativeCameraFovWrite                              cameraFovWrite;
-            NativeCameraFovWriteCalls::Receipt                cameraFovWriteReceipt;
-            NativeCameraRestore                               cameraRestore;
-            NativeCameraRestoreCalls::Receipt                 cameraRestoreReceipt;
-            NativeCameraTargetSetter                          cameraTargetSetter;
-            NativeCameraTargetSetterCalls::Receipt            cameraTargetSetterReceipt;
-            NativeCameraWidescreen                            cameraWidescreen;
-            NativeCameraWidescreenCalls::Receipt              cameraWidescreenReceipt;
+            NativePreparedGameBorrow               preparedGameBorrow;
+            NativeCameraRowBorrow                  cameraRowBorrows;
+            NativeCameraDirection                  cameraDirection;
+            NativeCameraDirectionCalls::Receipt    cameraDirectionReceipt;
+            NativeCameraFovWrite                   cameraFovWrite;
+            NativeCameraFovWriteCalls::Receipt     cameraFovWriteReceipt;
+            NativeCameraRestore                    cameraRestore;
+            NativeCameraRestoreCalls::Receipt      cameraRestoreReceipt;
+            NativeCameraTargetSetter               cameraTargetSetter;
+            NativeCameraTargetSetterCalls::Receipt cameraTargetSetterReceipt;
+            NativeCameraWidescreen                 cameraWidescreen;
+            NativeCameraWidescreenCalls::Receipt   cameraWidescreenReceipt;
+            // A whole native effect cannot be replayed or rolled back after
+            // uncertain acknowledgement, even after its weak ped cell retires.
+            NativePlayerMoveAnimReapply::Controller           playerMoveAnimReapply;
+            NativePlayerMoveAnimReapply::Receipt              playerMoveAnimReapplyReceipt;
             NativeAnimationHierarchyUncompress                hierarchyUncompress;
             NativeAnimationHierarchyUncompressCalls::Receipt  hierarchyUncompressReceipt;
             NativeAnimationBlockRegistration                  blockRegistration;
@@ -945,8 +951,8 @@ namespace mta::game_de
                    runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained() || runtime.groupCreations.IsRetained() ||
                    runtime.hierarchyUncompress.IsRetained() || runtime.cameraRestore.IsRetained() || runtime.cameraTargetSetter.IsRetained() ||
                    runtime.cameraFovWrite.IsRetained() || runtime.cameraDirection.IsRetained() || runtime.cameraWidescreen.IsRetained() ||
-                   runtime.hierarchyCacheRemove.IsRetained() || runtime.blockRegistration.IsRetained() || runtime.blockRemoval.IsRetained() ||
-                   runtime.customSequences.HasPendingCleanup();
+                   runtime.playerMoveAnimReapply.IsRetained() || runtime.hierarchyCacheRemove.IsRetained() || runtime.blockRegistration.IsRetained() ||
+                   runtime.blockRemoval.IsRetained() || runtime.customSequences.HasPendingCleanup();
         }
 
         bool WeatherOverrideRetained() noexcept
@@ -6778,6 +6784,44 @@ namespace mta::game_de
             output = next;
             return ClockResult::Ok;
         }
+        ClockResult NativeAccess::ReapplyCurrentPlayerMoveAnim(const NativePedReferenceToken& source) noexcept
+        {
+            // This internal operation consumes the current group only. It
+            // neither stores a requested group nor supplies MTA's persistent
+            // custom-group hook or the unfinished public player setter.
+            const auto token = source;
+            auto       result = CheckApplicationTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            NativePedPoolReader::Value before, after;
+            if ((result = ResolvePedReference(token, before)) != ClockResult::Ok)
+                return result;
+            NativePlayerMoveAnimReapply::Receipt receipt;
+            result = runtime.playerMoveAnimReapply.Reapply(runtime.image, before, &CheckTimingOwner, &CheckApplicationTimingOwner, &receipt);
+            if (result == ClockResult::Ok)
+            {
+                result = ResolvePedReference(token, after);
+                if (result == ClockResult::Ok && !SameRegisteredPed(before, after))
+                    result = ClockResult::OwnerConflict;
+                if (result == ClockResult::Ok)
+                    result = CheckApplicationTimingOwner();
+            }
+            if (receipt.entered && result != ClockResult::Ok)
+            {
+                // The original can retire/blend associations before a later
+                // bookend fails. Retain that first uncertainty independently
+                // of this token and stop issuance before leaving the frame.
+                runtime.playerMoveAnimReapply.RetainAfterEntry(receipt, result);
+                receipt.phase = NativePlayerMoveAnimReapply::Phase::Unknown;
+                receipt.acknowledged = false;
+                receipt.unknown = true;
+                receipt.result = result;
+                Stop(result);
+            }
+            runtime.playerMoveAnimReapplyReceipt = receipt;
+            return result;
+        }
+
         ClockResult NativeAccess::ReadPedRender(const NativePedReferenceToken& source, std::uintptr_t& output) noexcept
         {
             const auto token = source;

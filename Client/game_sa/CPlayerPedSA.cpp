@@ -17,6 +17,7 @@
 #include "CGameSA.h"
 #include "CPlayerInfoSA.h"
 #include "CPlayerPedSA.h"
+#include <game/CPlayerMoveAnimPolicy.h>
 #include "CWorldSA.h"
 #include "CProjectileInfoSA.h"
 
@@ -224,44 +225,21 @@ bool IsBlendAssocGroupValid(int iGroup)
 
 void CPlayerPedSA::SetMoveAnim(eMoveAnim iAnimGroup)
 {
-    // Range check
-    if (!IsValidMoveAnim(iAnimGroup))
+    using Policy = MtaGame::CPlayerMoveAnimPolicy;
+    const auto selection = Policy::SelectRequest(static_cast<std::uint32_t>(iAnimGroup));
+    if (selection.kind == Policy::Kind::Invalid)
         return;
 
-    if (iAnimGroup == MOVE_DEFAULT)
+    if (selection.kind == Policy::Kind::Default)
     {
         m_iCustomMoveAnim = 0;
         return;
     }
 
-    // Find which anim block to load
+    // Only the shared CPU choice moves; classic keeps every native load,
+    // validation, reference intent, field write and immediate reapply in order.
     SString strBlockName;
-    switch (iAnimGroup)
-    {
-        case 55:
-        case 58:
-        case 61:
-        case 64:
-        case 67:
-            strBlockName = "fat";
-            break;
-
-        case 56:
-        case 59:
-        case 62:
-        case 65:
-        case 68:
-            strBlockName = "muscular";
-            break;
-
-        case 138:
-            strBlockName = "skate";
-            break;
-
-        default:
-            strBlockName = "ped";
-            break;
-    }
+    strBlockName = selection.blockName;
 
     // Need to load ?
     if (!IsBlendAssocGroupLoaded(iAnimGroup))
@@ -382,35 +360,6 @@ void CPlayerPedSA::SetTargetedEntity(CEntity* targetEntity)
         MOVE_SKATE,
 */
 
-bool IsAnimJetPack(int iAnim)
-{
-    return iAnim == MOVE_JETPACK;
-}
-
-// True if anim has Std/Fat/Muscular variants
-bool IsAnimPhysiqueBased(int iAnim)
-{
-    return (iAnim >= MOVE_PLAYER) && (iAnim <= MOVE_CSAW_M);
-}
-
-// Special pose is MOVE_ROCKET, MOVE_ARMED, MOVE_BBBAT or MOVE_CSAW
-bool IsAnimSpecialPose(int iAnim)
-{
-    return (iAnim >= MOVE_ROCKET) && (iAnim <= MOVE_CSAW_M);
-}
-
-// 0-Std  1-Fat  2-Muscular
-int GetAnimPhysiqueIndex(int iAnim)
-{
-    return (iAnim - MOVE_PLAYER) % 3;
-}
-
-// Pose is MOVE_PLAYER, MOVE_ROCKET, MOVE_ARMED, MOVE_BBBAT or MOVE_CSAW
-int GetAnimPose(int iAnim)
-{
-    return iAnim - GetAnimPhysiqueIndex(iAnim);
-}
-
 ////////////////////////////////////////////////////////////////
 //
 // CPlayerPed_ProcessAnimGroups_Mid
@@ -425,27 +374,7 @@ __declspec(noinline) int _cdecl OnCPlayerPed_ProcessAnimGroups_Mid(CPlayerPedSAI
     CPed*                pPed = pPedClientEntity ? pPedClientEntity->pEntity : nullptr;
 
     if (pPed)
-    {
-        int iCustomAnim = pPed->GetCustomMoveAnim();
-        if (iCustomAnim)
-        {
-            // If iReqMoveAnim is jetpack, use iReqMoveAnim
-            if (IsAnimJetPack(iReqMoveAnim))
-                return iReqMoveAnim;
-
-            // If iCustomAnim is physique based without special pose, and iReqMoveAnim is physique based, then use pose from iReqMoveAnim and physique from
-            // iCustomAnim
-            if (IsAnimPhysiqueBased(iCustomAnim) && !IsAnimSpecialPose(iCustomAnim) && IsAnimPhysiqueBased(iReqMoveAnim))
-            {
-                int iPhysique = GetAnimPhysiqueIndex(iCustomAnim);
-                int iPose = GetAnimPose(iReqMoveAnim);
-                return iPose + iPhysique;
-            }
-
-            // Everything else, use iCustomAnim
-            return iCustomAnim;
-        }
-    }
+        return MtaGame::CPlayerMoveAnimPolicy::ChooseProcessAnimGroup(iReqMoveAnim, pPed->GetCustomMoveAnim());
 
     return iReqMoveAnim;
 }
@@ -490,18 +419,7 @@ __declspec(noinline) int _cdecl OnCClothes_GetDefaultPlayerMotionGroup(int iReqM
     CPed* pPed = g_pCore->GetMultiplayer()->GetContextSwitchedPed();
 
     if (pPed)
-    {
-        int iCustomAnim = pPed->GetCustomMoveAnim();
-        if (iCustomAnim)
-        {
-            if (IsAnimPhysiqueBased(iCustomAnim))
-            {
-                int iPhysique = GetAnimPhysiqueIndex(iCustomAnim);
-                int iBaseAnim = MOVE_PLAYER + iPhysique;
-                return iBaseAnim;
-            }
-        }
-    }
+        return MtaGame::CPlayerMoveAnimPolicy::ChooseDefaultMotionGroup(iReqMoveAnim, pPed->GetCustomMoveAnim());
 
     return iReqMoveAnim;
 }

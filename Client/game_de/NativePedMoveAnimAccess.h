@@ -12,6 +12,10 @@ namespace mta::game_de
     {
     public:
         virtual ClockResult ReadPedMoveAnim(const NativePedReferenceToken&, std::int32_t&) noexcept { return ClockResult::NotInitialized; }
+        // Internal whole original on the registered player's CURRENT group.
+        // It writes no requested group or CPU override and grants neither
+        // block references, persistent hooks nor a complete SetMoveAnim.
+        virtual ClockResult ReapplyCurrentPlayerMoveAnim(const NativePedReferenceToken&) noexcept { return ClockResult::NotInitialized; }
 
     protected:
         ~NativePedMoveAnimAccess() = default;

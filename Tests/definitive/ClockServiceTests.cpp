@@ -66,6 +66,8 @@
 #include "../../Client/game_de/CPedRebuildDE.h"
 #include "../../Client/game_de/NativePedRebuildCalls.h"
 #include "NativePedRebuildFixture.h"
+#include "../../Client/game_de/NativePlayerMoveAnimReapply.h"
+#include "../../Client/game_de/NativePlayerMoveAnimReapplyProfile.h"
 #include "NativePedWeaponGrantFixture.h"
 // The strict lifecycle receiver defines CHud's by-value colour getters;
 // it needs the genuine complete shared colour type before the SDK headers.
@@ -480,6 +482,47 @@ namespace player_move_anim_fixture
     }
 }
 #include "PlayerMoveAnimFixture.generated.h"
+namespace ClockPlayerMoveAnimReapplyOwnerTest
+{
+    using Call = mta::game_de::NativePlayerMoveAnimReapply::NativeFunction;
+    using Result = mta::game_de::ClockResult;
+    using Token = mta::game_de::NativePedReferenceToken;
+    std::uintptr_t image = 0, ped = 0, entry = 0, received = 0;
+    unsigned       calls = 0, effects = 0, scenario = 0;
+    Token          selected;
+    Token*         callerToken = nullptr;
+    Token*         retireToken = nullptr;
+    Result         retireResult = Result::NotInitialized, nestedResult = Result::NotInitialized;
+    Result (*retire)(const Token&) noexcept = nullptr;
+    void (*after)() noexcept = nullptr;
+    Result Invoke(Call function, std::uintptr_t receiver, std::uint32_t& exception) noexcept
+    {
+        ++calls;
+        entry = reinterpret_cast<std::uintptr_t>(function);
+        received = receiver;
+        if (callerToken)
+        {
+            ++callerToken->version;
+            callerToken = nullptr;
+        }
+        if (after)
+            after();
+        if (scenario == 1)
+        {
+            exception = EXCEPTION_ACCESS_VIOLATION;
+            return Result::OriginalException;
+        }
+        ++effects;
+        if (scenario == 2)
+        {
+            const std::int32_t changed = 1;
+            std::memcpy(reinterpret_cast<void*>(receiver + 0x6e0), &changed, sizeof(changed));
+        }
+        if (scenario == 3 && retireToken && retire)
+            retireResult = retire(*retireToken);
+        return Result::Ok;
+    }
+}
 namespace ClockPedRebuildOwnerTest
 {
     using NativeFunction = mta::game_de::NativePedRebuildCalls::NativeFunction;
@@ -3761,6 +3804,10 @@ namespace ClockCameraJumpCutOwnerTest
 #define MTA_DE_PED_CLOTHES_NATIVE_INVOKE ClockPedClothesOwnerTest::Invoke
 #include "../../Client/game_de/NativePedClothesCalls.cpp"
 #undef MTA_DE_PED_CLOTHES_NATIVE_INVOKE
+// Invoke only the owned typed seam; no mapped game routine is executed.
+#define MTA_DE_PLAYER_MOVEANIM_REAPPLY_NATIVE_INVOKE ClockPlayerMoveAnimReapplyOwnerTest::Invoke
+#include "../../Client/game_de/NativePlayerMoveAnimReapply.cpp"
+#undef MTA_DE_PLAYER_MOVEANIM_REAPPLY_NATIVE_INVOKE
 #define MTA_DE_PED_REBUILD_NATIVE_INVOKE ClockPedRebuildOwnerTest::Invoke
 #include "../../Client/game_de/NativePedRebuildCalls.cpp"
 #undef MTA_DE_PED_REBUILD_NATIVE_INVOKE
@@ -9083,6 +9130,7 @@ namespace
 #include "MainTargetOwnerTests.inl"
 #include "BuildingPoolDefaultOwnerTests.inl"
 #include "PreparedGameBorrowOwnerTests.inl"
+#include "NativePlayerMoveAnimReapplyOwnerTests.inl"
 // The model fixture consumes the shared byte helpers defined by the earlier
 // private-association fixture; keep its consumer after those definitions.
 #include "../../Client/game_de/CModelInfoDE.h"
@@ -9181,6 +9229,16 @@ int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
     const bool presentTransitionClockOnly = argc == 3 && std::strcmp(argv[2], "--present-transition-clock") == 0;
+    unsigned   playerMoveAnimReapplyScenario = 4;
+    if (argc == 3)
+    {
+        constexpr std::array<const char*, 4> flags{"--player-moveanim-reapply-success", "--player-moveanim-reapply-invoke-unknown",
+                                                   "--player-moveanim-reapply-returned-loss", "--player-moveanim-reapply-outer-token-loss"};
+        for (unsigned index = 0; index != flags.size(); ++index)
+            if (std::strcmp(argv[2], flags[index]) == 0)
+                playerMoveAnimReapplyScenario = index;
+    }
+    const bool playerMoveAnimReapplyOnly = playerMoveAnimReapplyScenario != 4;
     const bool preparedGameBorrowOnly = argc == 3 && std::strcmp(argv[2], "--prepared-game-borrow") == 0;
     const bool buildingPoolDefaultOnly = argc == 3 && std::strcmp(argv[2], "--building-pool-default") == 0;
     const bool startupLifecycleOnly = argc == 3 && std::strcmp(argv[2], "--startup-lifecycle") == 0;
@@ -9600,21 +9658,21 @@ int main(int argc, char** argv)
            animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly || fireCollisionOnly || fireOnly ||
            collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly || worldLineOnly ||
            worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly || cameraSphereOnly ||
-           pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly || animationBlockRefsOnly ||
-           animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly || animationGatewayOnly ||
-           customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly || customAnimationSequenceNameOnly ||
-           freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly || privateHierarchyParentOnly ||
-           privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly ||
-           customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly ||
-           animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly || animationGroupValidityOnly ||
-           animationIdValidityOnly || animationAssociationGroupReadsOnly || cameraBasicsOnly || cameraJumpCutOnly || cameraFovWriteOnly ||
-           cameraDirectionOnly || cameraRowBorrowOnly || cameraHistoryOnly || cameraTargetOnly || cameraTargetSetterOnly || cameraGetCamOnly ||
-           cameraWidescreenOnly || cameraMainTargetOnly || applicationTimingOnly || emptyBlockRemovalOnly || blockRegistrationOnly || bankPostprocessOnly ||
-           bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly || dynamicClumpOnly || groupFactoriesOnly ||
-           groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly || groupEmptyInitializationOnly ||
-           animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly || animationStaticAssociationReadsOnly ||
-           staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly || privateAssociationsOnly || associationBonesOnly ||
-           associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
+           pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || playerMoveAnimReapplyOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly ||
+           animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly ||
+           animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly ||
+           customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly ||
+           privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly ||
+           privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly ||
+           sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly ||
+           animationDefinitionBlockNamesOnly || animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly ||
+           cameraBasicsOnly || cameraJumpCutOnly || cameraFovWriteOnly || cameraDirectionOnly || cameraRowBorrowOnly || cameraHistoryOnly || cameraTargetOnly ||
+           cameraTargetSetterOnly || cameraGetCamOnly || cameraWidescreenOnly || cameraMainTargetOnly || applicationTimingOnly || emptyBlockRemovalOnly ||
+           blockRegistrationOnly || bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly ||
+           dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
+           groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
+           animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
+           privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
     if (presentTransitionClockOnly)
@@ -9622,6 +9680,14 @@ int main(int argc, char** argv)
         ClockImageFixture fixture;
         fixture.Create(argv[1]);
         PresentTransitionClockFixture::Run(fixture);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (playerMoveAnimReapplyOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        PlayerMoveAnimReapplyOwnerFixture::Run(fixture, playerMoveAnimReapplyScenario);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

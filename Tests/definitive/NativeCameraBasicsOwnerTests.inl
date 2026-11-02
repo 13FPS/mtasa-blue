@@ -13,6 +13,7 @@ namespace CameraBasicsOwnerFixture
         std::uintptr_t next = 0, cell = 0;
     };
     static_assert(sizeof(Node) == R::ReferenceBytes);
+    using Bank = std::array<Node, R::ReferenceCount>;
     std::uintptr_t mutateAddress = 0;
     unsigned       ownerChecks = 0, mutateOn = 0;
     ClockResult    MutatingOwner() noexcept
@@ -93,6 +94,18 @@ namespace CameraBasicsOwnerFixture
         ClockCameraRestoreOwnerTest::calls = 0;
         ClockCameraRestoreOwnerTest::scenario = 0;
         const auto nodeAddress = [&](std::size_t index) { return fixture.image + R::ReferencesRva + index * sizeof(Node); };
+        // Full native-bank fixture buffers must not consume the bounded host
+        // stack also needed by nested real Begin and source qualification.
+        // Heap ownership preserves the complete captured-byte assertions.
+        const auto readBank = [&]
+        {
+            auto snapshot = std::make_unique<Bank>();
+            SIZE_T copied = 0;
+            Check(::ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(fixture.image + R::ReferencesRva), snapshot->data(), sizeof(Bank), &copied) &&
+                      copied == sizeof(Bank),
+                  "read the complete owned native reference bank into bounded heap snapshot storage");
+            return snapshot;
+        };
         const auto seed = [&](std::uint32_t mode, bool primary, bool secondary)
         {
             std::array<unsigned char, C::CameraBytes> camera;
@@ -103,7 +116,8 @@ namespace CameraBasicsOwnerFixture
             put(0x7f8, primary ? ped : std::uintptr_t{0});
             put(0x800, secondary ? ped : std::uintptr_t{0});
             apply(C::CameraRva, camera.data(), camera.size(), PAGE_READWRITE);
-            std::array<Node, R::ReferenceCount> bank{};
+            auto bankStorage = std::make_unique<Bank>();
+            auto& bank = *bankStorage;
             std::size_t                         used = 0;
             if (primary)
                 bank[used++].cell = fixture.image + C::CameraRva + 0x7f8;
@@ -292,13 +306,13 @@ namespace CameraBasicsOwnerFixture
             }
             fixture.Put(C::CameraRva + 0x33, std::uint8_t{1});
             const auto cameraBefore = fixture.Get<std::array<unsigned char, C::CameraBytes>>(C::CameraRva);
-            const auto bankBefore = fixture.Get<std::array<Node, R::ReferenceCount>>(R::ReferencesRva);
+            const auto bankBefore = readBank();
             callback.action = [&](NativeGameTimingAccess&) { sdk.Restore(); };
             pulse();
-            const auto bankAfter = fixture.Get<std::array<Node, R::ReferenceCount>>(R::ReferencesRva);
+            const auto bankAfter = readBank();
             Check(runtime.cameraRestoreReceipt.noEffect && runtime.cameraRestoreReceipt.effectsVerified &&
                       fixture.Get<std::array<unsigned char, C::CameraBytes>>(C::CameraRva) == cameraBefore &&
-                      !std::memcmp(bankBefore.data(), bankAfter.data(), sizeof(bankBefore)),
+                      !std::memcmp(bankBefore->data(), bankAfter->data(), sizeof(Bank)),
                   "the original source no-effect branch returns without rewriting any camera or native reference byte");
             Check(service.End() && !service.IsRetained() && !runtime.frameHooked.load() && !runtime.cameraRestore.IsRetained(),
                   "acknowledged Restore retires the actual callback owner without cleanup, rollback or another native invocation");

@@ -215,6 +215,8 @@
 #include "../../Client/game_de/CCameraSphereVisibleDE.h"
 #include "../../Client/game_de/CCameraCamsDE.h"
 #include "../../Client/game_de/CCameraWidescreenDE.h"
+#include "../../Client/game_de/CCameraTargetDE.h"
+#include "../../Client/game_de/NativeCameraMainTargetProfile.h"
 #include "../../Client/game_de/NativeCameraWidescreen.h"
 #include "../../Client/game_de/NativeCameraWidescreenProfile.h"
 #include "../../Client/game_de/NativeCameraSphereVisibleCalls.h"
@@ -626,6 +628,7 @@ namespace camera_sphere_visible_fixture
 #include "CamTargetSetterFixture.generated.h"
 #include "CameraCamsFixture.generated.h"
 #include "CameraWidescreenFixture.generated.h"
+#include "CameraTargetFixture.generated.h"
 
 namespace ClockCameraSphereOwnerTest
 {
@@ -9040,6 +9043,7 @@ namespace
 #define MTA_DE_CAMERA_WIDESCREEN_OWNER_BODY
 #include "WidescreenOwnerTests.inl"
 #undef MTA_DE_CAMERA_WIDESCREEN_OWNER_BODY
+#include "MainTargetOwnerTests.inl"
 // The model fixture consumes the shared byte helpers defined by the earlier
 // private-association fixture; keep its consumer after those definitions.
 #include "../../Client/game_de/CModelInfoDE.h"
@@ -9196,6 +9200,15 @@ int main(int argc, char** argv)
         staticAssociationInitializationUnknown || (argc == 3 && std::strcmp(argv[2], "--static-association-initialization-success") == 0);
     const bool animationStaticAssociationReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-static-association-reads") == 0;
     const bool animationAssociationGroupReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-association-group-reads") == 0;
+    const bool cameraMainTargetOnly = argc == 3 && std::strncmp(argv[2], "--camera-main-target-", 21) == 0;
+    unsigned   cameraMainTargetScenario = 3;
+    if (cameraMainTargetOnly)
+    {
+        const char* names[] = {"success", "refusals", "identity-drift"};
+        for (unsigned index = 0; index != 3; ++index)
+            if (std::strcmp(argv[2] + 21, names[index]) == 0)
+                cameraMainTargetScenario = index;
+    }
     const bool cameraWidescreenOnly = argc == 3 && std::strncmp(argv[2], "--camera-widescreen-", 20) == 0;
     unsigned   cameraWidescreenScenario = 6;
     if (cameraWidescreenOnly)
@@ -9553,9 +9566,9 @@ int main(int argc, char** argv)
            sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly ||
            animationDefinitionBlockNamesOnly || animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly ||
            cameraBasicsOnly || cameraJumpCutOnly || cameraFovWriteOnly || cameraDirectionOnly || cameraRowBorrowOnly || cameraHistoryOnly || cameraTargetOnly ||
-           cameraTargetSetterOnly || cameraGetCamOnly || cameraWidescreenOnly || applicationTimingOnly || emptyBlockRemovalOnly || blockRegistrationOnly ||
-           bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly || dynamicClumpOnly ||
-           groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
+           cameraTargetSetterOnly || cameraGetCamOnly || cameraWidescreenOnly || cameraMainTargetOnly || applicationTimingOnly || emptyBlockRemovalOnly ||
+           blockRegistrationOnly || bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly ||
+           dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
            groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
            animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
            privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
@@ -9736,6 +9749,15 @@ int main(int argc, char** argv)
         fixture.Create(argv[1]);
         // One real module-pinned lifetime needs one pristine host process.
         NativeAnimationBlocksOwnedSdk(fixture, &AnimationAssociationGroupChildProductsOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (cameraMainTargetOnly)
+    {
+        Check(cameraMainTargetScenario < 3, "exact finite main-camera target scenario required");
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        CameraMainTargetOwnerFixture::Run(fixture, cameraMainTargetScenario);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

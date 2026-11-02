@@ -22,6 +22,7 @@ namespace mta::game_de
     class CPoolsDE;
     class NativeGameTimingAccess;
     class CCamTargetDE;
+    class CCameraTargetDE;
 
     // This mixin shares the actual virtual CPed base with CPedVitalsDE and
     // its later slices. It supplies neither a complete ped nor a native ped
@@ -43,7 +44,10 @@ namespace mta::game_de
 
     private:
         friend class CCamTargetDE;
-        // Both real SDK getters use the same registry/token/native bookends.
+        friend class CCameraTargetDE;
+        using CameraTargetReader = ClockResult (*)(const void*, std::uintptr_t&) noexcept;
+        static ClockResult ReadRegisteredCameraTarget(CPoolsDE&, NativeGameTimingAccess&, CameraTargetReader, const void*, CEntity*&) noexcept;
+        // Actual entity and camera getters share registry/token/native bookends.
         // No unchecked GetInterface call on a foreign CEntity is needed.
         static ClockResult ReadRegisteredIdentity(CPoolsDE&, NativeGameTimingAccess&, CPed*, NativePedPoolReader::Value&, NativePedReferenceToken&) noexcept;
         static bool        SameReference(const NativePedReferenceToken&, const NativePedReferenceToken&) noexcept;

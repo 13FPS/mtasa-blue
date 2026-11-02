@@ -63,6 +63,7 @@
 #include "NativeCameraRestore.h"
 #include "NativeCameraTargetSetter.h"
 #include "NativeCameraWidescreen.h"
+#include "NativeCameraMainTargetMemory.h"
 #include "CWorldLineDE.h"
 #include "NativeAnimationBlockMemory.h"
 #include "NativeAnimationBlockRefMemory.h"
@@ -345,6 +346,7 @@ namespace mta::game_de
             ClockResult CheckCameraRowBorrowDrain(const NativeCameraRowBorrow::Token&) noexcept override;
             ClockResult ReadCameraRowVector(const NativeCameraRowBorrow::Token&, CameraRowVectorKind, CVector*&) noexcept override;
             ClockResult ReadCameraRowTarget(const NativeCameraRowBorrow::Token&, std::uintptr_t&) noexcept override;
+            ClockResult ReadCameraMainTarget(std::uintptr_t&) noexcept override;
             ClockResult SetCameraRowTarget(const NativeCameraRowBorrow::Token&, const NativePedReferenceToken*) noexcept override;
             ClockResult RestoreCamera() noexcept override;
             ClockResult RestoreCameraWithJumpCut() noexcept override;
@@ -6246,6 +6248,12 @@ namespace mta::game_de
             // this value or synthesize an entity while observing the cell.
             return NativeCameraDataMemory::ReadRowTarget(runtime.image, runtime.cameraRowBorrows, CameraRowBorrowIdentity(), token, &CheckTimingOwner,
                                                          &CheckApplicationTimingOwner, output);
+        }
+        ClockResult NativeAccess::ReadCameraMainTarget(std::uintptr_t& output) noexcept
+        {
+            // SDK mapping uses this same owner after observing the main cell;
+            // no row client or target reference is acquired by the reader.
+            return NativeCameraMainTargetMemory::Read(runtime.image, &CheckTimingOwner, &CheckApplicationTimingOwner, output);
         }
         ClockResult NativeAccess::SetCameraRowTarget(const NativeCameraRowBorrow::Token& row, const NativePedReferenceToken* target) noexcept
         {

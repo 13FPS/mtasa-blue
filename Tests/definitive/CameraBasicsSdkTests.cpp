@@ -6,6 +6,7 @@
 #include "../../Client/game_de/CCameraSphereVisibleDE.h"
 #include "../../Client/game_de/CCameraCamsDE.h"
 #include "../../Client/game_de/CCameraWidescreenDE.h"
+#include "../../Client/game_de/CCameraTargetDE.h"
 #include "../../Client/game_de/CCamFovDE.h"
 #include "../../Client/game_de/CCamRowDE.h"
 #include "../../Client/game_de/CCamTargetDE.h"
@@ -32,6 +33,7 @@
 #include "CameraBasicsFixture.generated.h"
 #include "CameraCamsFixture.generated.h"
 #include "CameraWidescreenFixture.generated.h"
+#include "CameraTargetFixture.generated.h"
 #include "CamFovFixture.generated.h"
 #include "CamRowFixture.generated.h"
 #include "CamTargetFixture.generated.h"
@@ -81,6 +83,9 @@ static_assert(std::is_same_v<decltype(&CameraWidescreenObserver::GetWidescreen),
 static_assert(std::is_abstract_v<CCameraWidescreenDE> && !std::is_abstract_v<CameraWidescreenObserver> &&
               !std::has_virtual_destructor_v<CameraWidescreenObserver>);
 static_assert(!std::is_copy_constructible_v<CameraWidescreenObserver> && !std::is_move_constructible_v<CameraWidescreenObserver>);
+static_assert(std::is_same_v<decltype(&CameraTargetObserver::GetTargetEntity), decltype(&CCameraTargetDE::GetTargetEntity)>);
+static_assert(std::is_abstract_v<CCameraTargetDE> && !std::is_abstract_v<CameraTargetObserver> && !std::has_virtual_destructor_v<CameraTargetObserver>);
+static_assert(!std::is_copy_constructible_v<CameraTargetObserver> && !std::is_move_constructible_v<CameraTargetObserver>);
 namespace
 {
     unsigned checks = 0;
@@ -837,6 +842,10 @@ namespace
         ClockResult             widescreenReadStatus = ClockResult::Ok, widescreenWriteStatus = ClockResult::Ok;
         unsigned                widescreenReads = 0, widescreenWrites = 0;
         bool                    widescreenConfigured = false, widescreenIntent = false;
+        ClockResult             mainTargetStatus = ClockResult::Ok;
+        std::uintptr_t          mainTarget = 0;
+        unsigned                mainTargetReads = 0, mainTargetSeam = 0;
+        std::function<void()>   afterMainTarget;
         TargetAccess() noexcept
         {
             identity = {1, 1, reinterpret_cast<std::uintptr_t>(nativeBytes.data()), GetCurrentThreadId()};
@@ -922,6 +931,22 @@ namespace
             ++releases;
             releasedId = token.Id();
             return ledger.Release(token);
+        }
+        ClockResult ReadCameraMainTarget(std::uintptr_t& output) noexcept override
+        {
+            ++mainTargetReads;
+            if (mainTargetStatus != ClockResult::Ok)
+                return mainTargetStatus;
+            if (ledger.IssuanceClosed())
+                return ClockResult::Stopped;
+            output = mainTarget;
+            if (afterMainTarget && mainTargetReads == mainTargetSeam)
+            {
+                auto action = std::move(afterMainTarget);
+                afterMainTarget = {};
+                action();
+            }
+            return ClockResult::Ok;
         }
         ClockResult ReadCameraWidescreen(bool& output) noexcept override
         {
@@ -1571,6 +1596,158 @@ namespace
         std::puts("Actual camera widescreen SDK fixture completed");
     }
 
+    void MainCameraTargets()
+    {
+        const auto                            before = checks;
+        constexpr std::array<ClockResult, 14> refusals{ClockResult::InvalidArgument, ClockResult::NotInitialized,   ClockResult::WrongThread,
+                                                       ClockResult::BindingChanged,  ClockResult::ReadFailure,      ClockResult::WriteFailure,
+                                                       ClockResult::RestoreFailure,  ClockResult::PatchFailure,     ClockResult::Busy,
+                                                       ClockResult::Expired,         ClockResult::UnsupportedBuild, ClockResult::OwnerConflict,
+                                                       ClockResult::Stopped,         ClockResult::OriginalException};
+        {
+            TargetAccess                      owner, foreign;
+            camera_target_fixture::Pools      pools(owner);
+            camera_target_fixture::Ped        ped(owner, owner.reference, pools);
+            CPoolsDE::BorrowedPedRegistration registration;
+            CameraTargetObserver              camera(pools, owner);
+            CCamera&                          sdk = camera;
+            CEntity* const                    expected = static_cast<CEntity*>(static_cast<CPed*>(&ped));
+            CEntity*                          output = expected;
+            Check(owner.acquires == 0 && owner.mainTargetReads == 0, "main-target facade construction is CPU-only and creates no row hold");  // 1
+            const auto poolChecks = owner.poolChecks;
+            owner.target = foreign.nativePed.nativePed;
+            Check(sdk.GetTargetEntity() == nullptr && owner.mainTargetReads == 2 && owner.poolChecks == poolChecks && owner.targetReads == 0 &&
+                      owner.acquires == 0,
+                  "only stable qualified main-cell zero returns null without consulting the unrelated row or registry");  // 2
+            owner.mainTarget = owner.nativePed.nativePed;
+            Refuses([&] { output = sdk.GetTargetEntity(); }, "GetTargetEntity", ClockResult::NotInitialized);  // 3
+            Check(output == expected && owner.targetReads == 0 && owner.acquires == 0,
+                  "occupied but unregistered native main target refuses without default-null or row substitution");  // 4
+            Check(pools.BindBorrowedPed(ped, nullptr, registration) == ClockResult::Ok,
+                  "the genuine existing controlled ped supplies SDK identity, not a camera allocation");  // 5
+            owner.target = 0;
+            owner.mainTargetReads = 0;
+            Check(sdk.GetTargetEntity() == expected, "main target returns the ordinary actual registered CPed-to-CEntity base conversion");  // 6
+            Check(owner.mainTargetReads == 3 && owner.targetReads == 0 && owner.acquires == 0 && owner.nativeAcquires == 0 && pools.GetPedCount() == 1,
+                  "main observation uses three raw bookends with no row/native reference or registration effect");  // 7
+            Check(expected->GetInterface() == reinterpret_cast<CEntitySAInterface*>(owner.nativePed.nativePed),
+                  "returned SDK identity retains the same actual checked GetInterface implementation");  // 8
+            owner.mainTarget = owner.nativePed.nativePed + 1;
+            Refuses([&] { output = sdk.GetTargetEntity(); }, "GetTargetEntity", ClockResult::NotInitialized);                                   // 9
+            Check(output == expected, "unknown nonzero/nonped target bits are refused rather than dereferenced or converted to null success");  // 10
+            owner.mainTarget = foreign.nativePed.nativePed;
+            Refuses([&] { output = sdk.GetTargetEntity(); }, "GetTargetEntity", ClockResult::NotInitialized);  // 11
+            Check(output == expected && foreign.mainTargetReads == 0 && foreign.nativeAcquires == 0,
+                  "foreign native identity never dispatches to another owner or manufactures its SDK association");  // 12
+            for (bool startsNull : {true, false})
+            {
+                owner.mainTarget = startsNull ? 0 : owner.nativePed.nativePed;
+                owner.mainTargetReads = 0;
+                owner.mainTargetSeam = 1;
+                owner.afterMainTarget = [&] { owner.mainTarget = startsNull ? owner.nativePed.nativePed : 0; };
+                Refuses([&] { output = sdk.GetTargetEntity(); }, "GetTargetEntity", ClockResult::BindingChanged);  // 2 * 2
+                Check(output == expected, "main zero/nonzero drift cannot become a plausible absent or mismatched entity result");
+            }
+            owner.mainTarget = owner.nativePed.nativePed;
+            for (auto status : refusals)
+            {
+                owner.mainTargetStatus = status;
+                owner.mainTargetReads = 0;
+                Refuses([&] { output = sdk.GetTargetEntity(); }, "GetTargetEntity", status);  // 14 * 2
+                Check(output == expected && owner.mainTargetReads == 1 && owner.acquires == 0,
+                      "exact main reader refusal publishes no default entity and performs no row acquisition or retry");
+            }
+            owner.mainTargetStatus = ClockResult::Ok;
+            owner.poolStatus = ClockResult::WrongThread;
+            Refuses([&] { output = sdk.GetTargetEntity(); }, "GetTargetEntity", ClockResult::WrongThread);         // 45
+            Check(output == expected, "pool-owner refusal remains explicit rather than a target-absence answer");  // 46
+            owner.poolStatus = ClockResult::Ok;
+            owner.referenceStatus = ClockResult::NotInitialized;
+            Refuses([&] { output = sdk.GetTargetEntity(); }, "GetTargetEntity", ClockResult::NotInitialized);  // 47
+            Check(output == expected && registration.IsBound(),
+                  "stale native reference refuses while the distinct CPU registration remains caller-owned");  // 48
+            owner.referenceStatus = ClockResult::Ok;
+            owner.mainTargetReads = 0;
+            owner.mainTargetSeam = 2;
+            const auto cursor = owner.nativePed.cursor;
+            owner.afterMainTarget = [&] { ++owner.nativePed.cursor; };
+            Refuses([&] { output = sdk.GetTargetEntity(); }, "GetTargetEntity", ClockResult::BindingChanged);  // 49
+            Check(output == expected,
+                  "full native Value drift across the shared itinerary refuses even when native address and CPU token remain unchanged");  // 50
+            owner.nativePed.cursor = cursor;
+            Check(registration.Reset() == ClockResult::Ok, "CPU withdrawal remains explicit and independent of main target storage");              // 51
+            Refuses([&] { output = sdk.GetTargetEntity(); }, "GetTargetEntity", ClockResult::NotInitialized);                                      // 52
+            Check(output == expected && pools.GetPedCount() == 0, "withdrawn registered SDK identity never leaks through a nonzero main target");  // 53
+            Check(pools.BindBorrowedPed(ped, nullptr, registration) == ClockResult::Ok,
+                  "the enclosing owner may rebind its genuine controlled ped for the distinct row comparison");  // 54
+            CCam* const row = sdk.GetCam(0);
+            owner.target = 0;
+            Check(row && row->GetTargetEntity() == nullptr && sdk.GetTargetEntity() == expected,
+                  "main nonzero and row zero remain distinct actual SDK targets through the same identity helper");  // 55
+            owner.target = owner.nativePed.nativePed;
+            owner.mainTarget = 0;
+            Check(row->GetTargetEntity() == expected && sdk.GetTargetEntity() == nullptr,
+                  "row nonzero never substitutes for the independent qualified main-cell zero");  // 56
+            camera.CloseCamPublication();
+            owner.ledger.CloseIssuance();
+            Refuses([&] { sdk.GetTargetEntity(); }, "GetTargetEntity", ClockResult::Stopped);                                                    // 57
+            Check(owner.releases == 0 && owner.ledger.IsRetained(), "main Stop refusal does not retire an inherited product behind the owner");  // 58
+            Check(camera.DrainCamsOnProducer() == ClockResult::Ok && owner.releases == 1 && !owner.ledger.IsRetained(),
+                  "inherited explicit producer drain precedes typed main-target facade destruction");  // 59
+        }
+        {
+            WidescreenDefaults           owner;
+            camera_target_fixture::Pools pools(owner);
+            CameraTargetObserver         camera(pools, owner);
+            Refuses([&] { camera.GetTargetEntity(); }, "GetTargetEntity", ClockResult::NotInitialized);  // 60
+            Missing        missing;
+            std::uintptr_t raw = 123;
+            Check(missing.ReadCameraMainTarget(raw) == ClockResult::NotInitialized && raw == 123,
+                  "older main-target providers default-refuse and preserve raw output");  // 61
+        }
+        {
+            TargetAccess                 owner, foreign;
+            camera_target_fixture::Pools pools(owner);
+            Refuses([&] { CameraTargetObserver camera(pools, foreign); }, "CCameraCamsDE constructor", ClockResult::OwnerConflict);  // 62
+            Check(owner.acquires == 0 && foreign.acquires == 0 && owner.mainTargetReads == 0 && foreign.mainTargetReads == 0,
+                  "exact owner mismatch refuses facade construction before either main or row access");  // 63
+        }
+        {
+            TargetAccess                              owner;
+            camera_target_fixture::Pools              pools(owner);
+            std::optional<camera_target_fixture::Ped> ped;
+            ped.emplace(owner, owner.reference, pools);
+            CPoolsDE::BorrowedPedRegistration registration;
+            Check(pools.BindBorrowedPed(*ped, nullptr, registration) == ClockResult::Ok, "main ABA fixture starts with one actual controlled SDK ped");  // 64
+            CameraTargetObserver camera(pools, owner);
+            CPed* const          original = &*ped;
+            CEntity* const       expected = static_cast<CEntity*>(original);
+            const auto           version = owner.reference.version;
+            const auto           native = owner.nativePed.nativePed;
+            bool                 reset = false, rebound = false;
+            owner.mainTarget = native;
+            owner.mainTargetSeam = 3;
+            owner.afterMainTarget = [&]
+            {
+                reset = registration.Reset() == ClockResult::Ok;
+                ped.reset();
+                ++owner.reference.version;
+                ped.emplace(owner, owner.reference, pools);
+                rebound = pools.BindBorrowedPed(*ped, nullptr, registration) == ClockResult::Ok;
+            };
+            CEntity* output = expected;
+            Refuses([&] { output = camera.GetTargetEntity(); }, "GetTargetEntity", ClockResult::BindingChanged);  // 65
+            Check(reset && rebound && static_cast<CPed*>(&*ped) == original && owner.nativePed.nativePed == native && owner.reference.version != version,
+                  "same actual SDK/native addresses do not conceal a new registration token at the final main-read seam");  // 66
+            Check(output == expected && owner.mainTargetReads == 3 && owner.targetReads == 0 && owner.acquires == 0 && owner.nativeAcquires == 0,
+                  "shared final inverse-token anchor refuses main ABA before publication and without new lifetime effects");  // 67
+            Check(registration.Reset() == ClockResult::Ok && !registration.IsBound(),
+                  "replacement CPU registration is retired before its typed test ped");  // 68
+        }
+        Check(checks - before == 68, "main target SDK group preserves all prior row and camera cases through one shared identity itinerary");  // 69
+        std::puts("Actual camera main target SDK fixture completed");
+    }
+
     void HistoryPointers()
     {
         // The actual SDK exposes four writable CVector elements, not a copy
@@ -1783,6 +1960,7 @@ namespace
         TargetSetters();
         CameraProducts();
         WidescreenPolicy();
+        MainCameraTargets();
         std::puts("Actual camera JumpCut SDK fixture completed");
         std::puts("Actual camera basics SDK fixture completed");
         std::puts("Actual Cam finite FOV SDK fixture completed");

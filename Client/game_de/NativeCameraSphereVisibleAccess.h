@@ -59,6 +59,9 @@ namespace mta::game_de
         // Raw target observation is tied to this same row client. A zero
         // or unknown value grants no entity adoption or reference writes.
         virtual ClockResult ReadCameraRowTarget(const NativeCameraRowBorrow::Token&, std::uintptr_t&) noexcept { return ClockResult::NotInitialized; }
+        // The main target is a distinct engine cell. Raw bits confer no
+        // entity mapping, adoption, reference registration or target lease.
+        virtual ClockResult ReadCameraMainTarget(std::uintptr_t&) noexcept { return ClockResult::NotInitialized; }
         // DE retargeting owns an acknowledged engine-cell itinerary. A null
         // token pointer explicitly clears; older providers must refuse it.
         virtual ClockResult SetCameraRowTarget(const NativeCameraRowBorrow::Token&, const NativePedReferenceToken*) noexcept

@@ -62,6 +62,7 @@
 #include "NativeCameraRowBorrow.h"
 #include "NativeCameraRestore.h"
 #include "NativeCameraTargetSetter.h"
+#include "NativeCameraWidescreen.h"
 #include "CWorldLineDE.h"
 #include "NativeAnimationBlockMemory.h"
 #include "NativeAnimationBlockRefMemory.h"
@@ -330,6 +331,8 @@ namespace mta::game_de
             ClockResult ReadJetpackMaxHeight(float&) noexcept override;
             ClockResult ReadCameraSphereVisible(const CVector&, float, bool&) noexcept override;
             ClockResult ReadCameraActiveIndex(std::uint8_t&) noexcept override;
+            ClockResult ReadCameraWidescreen(bool&) noexcept override;
+            ClockResult WriteCameraWidescreen(bool) noexcept override;
             ClockResult ReadCameraFov(std::uint32_t, std::uint32_t&) noexcept override;
             ClockResult WriteCameraFov(std::uint32_t, std::uint32_t) noexcept override;
             ClockResult ReadCameraMode(std::uint32_t, std::uint16_t&) noexcept override;
@@ -722,6 +725,8 @@ namespace mta::game_de
             NativeCameraRestoreCalls::Receipt                 cameraRestoreReceipt;
             NativeCameraTargetSetter                          cameraTargetSetter;
             NativeCameraTargetSetterCalls::Receipt            cameraTargetSetterReceipt;
+            NativeCameraWidescreen                            cameraWidescreen;
+            NativeCameraWidescreenCalls::Receipt              cameraWidescreenReceipt;
             NativeAnimationHierarchyUncompress                hierarchyUncompress;
             NativeAnimationHierarchyUncompressCalls::Receipt  hierarchyUncompressReceipt;
             NativeAnimationBlockRegistration                  blockRegistration;
@@ -929,8 +934,9 @@ namespace mta::game_de
                    runtime.pedReferences.IsRetained() || WorldIgnoreRetained() || runtime.customSequences.IsRetained() ||
                    runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained() || runtime.groupCreations.IsRetained() ||
                    runtime.hierarchyUncompress.IsRetained() || runtime.cameraRestore.IsRetained() || runtime.cameraTargetSetter.IsRetained() ||
-                   runtime.cameraFovWrite.IsRetained() || runtime.cameraDirection.IsRetained() || runtime.hierarchyCacheRemove.IsRetained() ||
-                   runtime.blockRegistration.IsRetained() || runtime.blockRemoval.IsRetained() || runtime.customSequences.HasPendingCleanup();
+                   runtime.cameraFovWrite.IsRetained() || runtime.cameraDirection.IsRetained() || runtime.cameraWidescreen.IsRetained() ||
+                   runtime.hierarchyCacheRemove.IsRetained() || runtime.blockRegistration.IsRetained() || runtime.blockRemoval.IsRetained() ||
+                   runtime.customSequences.HasPendingCleanup();
         }
 
         bool WeatherOverrideRetained() noexcept
@@ -6110,6 +6116,22 @@ namespace mta::game_de
         ClockResult NativeAccess::ReadCameraActiveIndex(std::uint8_t& output) noexcept
         {
             return NativeCameraDataMemory::ReadActive(runtime.image, &CheckTimingOwner, output);
+        }
+        ClockResult NativeAccess::ReadCameraWidescreen(bool& output) noexcept
+        {
+            return runtime.cameraWidescreen.Read(runtime.image, &CheckTimingOwner, &CheckApplicationTimingOwner, output);
+        }
+        ClockResult NativeAccess::WriteCameraWidescreen(bool mode) noexcept
+        {
+            NativeCameraWidescreenCalls::Receipt receipt;
+            const auto result = runtime.cameraWidescreen.Write(runtime.image, mode, &CheckTimingOwner, &CheckApplicationTimingOwner, &receipt);
+            // Preserve the first accepted/unknown journal through Stop/End;
+            // neither later requests nor teardown may repair pending flags.
+            if (!runtime.cameraWidescreenReceipt.debt || receipt.entered)
+                runtime.cameraWidescreenReceipt = receipt;
+            if (receipt.debt || runtime.cameraWidescreen.RecoveryPending())
+                Stop(result == ClockResult::Ok ? ClockResult::RestoreFailure : result);
+            return result;
         }
         ClockResult NativeAccess::ReadCameraFov(std::uint32_t index, std::uint32_t& output) noexcept
         {

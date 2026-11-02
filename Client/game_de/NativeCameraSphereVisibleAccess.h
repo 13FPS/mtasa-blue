@@ -25,6 +25,10 @@ namespace mta::game_de
         // Current scalar reads stay with this same owner. A missing provider
         // is not an absent camera, a clamped selector or the SDK's FOV default.
         virtual ClockResult ReadCameraActiveIndex(std::uint8_t&) noexcept { return ClockResult::NotInitialized; }
+        // Configured camera mode is distinct from pending-off and border
+        // animation. Older providers cannot synthesize these actual effects.
+        virtual ClockResult ReadCameraWidescreen(bool&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult WriteCameraWidescreen(bool) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult ReadCameraFov(std::uint32_t, std::uint32_t&) noexcept { return ClockResult::NotInitialized; }
         // Invalid SDK floats are filtered before this channel. A real owner
         // must acknowledge one bounded store or retain its uncertainty; an

@@ -5,6 +5,7 @@
  ****************************************************************************/
 #include "../../Client/game_de/CCameraSphereVisibleDE.h"
 #include "../../Client/game_de/CCameraCamsDE.h"
+#include "../../Client/game_de/CCameraWidescreenDE.h"
 #include "../../Client/game_de/CCamFovDE.h"
 #include "../../Client/game_de/CCamRowDE.h"
 #include "../../Client/game_de/CCamTargetDE.h"
@@ -30,6 +31,7 @@
 #include <thread>
 #include "CameraBasicsFixture.generated.h"
 #include "CameraCamsFixture.generated.h"
+#include "CameraWidescreenFixture.generated.h"
 #include "CamFovFixture.generated.h"
 #include "CamRowFixture.generated.h"
 #include "CamTargetFixture.generated.h"
@@ -74,6 +76,11 @@ static_assert(!std::is_copy_constructible_v<CamTargetSetterObserver> && !std::is
 static_assert(std::is_same_v<decltype(&CameraCamsObserver::GetCam), decltype(&CCameraCamsDE::GetCam)>);
 static_assert(std::is_abstract_v<CCameraCamsDE> && !std::is_abstract_v<CameraCamsObserver> && !std::has_virtual_destructor_v<CameraCamsObserver>);
 static_assert(!std::is_copy_constructible_v<CameraCamsObserver> && !std::is_move_constructible_v<CameraCamsObserver>);
+static_assert(std::is_same_v<decltype(&CameraWidescreenObserver::SetWidescreen), decltype(&CCameraWidescreenDE::SetWidescreen)>);
+static_assert(std::is_same_v<decltype(&CameraWidescreenObserver::GetWidescreen), decltype(&CCameraWidescreenDE::GetWidescreen)>);
+static_assert(std::is_abstract_v<CCameraWidescreenDE> && !std::is_abstract_v<CameraWidescreenObserver> &&
+              !std::has_virtual_destructor_v<CameraWidescreenObserver>);
+static_assert(!std::is_copy_constructible_v<CameraWidescreenObserver> && !std::is_move_constructible_v<CameraWidescreenObserver>);
 namespace
 {
     unsigned checks = 0;
@@ -827,6 +834,9 @@ namespace
         unsigned                publicationChecks = 0, drainChecks = 0;
         std::uint32_t           publicationRow = 0, drainRefusedRow = 0xffffffffu;
         std::uint64_t           publicationId = 0;
+        ClockResult             widescreenReadStatus = ClockResult::Ok, widescreenWriteStatus = ClockResult::Ok;
+        unsigned                widescreenReads = 0, widescreenWrites = 0;
+        bool                    widescreenConfigured = false, widescreenIntent = false;
         TargetAccess() noexcept
         {
             identity = {1, 1, reinterpret_cast<std::uintptr_t>(nativeBytes.data()), GetCurrentThreadId()};
@@ -912,6 +922,25 @@ namespace
             ++releases;
             releasedId = token.Id();
             return ledger.Release(token);
+        }
+        ClockResult ReadCameraWidescreen(bool& output) noexcept override
+        {
+            ++widescreenReads;
+            output = widescreenConfigured;
+            if (widescreenReadStatus != ClockResult::Ok)
+                return widescreenReadStatus;
+            return ledger.IssuanceClosed() ? ClockResult::Stopped : ClockResult::Ok;
+        }
+        ClockResult WriteCameraWidescreen(bool enabled) noexcept override
+        {
+            ++widescreenWrites;
+            widescreenIntent = enabled;
+            if (widescreenWriteStatus != ClockResult::Ok)
+                return widescreenWriteStatus;
+            if (ledger.IssuanceClosed())
+                return ClockResult::Stopped;
+            widescreenConfigured = enabled;
+            return ClockResult::Ok;
         }
         ClockResult ValidateCameraRowBorrow(const NativeCameraRowBorrow::Token& token) noexcept override
         {
@@ -1443,6 +1472,105 @@ namespace
         std::puts("Actual camera GetCam SDK fixture completed");
     }
 
+    struct WidescreenDefaults final : NativeGameTimingAccess
+    {
+        ClockResult SetTimeScale(float) noexcept override { return ClockResult::NotInitialized; }
+        ClockResult SetMinuteDuration(std::uint32_t) noexcept override { return ClockResult::NotInitialized; }
+        ClockResult Pause(bool) noexcept override { return ClockResult::NotInitialized; }
+    };
+    void WidescreenPolicy()
+    {
+        const auto                            before = checks;
+        constexpr std::array<ClockResult, 14> refusals{ClockResult::InvalidArgument, ClockResult::NotInitialized,   ClockResult::WrongThread,
+                                                       ClockResult::BindingChanged,  ClockResult::ReadFailure,      ClockResult::WriteFailure,
+                                                       ClockResult::RestoreFailure,  ClockResult::PatchFailure,     ClockResult::Busy,
+                                                       ClockResult::Expired,         ClockResult::UnsupportedBuild, ClockResult::OwnerConflict,
+                                                       ClockResult::Stopped,         ClockResult::OriginalException};
+        {
+            TargetAccess                 owner;
+            camera_target_fixture::Pools pools(owner);
+            CameraWidescreenObserver     camera(pools, owner);
+            CCamera&                     sdk = camera;
+            Check(owner.acquires == 0 && owner.widescreenReads == 0 && owner.widescreenWrites == 0,
+                  "widescreen facade construction is CPU-only and does not acquire a row or change configured mode");  // 1
+            for (bool enabled : {false, true})
+            {
+                const auto reads = owner.widescreenReads, writes = owner.widescreenWrites;
+                sdk.SetWidescreen(enabled);
+                Check(owner.widescreenWrites == writes + 1 && owner.widescreenReads == reads && owner.widescreenIntent == enabled &&
+                          owner.widescreenConfigured == enabled,
+                      "actual SDK setter forwards exactly one unchanged bool without an implicit read or secondary operation");  // 2 * 2
+                Check(sdk.GetWidescreen() == enabled && owner.widescreenReads == reads + 1 && owner.widescreenWrites == writes + 1,
+                      "actual configured-mode query returns the qualified bool rather than a mode approximation");
+            }
+            sdk.SetWidescreen(true);
+            owner.widescreenConfigured = false;
+            Check(!sdk.GetWidescreen() && owner.widescreenIntent, "external engine mode changes remain visible independently of the last SDK request");  // 6
+            const auto writes = owner.widescreenWrites;
+            owner.widescreenConfigured = true;
+            Check(sdk.GetWidescreen() && owner.widescreenWrites == writes,
+                  "querying a new configured mode neither replays the old request nor writes state");  // 7
+            sdk.SetWidescreen(false);
+            Check(owner.acquires == 0 && owner.targetReads == 0 && owner.setCalls == 0 && owner.publicationChecks == 0 && owner.nativeAcquires == 0,
+                  "the bool pair does not invent Cam publication, target reference, fade or factory work");  // 8
+            for (auto status : refusals)
+            {
+                owner.widescreenConfigured = false;
+                owner.widescreenReadStatus = status;
+                const auto reads = owner.widescreenReads, previousWrites = owner.widescreenWrites;
+                bool       output = true;
+                Refuses([&] { output = sdk.GetWidescreen(); }, "GetWidescreen", status);  // 14 * 4
+                Check(output && owner.widescreenReads == reads + 1 && owner.widescreenWrites == previousWrites,
+                      "a refused query does not publish plausible disabled state even if the transport writes its local output");
+                owner.widescreenReadStatus = ClockResult::Ok;
+                owner.widescreenWriteStatus = status;
+                Refuses([&] { sdk.SetWidescreen(true); }, "SetWidescreen", status);
+                Check(owner.widescreenWrites == previousWrites + 1 && owner.widescreenReads == reads + 1 && !owner.widescreenConfigured,
+                      "the actual setter propagates one refusal without retry, synthetic readback or successful mode cache");
+            }
+            owner.widescreenWriteStatus = ClockResult::Ok;
+            CCam* const product = sdk.GetCam(0);
+            Check(product && owner.acquires == 1 && owner.ledger.IsRetained(),
+                  "new partial camera still publishes the same actual retained Cam product");  // 65
+            sdk.SetWidescreen(true);
+            Check(sdk.GetWidescreen() && sdk.GetCam(0) == product && owner.acquires == 1 && owner.releases == 0,
+                  "mode writes leave stable product identity and row ownership unchanged");  // 66
+            camera.CloseCamPublication();
+            Check(sdk.GetWidescreen(), "closing GetCam publication does not invent a second native mode lifecycle");  // 67
+            owner.ledger.CloseIssuance();
+            Refuses([&] { sdk.GetWidescreen(); }, "GetWidescreen", ClockResult::Stopped);       // 68
+            Refuses([&] { sdk.SetWidescreen(false); }, "SetWidescreen", ClockResult::Stopped);  // 69
+            Check(owner.releases == 0 && owner.ledger.IsRetained() && owner.widescreenConfigured,
+                  "native Stop refuses mode access without implicitly dropping rows or repairing configured mode");  // 70
+            Check(camera.DrainCamsOnProducer() == ClockResult::Ok && owner.releases == 1 && !owner.ledger.IsRetained(),
+                  "inherited explicit producer drain completes before typed widescreen facade destruction");  // 71
+        }
+        {
+            Missing missing;
+            bool    output = true;
+            Check(missing.ReadCameraWidescreen(output) == ClockResult::NotInitialized && output &&
+                      missing.WriteCameraWidescreen(false) == ClockResult::NotInitialized,
+                  "older provider defaults preserve query output and refuse mode writes");  // 72
+        }
+        {
+            WidescreenDefaults           owner;
+            camera_target_fixture::Pools pools(owner);
+            CameraWidescreenObserver     camera(pools, owner);
+            Refuses([&] { camera.GetWidescreen(); }, "GetWidescreen", ClockResult::NotInitialized);      // 73
+            Refuses([&] { camera.SetWidescreen(true); }, "SetWidescreen", ClockResult::NotInitialized);  // 74
+        }
+        {
+            TargetAccess                 owner, foreign;
+            camera_target_fixture::Pools pools(owner);
+            Refuses([&] { CameraWidescreenObserver camera(pools, foreign); }, "CCameraCamsDE constructor", ClockResult::OwnerConflict);  // 75
+            Check(owner.acquires == 0 && foreign.acquires == 0 && owner.widescreenReads == 0 && owner.widescreenWrites == 0 && foreign.widescreenReads == 0 &&
+                      foreign.widescreenWrites == 0,
+                  "foreign-owner facade construction refuses before row or mode operations");  // 76
+        }
+        Check(checks - before == 76, "widescreen SDK case group preserves every prior camera transport and product test");  // 77
+        std::puts("Actual camera widescreen SDK fixture completed");
+    }
+
     void HistoryPointers()
     {
         // The actual SDK exposes four writable CVector elements, not a copy
@@ -1654,6 +1782,7 @@ namespace
         TargetEntities();
         TargetSetters();
         CameraProducts();
+        WidescreenPolicy();
         std::puts("Actual camera JumpCut SDK fixture completed");
         std::puts("Actual camera basics SDK fixture completed");
         std::puts("Actual Cam finite FOV SDK fixture completed");

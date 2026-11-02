@@ -23,7 +23,7 @@ $record = [ordered]@{
     scope='Actual camera Restore/rawBYTE selector and const Cam FOV over the same retained provider. Every finite FOV preserves bits, successful nonfinite becomes70; provider refusal always propagates. Full logicalDWORD dispatch and all14 statuses, default-refusing older providers, existing sphere regression. Includes selected actual JumpCut owner transport; its native two-step/deferred-yaw policy is verified by the owner fixture. Includes actual SetFOV finite open0..180 input policy, invalid no-provider no-ops and valid exact raw-bit/full-row dispatch. Includes actual signed mode/GetDirection/SetDirection policies: raw read, zero-or-one original-pair conditional repair, source wrapping and ACK-before-output alias order. Includes actual retained partial-row SDK vector transport, unique acquisition and producer release, exact pointer identity/direct writes and refusal propagation. Native lifetime/field admission is tested separately by the owner fixture; Includes the actual target-history pointer and its full four-vector writable extent under the same row hold, without new timestamp/count/lease semantics. Includes the actual GetInterface/target getter composed with the existing same-owner controlled ped registry, qualified zero, nonzero refusal and registration-token ABA refusal; no complete camera/GetCam or ped factory.';
     ownedBuffersOnly=$true;nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;
     completeCameraReady=$false;completeCamReady=$false;fullMtaReady=$false;installationChanged=$false;
-    actualCameraBasicsSdkTested=$false;actualCameraJumpCutSdkTested=$false;actualCameraFovWriteSdkTested=$false;actualCameraDirectionSdkTested=$false;actualCameraRowBorrowSdkTested=$false;actualCameraHistorySdkTested=$false;actualCameraTargetSdkTested=$false;actualPedPooledInterfaceSdkTested=$false;actualCameraTargetSetterSdkTested=$false;actualCameraGetCamSdkTested=$false
+    actualCameraBasicsSdkTested=$false;actualCameraJumpCutSdkTested=$false;actualCameraFovWriteSdkTested=$false;actualCameraDirectionSdkTested=$false;actualCameraRowBorrowSdkTested=$false;actualCameraHistorySdkTested=$false;actualCameraTargetSdkTested=$false;actualPedPooledInterfaceSdkTested=$false;actualCameraTargetSetterSdkTested=$false;actualCameraGetCamSdkTested=$false;actualCameraWidescreenSdkTested=$false
 
 }
 
@@ -78,7 +78,7 @@ function RunOwned([string]$Executable,[string[]]$Arguments,[string]$Directory,[s
 }
 
 try {
-    $productionSources=@('Client/game_de/CCameraSphereVisibleDE.cpp','Client/game_de/CCameraCamsDE.cpp','Client/game_de/CCamFovDE.cpp','Client/game_de/CCamRowDE.cpp','Client/game_de/CCamTargetDE.cpp','Client/game_de/CCamTargetSetterDE.cpp','Client/game_de/CPedPooledDE.cpp','Client/game_de/CPoolsDE.cpp','Client/game_de/CPedVitalsDE.cpp')
+    $productionSources=@('Client/game_de/CCameraSphereVisibleDE.cpp','Client/game_de/CCameraCamsDE.cpp','Client/game_de/CCameraWidescreenDE.cpp','Client/game_de/CCamFovDE.cpp','Client/game_de/CCamRowDE.cpp','Client/game_de/CCamTargetDE.cpp','Client/game_de/CCamTargetSetterDE.cpp','Client/game_de/CPedPooledDE.cpp','Client/game_de/CPoolsDE.cpp','Client/game_de/CPedVitalsDE.cpp')
     $sourceNames=$productionSources+@('Client/game_de/NativeCameraSphereVisibleAccess.h','Tests/definitive/CameraBasicsSdkTests.cpp','Tests/definitive/test_camera_basics_sdk.ps1','Tests/definitive/Write-CameraBasicsFixture.ps1','Tests/definitive/Write-PedPoolRegistryFixture.ps1')
     $pending=[Collections.Generic.Queue[string]]::new()
     $seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -103,6 +103,10 @@ try {
     $record['cameraGeneratedFixture']=Write-CameraBasicsFixture $taskRoot $cameraGenerated
     $productsGenerated=Join-Path $scratchRoot 'CameraCamsFixture.generated.h'
     $record['cameraProductsGeneratedFixture']=Write-CameraCamsFixture $taskRoot $productsGenerated
+    $widescreenGenerated=Join-Path $scratchRoot 'CameraWidescreenFixture.generated.h'
+    $record['cameraWidescreenGeneratedFixture']=Write-CameraWidescreenFixture $taskRoot $widescreenGenerated
+    if($record.cameraWidescreenGeneratedFixture.rejectingMethods -ne 28 -or @($record.cameraWidescreenGeneratedFixture.inheritedProductionMethods).Count -ne 7){throw 'Actual widescreen camera SDK35-method partition changed'}
+    Copy-Item -LiteralPath $widescreenGenerated -Destination (Join-Path $outputRoot ([IO.Path]::GetFileName($widescreenGenerated)))
     if($record.cameraProductsGeneratedFixture.rejectingMethods -ne 30 -or @($record.cameraProductsGeneratedFixture.inheritedProductionMethods).Count -ne 5){throw 'Actual camera products SDK35-method partition changed'}
     Copy-Item -LiteralPath $productsGenerated -Destination (Join-Path $outputRoot ([IO.Path]::GetFileName($productsGenerated)))
     $record['camGeneratedFixture']=Write-CamFovFixture $taskRoot $camGenerated
@@ -186,11 +190,12 @@ try {
         $result['actualPedPooledInterfaceSdkTested']=$text.Contains('Actual ped pooled interface SDK fixture completed')
         $result['actualCameraTargetSetterSdkTested']=$text.Contains('Actual camera target setter SDK fixture completed')
         $result['actualCameraGetCamSdkTested']=$text.Contains('Actual camera GetCam SDK fixture completed')
+        $result['actualCameraWidescreenSdkTested']=$text.Contains('Actual camera widescreen SDK fixture completed')
         $result['actualCamFovSdkTested']=$text.Contains('Actual Cam finite FOV SDK fixture completed')
         $result['cameraProviderRefusalTransportTested']=$text.Contains('Actual camera provider refusal transport fixture completed')
 
         $expectedBits = if ($architecture -eq 'x86') { 32 } else { 64 }
-        if ($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -ne 3519 -or $result.pointerBits -ne $expectedBits -or -not $result.actualCameraBasicsSdkTested -or -not $result.actualCameraJumpCutSdkTested -or -not $result.actualCameraFovWriteSdkTested -or -not $result.actualCameraDirectionSdkTested -or -not $result.actualCameraRowBorrowSdkTested -or -not $result.actualCameraHistorySdkTested -or -not $result.actualCameraTargetSdkTested -or -not $result.actualPedPooledInterfaceSdkTested -or -not $result.actualCameraTargetSetterSdkTested -or -not $result.actualCameraGetCamSdkTested -or -not $result.actualCamFovSdkTested -or -not $result.cameraProviderRefusalTransportTested) {
+        if ($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -ne 3596 -or $result.pointerBits -ne $expectedBits -or -not $result.actualCameraBasicsSdkTested -or -not $result.actualCameraJumpCutSdkTested -or -not $result.actualCameraFovWriteSdkTested -or -not $result.actualCameraDirectionSdkTested -or -not $result.actualCameraRowBorrowSdkTested -or -not $result.actualCameraHistorySdkTested -or -not $result.actualCameraTargetSdkTested -or -not $result.actualPedPooledInterfaceSdkTested -or -not $result.actualCameraTargetSetterSdkTested -or -not $result.actualCameraGetCamSdkTested -or -not $result.actualCameraWidescreenSdkTested -or -not $result.actualCamFovSdkTested -or -not $result.cameraProviderRefusalTransportTested) {
             throw "$architecture actual camera basics SDK checks failed or summary/pointer-width evidence was missing."
         }
     }
@@ -205,9 +210,10 @@ try {
     $record.actualPedPooledInterfaceSdkTested=@($record.results|Where-Object{-not $_.actualPedPooledInterfaceSdkTested}).Count -eq 0
     $record.actualCameraTargetSetterSdkTested=@($record.results|Where-Object{-not $_.actualCameraTargetSetterSdkTested}).Count -eq 0
     $record.actualCameraGetCamSdkTested=@($record.results|Where-Object{-not $_.actualCameraGetCamSdkTested}).Count -eq 0
+    $record.actualCameraWidescreenSdkTested=@($record.results|Where-Object{-not $_.actualCameraWidescreenSdkTested}).Count -eq 0
     $record['actualCamFovSdkTested']=@($record.results|Where-Object{-not $_.actualCamFovSdkTested}).Count -eq 0
     $record['cameraProviderRefusalTransportTested']=@($record.results|Where-Object{-not $_.cameraProviderRefusalTransportTested}).Count -eq 0
-    $record.success = $record.results.Count -eq 2 -and $record.actualCameraBasicsSdkTested -and $record.actualCameraJumpCutSdkTested -and $record.actualCameraFovWriteSdkTested -and $record.actualCameraDirectionSdkTested -and $record.actualCameraRowBorrowSdkTested -and $record.actualCameraHistorySdkTested -and $record.actualCameraTargetSdkTested -and $record.actualPedPooledInterfaceSdkTested -and $record.actualCameraTargetSetterSdkTested -and $record.actualCameraGetCamSdkTested -and $record.actualCamFovSdkTested -and $record.cameraProviderRefusalTransportTested
+    $record.success = $record.results.Count -eq 2 -and $record.actualCameraBasicsSdkTested -and $record.actualCameraJumpCutSdkTested -and $record.actualCameraFovWriteSdkTested -and $record.actualCameraDirectionSdkTested -and $record.actualCameraRowBorrowSdkTested -and $record.actualCameraHistorySdkTested -and $record.actualCameraTargetSdkTested -and $record.actualPedPooledInterfaceSdkTested -and $record.actualCameraTargetSetterSdkTested -and $record.actualCameraGetCamSdkTested -and $record.actualCameraWidescreenSdkTested -and $record.actualCamFovSdkTested -and $record.cameraProviderRefusalTransportTested
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {
     foreach ($name in $previousEnvironment.Keys) {

@@ -214,6 +214,9 @@
 #include "../../Client/game_de/CWorldIgnoreEntityDE.h"
 #include "../../Client/game_de/CCameraSphereVisibleDE.h"
 #include "../../Client/game_de/CCameraCamsDE.h"
+#include "../../Client/game_de/CCameraWidescreenDE.h"
+#include "../../Client/game_de/NativeCameraWidescreen.h"
+#include "../../Client/game_de/NativeCameraWidescreenProfile.h"
 #include "../../Client/game_de/NativeCameraSphereVisibleCalls.h"
 #include "../../Client/game_de/NativeStartupMenuCalls.h"
 #include "NativeStartupMenuGraphFixture.h"
@@ -622,6 +625,7 @@ namespace camera_sphere_visible_fixture
 #include "CamTargetFixture.generated.h"
 #include "CamTargetSetterFixture.generated.h"
 #include "CameraCamsFixture.generated.h"
+#include "CameraWidescreenFixture.generated.h"
 
 namespace ClockCameraSphereOwnerTest
 {
@@ -3555,6 +3559,11 @@ namespace ClockWorldIgnoreOwnerTest
 #undef MTA_DE_CAMERA_TARGET_REGISTER_INVOKE
 #undef MTA_DE_CAMERA_TARGET_POINTER_EXCHANGE
 #undef MTA_DE_CAMERA_TARGET_UNREGISTER_INVOKE
+
+#include "WidescreenOwnerTests.inl"
+#define MTA_DE_CAMERA_WIDESCREEN_EXCHANGE ClockCameraWidescreenOwnerTest::Exchange
+#include "../../Client/game_de/NativeCameraWidescreen.cpp"
+#undef MTA_DE_CAMERA_WIDESCREEN_EXCHANGE
 
 #define MTA_DE_CAMERA_DIRECTION_EXCHANGE ClockCameraDirectionOwnerTest::Exchange
 #define MTA_DE_CAMERA_FOV_EXCHANGE       ClockCameraFovWriteOwnerTest::Exchange
@@ -9028,6 +9037,9 @@ namespace
 #include "TargetSetterOwnerTests.inl"
 #undef MTA_DE_CAMERA_TARGET_OWNER_BODY
 #include "GetCamOwnerTests.inl"
+#define MTA_DE_CAMERA_WIDESCREEN_OWNER_BODY
+#include "WidescreenOwnerTests.inl"
+#undef MTA_DE_CAMERA_WIDESCREEN_OWNER_BODY
 // The model fixture consumes the shared byte helpers defined by the earlier
 // private-association fixture; keep its consumer after those definitions.
 #include "../../Client/game_de/CModelInfoDE.h"
@@ -9184,6 +9196,15 @@ int main(int argc, char** argv)
         staticAssociationInitializationUnknown || (argc == 3 && std::strcmp(argv[2], "--static-association-initialization-success") == 0);
     const bool animationStaticAssociationReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-static-association-reads") == 0;
     const bool animationAssociationGroupReadsOnly = argc == 3 && std::strcmp(argv[2], "--animation-association-group-reads") == 0;
+    const bool cameraWidescreenOnly = argc == 3 && std::strncmp(argv[2], "--camera-widescreen-", 20) == 0;
+    unsigned   cameraWidescreenScenario = 6;
+    if (cameraWidescreenOnly)
+    {
+        const char* names[] = {"success", "refusals", "cas-rejected", "write-before", "write-after", "accepted-unverified"};
+        for (unsigned index = 0; index != 6; ++index)
+            if (std::strcmp(argv[2] + 20, names[index]) == 0)
+                cameraWidescreenScenario = index;
+    }
     const bool cameraGetCamOnly = argc == 3 && std::strncmp(argv[2], "--camera-getcam-", 16) == 0;
     unsigned   cameraGetCamScenario = 3;
     if (cameraGetCamOnly)
@@ -9532,12 +9553,12 @@ int main(int argc, char** argv)
            sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly ||
            animationDefinitionBlockNamesOnly || animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly ||
            cameraBasicsOnly || cameraJumpCutOnly || cameraFovWriteOnly || cameraDirectionOnly || cameraRowBorrowOnly || cameraHistoryOnly || cameraTargetOnly ||
-           cameraTargetSetterOnly || cameraGetCamOnly || applicationTimingOnly || emptyBlockRemovalOnly || blockRegistrationOnly || bankPostprocessOnly ||
-           bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly || dynamicClumpOnly || groupFactoriesOnly ||
-           groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly || groupEmptyInitializationOnly ||
-           animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly || animationStaticAssociationReadsOnly ||
-           staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly || privateAssociationsOnly || associationBonesOnly ||
-           associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
+           cameraTargetSetterOnly || cameraGetCamOnly || cameraWidescreenOnly || applicationTimingOnly || emptyBlockRemovalOnly || blockRegistrationOnly ||
+           bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly || dynamicClumpOnly ||
+           groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
+           groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
+           animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
+           privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
     if (presentTransitionClockOnly)
@@ -9715,6 +9736,15 @@ int main(int argc, char** argv)
         fixture.Create(argv[1]);
         // One real module-pinned lifetime needs one pristine host process.
         NativeAnimationBlocksOwnedSdk(fixture, &AnimationAssociationGroupChildProductsOwnerFixture::RunPrepared);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+    if (cameraWidescreenOnly)
+    {
+        Check(cameraWidescreenScenario < 6, "exact finite camera widescreen scenario required");
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        CameraWidescreenOwnerFixture::Run(fixture, cameraWidescreenScenario);
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }

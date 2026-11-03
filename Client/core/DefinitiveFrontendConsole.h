@@ -61,7 +61,8 @@ namespace DefinitiveFrontendConsole
         None,
         Help,
         Clear,
-        Rejected
+        Rejected,
+        MoveAnimTest
     };
     enum class Text : std::uint32_t
     {

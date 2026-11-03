@@ -16,6 +16,7 @@
 #include <game/CGameFrontendInputLease.h>
 #include <game/CGameLocalInputLease.h>
 #include <game/CGameClockService.h>
+#include <game/CGameMoveAnimWorkload.h>
 #include <game/CGamePresentationPolicy.h>
 #include <game/CGameApplicationFrameObservation.h>
 #include <game/CGameStartupObservation.h>
@@ -61,15 +62,23 @@ public:
     bool                BorrowPresentationPolicy(mta::game_de::NativePresentationPolicyBorrow& borrow) noexcept;
     bool                RetirePresentationClient() noexcept;
     bool                EndPresentationPolicy() noexcept;
-    bool                BeginNativeClockService(const mta::game_de::ClockServiceRequestV1& request, mta::game_de::ClockServiceStateV1& state);
-    bool                SubmitNativeClockCommand(const mta::game_de::ClockCommandV1& command);
-    bool                RenewNativeClockService(std::uint64_t generation);
-    bool                ReadNativeClockService(mta::game_de::ClockServiceStateV1& state);
-    bool                EndNativeClockService(std::uint64_t generation);
-    bool                BeginNativeApplicationFrameObservation(const mta::game_de::ClockServiceRequestV1& request, mta::game_de::ClockServiceStateV1& state);
-    bool                ReadNativeApplicationFrameObservation(std::uint64_t generation, mta::game_de::ApplicationFrameObservationStateV1& state);
-    bool                BeginNativeStartupObservation(const mta::game_de::ClockServiceRequestV1& request, mta::game_de::ClockServiceStateV1& state);
-    bool                ReadNativeStartupObservation(std::uint64_t generation, mta::game_de::StartupObservationStateV1& state);
+    // This complete optional group is resolved before any native admission.
+    // A failed Begin remains owned until its separate authoritative End.
+    bool                 HasMoveAnimWorkloadService() const noexcept;
+    bool                 MoveAnimWorkloadPending() const noexcept { return m_moveAnimAttemptPending; }
+    mta::game_de::Status BeginMoveAnimWorkload(const mta::game_de::MoveAnimWorkloadRequestV1&, mta::game_de::MoveAnimWorkloadStateV1&);
+    mta::game_de::Status RenewMoveAnimWorkload(std::uint64_t generation);
+    mta::game_de::Status ReadMoveAnimWorkload(mta::game_de::MoveAnimWorkloadStateV1&);
+    mta::game_de::Status EndMoveAnimWorkload(std::uint64_t generation, mta::game_de::MoveAnimWorkloadStateV1&);
+    bool                 BeginNativeClockService(const mta::game_de::ClockServiceRequestV1& request, mta::game_de::ClockServiceStateV1& state);
+    bool                 SubmitNativeClockCommand(const mta::game_de::ClockCommandV1& command);
+    bool                 RenewNativeClockService(std::uint64_t generation);
+    bool                 ReadNativeClockService(mta::game_de::ClockServiceStateV1& state);
+    bool                 EndNativeClockService(std::uint64_t generation);
+    bool                 BeginNativeApplicationFrameObservation(const mta::game_de::ClockServiceRequestV1& request, mta::game_de::ClockServiceStateV1& state);
+    bool                 ReadNativeApplicationFrameObservation(std::uint64_t generation, mta::game_de::ApplicationFrameObservationStateV1& state);
+    bool                 BeginNativeStartupObservation(const mta::game_de::ClockServiceRequestV1& request, mta::game_de::ClockServiceStateV1& state);
+    bool                 ReadNativeStartupObservation(std::uint64_t generation, mta::game_de::StartupObservationStateV1& state);
     // Preparation is explicit and write-capable. Its returned token belongs
     // to the existing clock Renew/Read/End owner, including failed admission.
     bool                 BeginNativeConstructorPreparation(const mta::game_de::ClockServiceRequestV1& request, mta::game_de::ClockServiceStateV1& state);
@@ -183,8 +192,15 @@ private:
     // A failed Begin may retain a peer holding the allocator or loader lock.
     // Keep diagnostics bounded until unload, and serialize other services
     // until explicit End/Reset acknowledges clock cleanup.
-    bool m_clockDiagnostics = false;
-    bool m_clockAttemptPending = false;
+    decltype(&mta::game_de::BeginGameMoveAnimWorkloadV1) m_moveAnimBegin = nullptr;
+    decltype(&mta::game_de::RenewGameMoveAnimWorkloadV1) m_moveAnimRenew = nullptr;
+    decltype(&mta::game_de::ReadGameMoveAnimWorkloadV1)  m_moveAnimRead = nullptr;
+    decltype(&mta::game_de::EndGameMoveAnimWorkloadV1)   m_moveAnimEnd = nullptr;
+    bool                                                 m_moveAnimAttemptPending = false, m_moveAnimDiagnostics = false, m_moveAnimCompleted = false;
+    std::uint64_t                                        m_moveAnimGeneration = 0;
+    mta::game_de::MoveAnimWorkloadStateV1                m_lastMoveAnimWorkload;
+    bool                                                 m_clockDiagnostics = false;
+    bool                                                 m_clockAttemptPending = false;
     // This is the explicit preparation token, not an additional native lease.
     // Clear only with the same successful clock End/Reset/Shutdown lifecycle.
     std::uint64_t m_constructorPreparationGeneration = 0;

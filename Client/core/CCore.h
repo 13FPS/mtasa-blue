@@ -31,8 +31,13 @@ class CSettings;
     #include "DefinitiveFrontendStartup.h"
     #include "DefinitiveFrontendRuntime.h"
     #include "DefinitiveLocalInputRuntime.h"
+    #include "DefinitiveMoveAnimWorkload.h"
     #include "DefinitivePersistentFrontend.h"
     #include "DefinitiveGuiFrontendInputReference.h"
+namespace DefinitiveFrontendStartup
+{
+    Status ReadRuntimeMoveAnimWorkloadOwner(void*, std::uint32_t, DefinitiveMoveAnimWorkload::ReportV1*) noexcept;
+}
 #endif
 #include "CSingleton.h"
 #include "CGUI.h"
@@ -319,12 +324,17 @@ public:
     // views must never acquire persistence merely by constructing the same UI.
     bool IsFrontendBindingPersistenceEnabled() const noexcept;
     bool ApplyFrontendBindingEdits(CSettings& settings) noexcept;
+    void ExecuteFrontendMoveAnimCommand(const char* parameters) noexcept;
 #endif
 
 private:
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
     friend struct DefinitiveFrontend::Controller;
     friend struct DefinitiveFrontendStartup::Controller;
+    // Only the existing locked/validated cached-read owner may copy this
+    // private report; the Core workload internals remain unpublished.
+    friend DefinitiveFrontendStartup::Status DefinitiveFrontendStartup::ReadRuntimeMoveAnimWorkloadOwner(void*, std::uint32_t,
+                                                                                                         DefinitiveMoveAnimWorkload::ReportV1*) noexcept;
     struct FrontendShellTag
     {
     };
@@ -376,6 +386,10 @@ private:
                                                                 bool                                 fault = false) noexcept;
     bool                                  FlushLocalInputRuntime() noexcept;
     bool                                  LocalInputAllowsFrontend() const noexcept;
+    void                                  PulseFrontendMoveAnimWorkload() noexcept;
+    bool                                  FrontendMoveAnimWorkloadBlocksAdmission() const noexcept;
+    DefinitiveMoveAnimWorkload::ReportV1  ReadFrontendMoveAnimWorkload() const noexcept;
+
 #endif
     void InitializeFrontendInfrastructure();
     void DestroyFrontendCommands();

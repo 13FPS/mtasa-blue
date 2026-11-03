@@ -94,6 +94,11 @@ namespace DefinitiveFrontendStartup
             {
                 if (core->m_DefinitiveAdapter.Pulse())
                 {
+                    if (runtimeMode)
+                    {
+                        core->PulseFrontendMoveAnimWorkload();
+                        RefreshLocalBorrowGate();
+                    }
                     if (state[Pulses] != UINT32_MAX)
                         ++state[Pulses];
                     return Status::Ok;
@@ -387,7 +392,8 @@ namespace DefinitiveFrontendStartup
                 return runtimeStopped ? Status::Stopped : Status::Busy;
             if (state[Phase] != 2)
                 return state[Phase] == 5 ? Status::Failed : Status::Stopped;
-            if (clockPending || !lastClockRetired || core->m_frontendResources || !state[LastViewCleanupComplete])
+            if (clockPending || !lastClockRetired || core->FrontendMoveAnimWorkloadBlocksAdmission() || core->m_frontendResources ||
+                !state[LastViewCleanupComplete])
                 return Status::Busy;
             const auto service = core->ReadFrontendRuntimeServices();
             const auto generation = std::uint64_t{service[Runtime::ViewGenerationLow]} | (std::uint64_t{service[Runtime::ViewGenerationHigh]} << 32);
@@ -456,7 +462,7 @@ namespace DefinitiveFrontendStartup
                 return Status::Busy;
             if (state[Phase] != 2 || !core || !core->m_DefinitiveAdapter.IsStarted())
                 return state[Phase] == 5 ? Status::Failed : Status::Stopped;
-            return core->m_frontendResources || !state[LastViewCleanupComplete] ? Status::Busy : Status::Ok;
+            return core->FrontendMoveAnimWorkloadBlocksAdmission() || core->m_frontendResources || !state[LastViewCleanupComplete] ? Status::Busy : Status::Ok;
         }
 
         void RefreshLocalBorrowGate() noexcept
@@ -468,8 +474,8 @@ namespace DefinitiveFrontendStartup
                 // rebind instead of trusting its previous ExactImageBound bit.
                 state[ExactImageBound] =
                     (core->m_DefinitiveAdapter.GetCapabilities() & mta::game_de::NativePadBindingCapabilities) == mta::game_de::NativePadBindingCapabilities;
-                core->m_frontendStartupAccepting =
-                    state[Phase] == 2 && !runtimeStopping && !runtimeStopped && !clockPending && lastClockRetired && core->LocalInputAllowsFrontend();
+                core->m_frontendStartupAccepting = state[Phase] == 2 && !runtimeStopping && !runtimeStopped && !clockPending && lastClockRetired &&
+                                                   !core->FrontendMoveAnimWorkloadBlocksAdmission() && core->LocalInputAllowsFrontend();
             }
         }
 
@@ -550,7 +556,8 @@ namespace DefinitiveFrontendStartup
                 return Status::InvalidArgument;
             if (!core)
                 return Status::Stopped;
-            if (clockPending || !lastClockRetired || core->m_frontendResources || !state[LastViewCleanupComplete])
+            if (clockPending || !lastClockRetired || core->FrontendMoveAnimWorkloadBlocksAdmission() || core->m_frontendResources ||
+                !state[LastViewCleanupComplete])
                 return Status::Busy;
             core->m_frontendStartupAccepting = false;
             const auto result = core->StopLocalInputRuntime(disable);
@@ -608,7 +615,10 @@ namespace DefinitiveFrontendStartup
                 return Status::Failed;
             // A stopped frontend still borrows Core until its Release. Clock
             // ownership cannot overlap that GUI owner or an unretired view.
-            return core->m_frontendResources || !state[LastViewCleanupComplete] || !core->LocalInputAllowsFrontend() ? Status::Busy : Status::Ok;
+            return core->FrontendMoveAnimWorkloadBlocksAdmission() || core->m_frontendResources || !state[LastViewCleanupComplete] ||
+                           !core->LocalInputAllowsFrontend()
+                       ? Status::Busy
+                       : Status::Ok;
         }
 
         Status PrepareClock() noexcept
@@ -934,6 +944,23 @@ namespace DefinitiveFrontendStartup
         return activeStartup->ReadRuntimeAdmission(*output);
     }
 
+    Status ReadRuntimeMoveAnimWorkloadOwner(void* handle, std::uint32_t version, DefinitiveMoveAnimWorkload::ReportV1* output) noexcept
+    {
+        Operation  operation;
+        const auto status = operation.Validate(handle);
+        if (status != Status::Ok)
+            return status;
+        if (!activeStartup->runtimeMode || version != DefinitiveMoveAnimWorkload::ApiVersion || !output || output->size != sizeof(*output) ||
+            output->version != DefinitiveMoveAnimWorkload::ApiVersion ||
+            std::any_of(std::begin(output->reserved), std::end(output->reserved), [](auto value) { return value != 0; }))
+            return Status::InvalidArgument;
+        if (!activeStartup->core)
+            return Status::Stopped;
+        const auto next = activeStartup->core->ReadFrontendMoveAnimWorkload();
+        *output = next;
+        return Status::Ok;
+    }
+
     Status PulseRuntimeOwner(void* handle) noexcept
     {
         Operation  operation;
@@ -1094,6 +1121,10 @@ namespace DefinitiveFrontendRuntime
     Status ReadAdmissionOwner(void* handle, mta::game_de::FrontendAdmissionStateV1* output) noexcept
     {
         return DefinitiveFrontendStartup::ReadRuntimeAdmissionOwner(handle, output);
+    }
+    Status ReadMoveAnimWorkloadOwner(void* handle, std::uint32_t version, DefinitiveMoveAnimWorkload::ReportV1* output) noexcept
+    {
+        return DefinitiveFrontendStartup::ReadRuntimeMoveAnimWorkloadOwner(handle, version, output);
     }
     Status PulseOwner(void* handle) noexcept
     {

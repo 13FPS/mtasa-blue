@@ -50,6 +50,8 @@
 #include "NativePedClothesCalls.h"
 #include "NativePedRebuildCalls.h"
 #include "NativePedMoveAnimReader.h"
+#include "NativePedMoveAnimProfile.h"
+#include "NativePlayerMoveAnimReapplyProfile.h"
 #include "NativePlayerMoveAnimReapply.h"
 #include "NativePlayerMoveAnimGroupWrite.h"
 #include "NativePlayerMoveAnimHookController.h"
@@ -345,6 +347,9 @@ namespace mta::game_de
             ClockResult PublishPlayerMoveAnimOverride(const NativePedReferenceToken&, std::int32_t) noexcept override;
             ClockResult WithdrawPlayerMoveAnimOverride(const NativePedReferenceToken&) noexcept override;
             ClockResult RetirePlayerMoveAnimHooks() noexcept override;
+            ClockResult ReadCurrentPlayerMoveAnimCandidate(std::uint32_t&, std::uint32_t&, std::int32_t&) noexcept override;
+            ClockResult CheckPlayerMoveAnimWorkloadGroup(std::int32_t) noexcept override;
+
             ClockResult InitializePedClothesDescriptor(NativeClothesDescriptorStorage&) noexcept override;
             ClockResult ReadReferencedPedIntelligence(const NativePedReferenceToken&, NativePedIntelligenceReader::Value&) noexcept override;
             ClockResult ReadTaskPoolEntry(std::uintptr_t, NativeTaskPoolReader::Value&) noexcept override;
@@ -9813,6 +9818,178 @@ namespace mta::game_de
                 !Image::ReadImage(runtime.image, row, &publishedAfter, sizeof(publishedAfter), true) || publishedAfter != published)
                 return ClockResult::BindingChanged;
             output = after;
+            return ClockResult::Ok;
+        }
+        // These read-only facts own no CPU registry mutation. Holding the
+        // producer's fail-fast ApiOperation during deep profile/row checks
+        // would reject concurrent lease renewal; the genuine AfterApp and
+        // final source/world anchors below supply their complete authority.
+        ClockResult NativeAccess::ReadCurrentPlayerMoveAnimCandidate(std::uint32_t& handleOutput, std::uint32_t& selectorOutput,
+                                                                     std::int32_t& groupOutput) noexcept
+        {
+            auto result = CheckApplicationTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            namespace Player = NativePlayerInfoProfile;
+            namespace Pool = NativePedPoolProfile;
+            namespace D = NativeStreamingCompletionContext;
+            const auto image = runtime.image;
+            if (!NativePedPoolReader::Revalidate({image}))
+                return ClockResult::BindingChanged;
+            // These existing three units prove the selected native row,
+            // player constructor/data publication and exact control vtable.
+            std::array<unsigned char, 512> bytes{};
+            for (std::size_t index = 0; index != 3; ++index)
+            {
+                const auto& unit = Player::Code[index];
+                if (!unit.size || unit.size > bytes.size() || !Image::ReadImage(image, image + unit.rva, bytes.data(), unit.size, false, true) ||
+                    std::memcmp(bytes.data(), unit.bytes.data(), unit.size))
+                    return ClockResult::BindingChanged;
+            }
+            // The saved whole reapply consumer supplies the exact selected
+            // player-index byte use, independently of constructor row shape.
+            const auto& selectedPlayer = NativePlayerMoveAnimReapplyProfile::Pins[7];
+            if (selectedPlayer.size > bytes.size() || !Image::ReadImage(image, image + selectedPlayer.rva, bytes.data(), selectedPlayer.size, false, true) ||
+                std::memcmp(bytes.data(), selectedPlayer.bytes, selectedPlayer.size))
+                return ClockResult::BindingChanged;
+            D::Value world;
+            if ((result = D::Capture(image, world)) != ClockResult::Ok)
+                return result;
+            unsigned char  selector = 0, generation = 0;
+            std::uintptr_t pool = 0, objects = 0, flags = 0, pedAddress = 0;
+            std::int32_t   capacity = 0;
+            if (!Image::ReadImage(image, image + Player::PlayerIndexRva, &selector, sizeof(selector), true) || selector > 1 ||
+                !Image::ReadImage(image, image + Pool::RootRva, &pool, sizeof(pool), true) || !pool || !D::At(pool, Pool::ObjectsOffset, objects) ||
+                !D::At(pool, Pool::FlagsOffset, flags) || !D::At(pool, Pool::CapacityOffset, capacity) || !objects || !flags ||
+                capacity != static_cast<std::int32_t>(Pool::NativeCapacity))
+                return ClockResult::BindingChanged;
+            const auto row = image + Player::BankRva + static_cast<std::uintptr_t>(selector) * Player::RowBytes;
+            if (!Image::ReadImage(image, row, &pedAddress, sizeof(pedAddress), true) || !pedAddress)
+                return ClockResult::NotInitialized;
+            if (pedAddress < objects || (pedAddress - objects) % Pool::ObjectStride)
+                return ClockResult::BindingChanged;
+            const auto slot = (pedAddress - objects) / Pool::ObjectStride;
+            if (slot >= Pool::NativeCapacity || !D::Copy(flags + slot, &generation, sizeof(generation)) || (generation & Pool::EmptyBit))
+                return ClockResult::BindingChanged;
+            const auto                 handle = (static_cast<std::uint32_t>(slot) << 8) | generation;
+            NativePedPoolReader::Value ped;
+            if ((result = NativePedPoolReader({image}, &CheckApplicationTimingOwner).Resolve(handle, ped)) != ClockResult::Ok)
+                return result;
+            if (ped.nativePed != pedAddress || ped.vtable != image + Player::PlayerVtableRva)
+                return ClockResult::BindingChanged;
+            NativePedMetadata metadata;
+            if ((result = NativePedMetadataMemory({image}, &CheckApplicationTimingOwner).Read(ped, metadata)) != ClockResult::Ok)
+                return result;
+            if (metadata.entityType != 3)
+                return ClockResult::UnsupportedBuild;
+            std::int32_t   pedSelector = -1, group = 0;
+            std::uintptr_t data = 0;
+            if (!D::At(pedAddress, 0x7e0, pedSelector) || pedSelector != selector || !D::At(pedAddress, 0x5f0, data) || data != row + 8)
+                return ClockResult::BindingChanged;
+            if ((result = NativePedMoveAnimReader({image}, &CheckApplicationTimingOwner).Read(ped, group)) != ClockResult::Ok ||
+                (result = NativePedPoolReader({image}, &CheckApplicationTimingOwner).Recheck(ped)) != ClockResult::Ok ||
+                (result = CheckApplicationTimingOwner()) != ClockResult::Ok)
+                return result;
+#if defined(MTA_DE_MOVEANIM_WORKLOAD_FINAL_READ_PROBE)
+            // Owned tests may alter their data after the genuine final owner
+            // check. Shipping builds have no callback or substitute authority.
+            MTA_DE_MOVEANIM_WORKLOAD_FINAL_READ_PROBE(image);
+#endif
+            // No callback follows these final live roots/slot/row/world
+            // anchors. The fact is not a native lease or an acquired token.
+            unsigned char  finalSelector = 0, finalGeneration = 0;
+            std::uintptr_t finalPool = 0, finalObjects = 0, finalFlags = 0, finalPed = 0, finalData = 0, finalVtable = 0, finalMethod = 0;
+            std::int32_t   finalPedSelector = -1, finalGroup = 0, finalCapacity = 0, finalCursor = 0;
+            unsigned char  finalOwns = 0;
+            if (!Image::ReadImage(image, image + Player::PlayerIndexRva, &finalSelector, sizeof(finalSelector), true) || finalSelector != selector ||
+                !Image::ReadImage(image, image + Pool::RootRva, &finalPool, sizeof(finalPool), true) || finalPool != pool ||
+                !D::At(pool, Pool::ObjectsOffset, finalObjects) || finalObjects != objects || !D::At(pool, Pool::FlagsOffset, finalFlags) ||
+                finalFlags != flags || !D::At(pool, Pool::CapacityOffset, finalCapacity) || finalCapacity != ped.capacity ||
+                !D::At(pool, Pool::CursorOffset, finalCursor) || finalCursor != ped.cursor || !D::At(pool, Pool::OwnsOffset, finalOwns) ||
+                finalOwns != ped.ownsAllocations || !D::Copy(flags + slot, &finalGeneration, sizeof(finalGeneration)) || finalGeneration != generation ||
+                !Image::ReadImage(image, row, &finalPed, sizeof(finalPed), true) || finalPed != pedAddress || !D::At(pedAddress, 0, finalVtable) ||
+                finalVtable != ped.vtable || !Image::ReadImage(image, finalVtable, &finalMethod, sizeof(finalMethod)) || finalMethod != ped.firstMethod ||
+                !D::At(pedAddress, 0x7e0, finalPedSelector) || finalPedSelector != pedSelector || !D::At(pedAddress, 0x5f0, finalData) || finalData != data ||
+                !D::At(pedAddress, NativePedMoveAnimProfile::GroupOffset, finalGroup) || finalGroup != group || !D::Fence(image, world))
+                return ClockResult::BindingChanged;
+            handleOutput = handle;
+            selectorOutput = selector;
+            groupOutput = group;
+            return ClockResult::Ok;
+        }
+        ClockResult NativeAccess::CheckPlayerMoveAnimWorkloadGroup(std::int32_t group) noexcept
+        {
+            if (group < 54 || group > 56)
+                return ClockResult::InvalidArgument;
+            auto result = CheckApplicationTimingOwner();
+            if (result != ClockResult::Ok)
+                return result;
+            const auto image = runtime.image;
+            using M = NativeAnimationManagerMemory;
+            namespace G = NativeAnimationGroupArrayProfile;
+            namespace B = NativeAnimationBlockProfile;
+            namespace D = NativeStreamingCompletionContext;
+            M                                             memory({image}, &CheckApplicationTimingOwner);
+            NativeAnimationAssociationGroupReferenceToken token;
+            bool                                          loaded = false;
+            if ((result = memory.ResolveAssociationGroup(static_cast<std::uint32_t>(group), token)) != ClockResult::Ok ||
+                (result = memory.ReadAssociationGroupLoaded(token, loaded)) != ClockResult::Ok)
+                return result;
+            if (!loaded)
+                return ClockResult::NotInitialized;
+            // The classic setter's block-pointer/hierarchy validity is not
+            // this trial's separate already-loaded/no-Request requirement.
+            // Reuse the actual typed loaded query without changing that SDK
+            // policy or the persistent hook's original group decisions.
+            M::AssociationGroupCopySource before, after;
+            if ((result = memory.ReadAssociationGroupCopySource(token, 0, before)) != ClockResult::Ok)
+                return result;
+            std::uintptr_t block = 0;
+            std::memcpy(&block, before.parent32.data(), sizeof(block));
+            const auto                             bank = image + B::BankRva;
+            std::int32_t                           blockCount = 0;
+            std::array<unsigned char, B::RowBytes> blockBefore{}, blockAfter{};
+            if (!block || block < bank || (block - bank) % B::RowBytes ||
+                !Image::ReadImage(image, image + B::CountRva, &blockCount, sizeof(blockCount), true) || blockCount < 0 ||
+                static_cast<std::uint32_t>(blockCount) > B::ObservationLimit || (block - bank) / B::RowBytes >= static_cast<std::uint32_t>(blockCount) ||
+                !Image::ReadImage(image, block, blockBefore.data(), blockBefore.size(), true) || !blockBefore[B::LoadedOffset])
+                return ClockResult::BindingChanged;
+            D::Value world;
+            if ((result = D::Capture(image, world)) != ClockResult::Ok || (result = memory.ReadAssociationGroupLoaded(token, loaded)) != ClockResult::Ok)
+                return result;
+            if (!loaded)
+                return ClockResult::NotInitialized;
+            if ((result = memory.ReadAssociationGroupCopySource(token, 0, after)) != ClockResult::Ok)
+                return result;
+            if (after.group.locator != token.locator || before.group.locator != after.group.locator || before.groups != after.groups ||
+                before.children != after.children || before.groupCapacity != after.groupCapacity || before.childCapacity != after.childCapacity ||
+                before.groupCount != after.groupCount || before.rawIdOffset != after.rawIdOffset || before.parent32 != after.parent32 ||
+                !Image::ReadImage(image, block, blockAfter.data(), blockAfter.size(), true) || blockBefore != blockAfter)
+                return ClockResult::BindingChanged;
+            if ((result = CheckApplicationTimingOwner()) != ClockResult::Ok)
+                return result;
+            // Loaded observations above can invoke owner callbacks. Qualify
+            // all hierarchy rows LAST so none follow their final source seals;
+            // the remaining raw checks then preserve the typed loaded fact.
+            if ((result = QualifyMoveAnimHookGroup(group)) != ClockResult::Ok)
+                return result;
+            // No owner callback follows these roots/cookies/parent/block/world
+            // seals. A copied loaded fact grants no block reference or lease.
+            std::uintptr_t                         groups = 0;
+            std::int32_t                           groupCount = 0, finalBlockCount = 0;
+            std::uint64_t                          groupCapacity = 0, childCapacity = 0;
+            std::array<unsigned char, G::RowBytes> parent{};
+            std::array<unsigned char, B::RowBytes> finalBlock{};
+            if (runtime.image != image || after.groups < G::CookieBytes || after.children < NativeAnimationStaticAssociationProfile::CookieBytes ||
+                !Image::ReadImage(image, image + G::GlobalRva, &groups, sizeof(groups), true) || groups != after.groups ||
+                !Image::ReadImage(image, image + G::CountRva, &groupCount, sizeof(groupCount), true) || groupCount != after.groupCount ||
+                !NativeModelReferenceMap::Copy(groups - G::CookieBytes, &groupCapacity, sizeof(groupCapacity)) || groupCapacity != after.groupCapacity ||
+                !NativeModelReferenceMap::Copy(after.children - NativeAnimationStaticAssociationProfile::CookieBytes, &childCapacity, sizeof(childCapacity)) ||
+                childCapacity != after.childCapacity || !NativeModelReferenceMap::Copy(token.locator, parent.data(), parent.size()) ||
+                parent != after.parent32 || !Image::ReadImage(image, image + B::CountRva, &finalBlockCount, sizeof(finalBlockCount), true) ||
+                finalBlockCount != blockCount || !Image::ReadImage(image, block, finalBlock.data(), finalBlock.size(), true) || finalBlock != blockAfter ||
+                !finalBlock[B::LoadedOffset] || !D::Fence(image, world))
+                return ClockResult::BindingChanged;
             return ClockResult::Ok;
         }
         struct MoveAnimWriteIntent

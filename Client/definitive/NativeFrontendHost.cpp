@@ -6,6 +6,7 @@
 #include "NativeFrontendActivation.h"
 #include "NativeFrontendStartupIntent.h"
 #include "CoreStartupReference.h"
+#include "FrontendMoveAnimWorkloadGate.h"
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
@@ -190,6 +191,8 @@ namespace deonline
         FrontendAdmissionSample::Snapshot admissionSample{};
         std::uint32_t                     loggedAdmissionStatus = UINT32_MAX, loggedAdmissionKind = UINT32_MAX;
         bool                              loggedIntentPending = startupIntent.Pending();
+        bool                              moveAnimBlocked = false;
+        std::uint32_t                     loggedMovePhase = UINT32_MAX, loggedMoveNativePhase = UINT32_MAX, loggedMoveResult = UINT32_MAX;
         bool                              togglePending = false, stopSent = false;
         while (generation)
         {
@@ -222,6 +225,36 @@ namespace deonline
                     report[N::WorkerPhase] >= static_cast<std::uint32_t>(R::Phase::Hidden) &&
                     report[N::WorkerPhase] <= static_cast<std::uint32_t>(R::Phase::Hiding))
                     report[N::HostPhase] = static_cast<std::uint32_t>(N::Phase::Running);
+            }
+            DefinitiveMoveAnimWorkload::ReportV1 moveAnimSample;
+            if (runtime.CaptureFrontendMoveAnimWorkload(generation, moveAnimSample))
+            {
+                moveAnimBlocked = FrontendMoveAnimWorkloadGate::Blocks(moveAnimSample);
+                const auto phase = static_cast<std::uint32_t>(moveAnimSample.phase);
+                const auto nativePhase = static_cast<std::uint32_t>(moveAnimSample.native.phase);
+                const auto result = static_cast<std::uint32_t>(moveAnimSample.native.result);
+                if (phase != loggedMovePhase || nativePhase != loggedMoveNativePhase || result != loggedMoveResult)
+                {
+                    char        line[900]{};
+                    const auto& value = moveAnimSample.native;
+                    const auto  length = std::snprintf(
+                        line, sizeof(line),
+                        "{\"schema\":\"mta_native_moveanim_workload_v1\",\"runtime_generation\":%u,\"phase\":%u,\"native_phase\":%u,\"result\":%u,"
+                         "\"queued\":%u,\"pending\":%u,\"selector\":%u,\"handle\":%u,\"group\":%d,\"write_ack\":%u,\"reapply_ack\":%u,"
+                         "\"withdraw_ack\":%u,\"release_ack\":%u,\"end_ack\":%u,\"owner_end\":%u,\"not_entered\":%u,\"cleanup_pending\":%u,"
+                         "\"physical_confirmation_required\":true,\"full_mta_ready\":false}\n",
+                        generation, phase, nativePhase, result, moveAnimSample.queued, moveAnimSample.attemptPending, value.selector, value.handle,
+                        value.selectedGroup, value.writeAcknowledged, value.reapplyAcknowledged, value.withdrawAcknowledged, value.releaseAcknowledged,
+                        value.endAcknowledged, value.cleanupViaOwnerEnd, value.notEntered, value.cleanupPending);
+                    DWORD written = 0;
+                    if (length > 0 && static_cast<std::size_t>(length) < sizeof(line) && WriteFile(log, line, static_cast<DWORD>(length), &written, nullptr) &&
+                        written == static_cast<DWORD>(length) && FlushFileBuffers(log))
+                    {
+                        loggedMovePhase = phase;
+                        loggedMoveNativePhase = nativePhase;
+                        loggedMoveResult = result;
+                    }
+                }
             }
             if (poll != 0)
             {
@@ -304,12 +337,12 @@ namespace deonline
             else if (togglePending && focused && captured && !runtime.ReadFrontendRuntime(R::OutstandingSequence))
             {
                 const auto phase = static_cast<R::Phase>(report[N::WorkerPhase]);
-                if (phase == R::Phase::Hidden)
+                if (phase == R::Phase::Hidden && !moveAnimBlocked)
                     togglePending = !command(R::Command::Show);
                 else if (phase == R::Phase::Visible)
                     togglePending = !command(R::Command::Hide);
             }
-            else if (captured && admissionCaptured &&
+            else if (captured && admissionCaptured && !moveAnimBlocked &&
                      startupIntent.ShouldShow(runtimeSample, admissionSample, focused, togglePending || keys != 0, GetTickCount64()))
             {
                 if (command(R::Command::Show))

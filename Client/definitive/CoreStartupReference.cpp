@@ -4,6 +4,8 @@
  *****************************************************************************/
 
 #include "CoreStartupReference.h"
+#include "FrontendMoveAnimWorkloadGate.h"
+#include <cstring>
 #include "../core/DefinitiveFrontend.h"
 #include "../sdk/game/CGameAdapter.h"
 #include <algorithm>
@@ -180,6 +182,7 @@ namespace deonline
         bindingPersistenceRequested = configuredBindingPersistence;
         loadedWorldAutoShowRequested = configuredLoadedWorldAutoShow;
         frontendAdmissionCache.Reset();
+        moveAnimWorkloadCache.Reset();
         localInputRuntimeCache.Reset();
         capturedLocalInputRuntime = {};
         runtimeCache.Reset();
@@ -855,6 +858,23 @@ namespace deonline
                ownerThread.load() == GetCurrentThreadId() && frontendAdmissionCache.Capture(output);
     }
 
+    bool CoreStartupReference::CaptureFrontendMoveAnimWorkload(std::uint32_t generation, DefinitiveMoveAnimWorkload::ReportV1& output) const noexcept
+    {
+        // This independent copied report never consumes reserved runtime words
+        // or calls Core from the script/controller thread. No old sample can
+        // lend a different runtime generation admission to a view or input.
+        MoveAnimWorkloadWords workloadWords{};
+        if (!frontendRuntimeRequested || !generation || generation != runtimeMailbox.Generation() || ownerThread.load() != GetCurrentThreadId() ||
+            !moveAnimWorkloadCache.Capture(workloadWords))
+            return false;
+        DefinitiveMoveAnimWorkload::ReportV1 next;
+        std::memcpy(&next, workloadWords.data(), sizeof(next));
+        if (!FrontendMoveAnimWorkloadGate::Valid(next))
+            return false;
+        output = next;
+        return true;
+    }
+
     bool CoreStartupReference::CaptureLocalInputRuntime() noexcept
     {
         return localInputRuntimeRequested && ownerThread.load() == GetCurrentThreadId() && localInputRuntimeCache.Capture(capturedLocalInputRuntime);
@@ -1287,10 +1307,12 @@ namespace deonline
         const auto read = reinterpret_cast<C::Read>(GetProcAddress(core, "MTA_ReadDEFrontendRuntime"));
         const auto pulse = reinterpret_cast<C::Pulse>(GetProcAddress(core, "MTA_PulseDEFrontendRuntime"));
         const auto admission = reinterpret_cast<C::ReadAdmission>(GetProcAddress(core, "MTA_ReadDEFrontendRuntimeAdmissionV1"));
-        const auto view = reinterpret_cast<C::RunView>(GetProcAddress(core, "MTA_RunDEFrontendRuntimeView"));
-        const auto shutdown = reinterpret_cast<C::Shutdown>(GetProcAddress(core, "MTA_ShutdownDEFrontendRuntime"));
-        const auto release = reinterpret_cast<C::Release>(GetProcAddress(core, "MTA_ReleaseDEFrontendRuntime"));
-        const auto enableBindingPersistence =
+        const auto moveAnimRead = reinterpret_cast<C::ReadMoveAnimWorkload>(GetProcAddress(core, "MTA_ReadDEFrontendRuntimeMoveAnimWorkloadV1"));
+        FrontendMoveAnimWorkloadGate moveAnimGate(moveAnimRead != nullptr);
+        const auto                   view = reinterpret_cast<C::RunView>(GetProcAddress(core, "MTA_RunDEFrontendRuntimeView"));
+        const auto                   shutdown = reinterpret_cast<C::Shutdown>(GetProcAddress(core, "MTA_ShutdownDEFrontendRuntime"));
+        const auto                   release = reinterpret_cast<C::Release>(GetProcAddress(core, "MTA_ReleaseDEFrontendRuntime"));
+        const auto                   enableBindingPersistence =
             reinterpret_cast<C::EnableBindingPersistence>(GetProcAddress(core, "MTA_EnableDEFrontendRuntimeBindingPersistenceV1"));
         const auto localVersion = reinterpret_cast<Version>(GetProcAddress(core, "MTA_DELocalInputRuntimeApiVersion"));
         const auto localConfigure = reinterpret_cast<L::Configure>(GetProcAddress(core, "MTA_ConfigureDELocalInputRuntime"));
@@ -1460,6 +1482,27 @@ namespace deonline
             localInputRuntimeCache.Publish(sample);
             return true;
         };
+        const auto sampleMoveAnim = [&]() noexcept
+        {
+            if (!moveAnimRead)
+                return true;
+            DefinitiveMoveAnimWorkload::ReportV1 sample;
+            try
+            {
+                if (moveAnimRead(handle, DefinitiveMoveAnimWorkload::ApiVersion, &sample) != Status::Ok || !moveAnimGate.Observe(sample))
+                    return false;
+            }
+            catch (...)
+            {
+                return false;
+            }
+            MoveAnimWorkloadWords values{};
+            std::memcpy(values.data(), &sample, sizeof(sample));
+            moveAnimWorkloadCache.Publish(values);
+            if (moveAnimGate.Blocks())
+                localConfigured = false;
+            return true;
+        };
         const auto retireLocal = [&](bool final) noexcept
         {
             if (!localInputRuntimeRequested)
@@ -1496,6 +1539,12 @@ namespace deonline
         const auto configureLocal = [&]() noexcept
         {
             if (!localInputRuntimeRequested)
+                return true;
+            if (!sampleMoveAnim())
+                return false;
+            // Busy while Core owns this explicit workload is a deferral, not
+            // an input failure. Core's hidden Pulse drives its real End owner.
+            if (moveAnimGate.Blocks())
                 return true;
             L::RequestV1 request;
             request.window = localWindow;
@@ -1594,6 +1643,25 @@ namespace deonline
                     runtimeReport[R::HostExpiryObserved] = 1;
                     fail(R::Failure::HostExpired, R::StopReason::HostExpired);
                     break;
+                }
+                if (!sampleMoveAnim())
+                {
+                    fail(R::Failure::CoreRead);
+                    break;
+                }
+                if (pending.command == R::Command::Show && moveAnimGate.Blocks())
+                {
+                    // Keep the actual command pending; a fresh Stop still
+                    // supersedes it at the top of the next loop. Suspending
+                    // input here would spin on Busy without advancing Core.
+                    if (pulse(handle) != Status::Ok || !sampleMoveAnim())
+                    {
+                        fail(R::Failure::CoreState);
+                        break;
+                    }
+                    PublishRuntime();
+                    Sleep(50);
+                    continue;
                 }
                 if (pending.command == R::Command::Hide)
                 {
@@ -1826,7 +1894,22 @@ namespace deonline
                     fail(R::Failure::CoreState);
                     break;
                 }
-                if (localInputRuntimeRequested && localConfigured && runtimeReport[R::WorkerPhase] == static_cast<std::uint32_t>(R::Phase::Hidden))
+                if (!sampleMoveAnim())
+                {
+                    fail(R::Failure::CoreRead);
+                    break;
+                }
+                if (localInputRuntimeRequested && !localConfigured && runtimeReport[R::ViewsRetired] && !moveAnimGate.Blocks() &&
+                    runtimeReport[R::WorkerPhase] == static_cast<std::uint32_t>(R::Phase::Hidden) && runtimeMailbox.Pending().command == R::Command::None)
+                {
+                    if (!configureLocal())
+                    {
+                        fail(R::Failure::CoreState);
+                        break;
+                    }
+                }
+                if (localInputRuntimeRequested && localConfigured && !moveAnimGate.Blocks() &&
+                    runtimeReport[R::WorkerPhase] == static_cast<std::uint32_t>(R::Phase::Hidden))
                 {
                     const auto status = localPulse(handle);
                     if (!sampleLocal() || (status != Status::Ok && status != Status::Busy))
@@ -1862,7 +1945,11 @@ namespace deonline
                 Sleep(250);
             };
             Status status = Status::Busy;
-            if (!retireLocal(true))
+            // A new Core's optional workload contract owns the internal
+            // workload/input shutdown order. Calling localDisable first can
+            // wait forever on its Busy while never letting Core retire the
+            // real movement owner. Older Cores keep the original order.
+            if (!moveAnimGate.CoreOwnsShutdown() && !retireLocal(true))
             {
                 fail(R::Failure::Shutdown);
                 retain();
@@ -1884,6 +1971,14 @@ namespace deonline
             runtimeReport[R::LastCoreStatus] = static_cast<std::uint32_t>(status);
             if (status != Status::Ok || !sampleCore(R::CoreStage::Stopped) || !stopped(lastCore))
             {
+                fail(R::Failure::Shutdown);
+                retain();
+            }
+            if (moveAnimRead && (!sampleMoveAnim() || moveAnimGate.Blocks()))
+            {
+                // Publish the actual Core-owned End result before its handle
+                // is released. A stopped legacy snapshot alone cannot retire
+                // the independent optional workload's token/resource debt.
                 fail(R::Failure::Shutdown);
                 retain();
             }

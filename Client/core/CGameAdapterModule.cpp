@@ -56,7 +56,8 @@ void CGameAdapterModule::SetError(const char* error) noexcept
         // Native render and clock leases can retain allocator-owning peers.
         // Capacity is reserved before Begin; diagnostics must not grow it
         // until the provider acknowledges cleanup.
-        if ((m_renderObservationV6 || m_clockDiagnostics || m_localLeaseDiagnostics || m_presentationDiagnostics) && std::strlen(error) > m_error.capacity())
+        if ((m_renderObservationV6 || m_clockDiagnostics || m_moveAnimDiagnostics || m_localLeaseDiagnostics || m_presentationDiagnostics) &&
+            std::strlen(error) > m_error.capacity())
         {
             m_error.clear();
             return;
@@ -165,6 +166,16 @@ bool CGameAdapterModule::Start(CCoreInterface* owner, const std::wstring& absolu
     }
     resolveClock(m_gameTimeRead, "ReadGameTimeStateV1");
     resolveClock(m_frontendAdmissionRead, "ReadGameFrontendAdmissionV1");
+    resolveClock(m_moveAnimBegin, "BeginGameMoveAnimWorkloadV1");
+    resolveClock(m_moveAnimRenew, "RenewGameMoveAnimWorkloadV1");
+    resolveClock(m_moveAnimRead, "ReadGameMoveAnimWorkloadV1");
+    resolveClock(m_moveAnimEnd, "EndGameMoveAnimWorkloadV1");
+    if (!m_moveAnimBegin || !m_moveAnimRenew || !m_moveAnimRead || !m_moveAnimEnd)
+        m_moveAnimBegin = nullptr, m_moveAnimRenew = nullptr, m_moveAnimRead = nullptr, m_moveAnimEnd = nullptr;
+    m_moveAnimAttemptPending = m_moveAnimDiagnostics = m_moveAnimCompleted = false;
+    m_moveAnimGeneration = 0;
+    m_lastMoveAnimWorkload = {};
+
     resolveClock(m_localLeaseBegin, "BeginGameLocalInputLeaseV1");
     resolveClock(m_localLeaseRenew, "RenewGameLocalInputLeaseV1");
     resolveClock(m_localLeaseRead, "ReadGameLocalInputLeaseV1");
@@ -235,7 +246,7 @@ bool CGameAdapterModule::RequireOwnerThread(const char* operation)
     }
     if (m_ownerThread != GetCurrentThreadId())
     {
-        if (m_renderObservationV6 || m_clockDiagnostics || m_localLeaseDiagnostics || m_presentationDiagnostics)
+        if (m_renderObservationV6 || m_clockDiagnostics || m_moveAnimDiagnostics || m_localLeaseDiagnostics || m_presentationDiagnostics)
             SetError("Game adapter callback requires its owning Core thread");
         else
             m_error = std::string(operation) + ": game adapter callback requires its owning Core thread";
@@ -251,7 +262,7 @@ bool CGameAdapterModule::RecordStatus(mta::game_de::Status status, const char* o
         m_error.clear();
         return true;
     }
-    if (m_renderObservationV6 || m_clockDiagnostics || m_localLeaseDiagnostics || m_presentationDiagnostics)
+    if (m_renderObservationV6 || m_clockDiagnostics || m_moveAnimDiagnostics || m_localLeaseDiagnostics || m_presentationDiagnostics)
     {
         // Stack formatting avoids even a temporary CRT allocation after a
         // provider failure has retained suspended peers for cleanup retry.
@@ -398,6 +409,12 @@ bool CGameAdapterModule::Pulse()
 
 bool CGameAdapterModule::RequireClockRetired()
 {
+    if (m_moveAnimAttemptPending)
+    {
+        SetError("Retire the movement workload before another native service");
+        return false;
+    }
+
     if (m_presentationCleanupPossible)
     {
         SetError("Retire the failed presentation attempt before another service or loader lookup");
@@ -423,6 +440,13 @@ bool CGameAdapterModule::Reset()
     // epoch or invalidate that dependency behind the object's lifetime.
     if (!RequireOwnerThread("Reset"))
         return false;
+    if (m_moveAnimAttemptPending)
+    {
+        // Reset is not evidence that this separate native workload retired.
+        SetError("End the movement workload before adapter Reset");
+        return false;
+    }
+
     if (m_presentationBorrow && m_presentationBorrow->client.clientGeneration)
     {
         SetError("Retire the constructed presentation client before adapter Reset");
@@ -637,6 +661,147 @@ bool CGameAdapterModule::EndLocalInputLease(std::uint64_t generation)
         return false;
     m_localLeaseAttemptPending = false;
     return true;
+}
+
+namespace
+{
+    bool ValidMoveAnimReport(const mta::game_de::MoveAnimWorkloadStateV1& state) noexcept
+    {
+        using namespace mta::game_de;
+        if (state.size != sizeof(state) || state.version != MoveAnimWorkloadVersionV1 || state.owner.size != sizeof(state.owner) ||
+            state.owner.version != ClockServiceVersionV1 || state.physicalConfirmationRequired != 1 || state.fullMtaReady ||
+            static_cast<std::uint32_t>(state.phase) > static_cast<std::uint32_t>(MoveAnimWorkloadPhaseV1::Retired) ||
+            static_cast<std::uint32_t>(state.result) > static_cast<std::uint32_t>(ClockResult::OriginalException) ||
+            std::any_of(std::begin(state.reserved), std::end(state.reserved), [](auto v) { return v != 0; }) ||
+            std::any_of(std::begin(state.owner.reserved), std::end(state.owner.reserved), [](auto v) { return v != 0; }))
+            return false;
+        const std::uint32_t flags[] = {state.tokenRegistered,     state.hooksEnabled,      state.overridePublished,    state.writeAcknowledged,
+                                       state.reapplyAcknowledged, state.withdrawAttempted, state.withdrawAcknowledged, state.releaseAttempted,
+                                       state.releaseAcknowledged, state.endAcknowledged,   state.cleanupPending,       state.cleanupViaOwnerEnd,
+                                       state.notEntered,          state.owner.bound,       state.owner.hooked,         state.owner.active,
+                                       state.owner.ready,         state.owner.stopping,    state.owner.restored,       state.owner.frozen,
+                                       state.owner.modulePinned};
+        return std::all_of(std::begin(flags), std::end(flags), [](auto value) { return value <= 1; });
+    }
+}
+
+bool CGameAdapterModule::HasMoveAnimWorkloadService() const noexcept
+{
+    return m_adapter && m_ownerThread == GetCurrentThreadId() && m_moveAnimBegin && m_moveAnimRenew && m_moveAnimRead && m_moveAnimEnd;
+}
+
+mta::game_de::Status CGameAdapterModule::BeginMoveAnimWorkload(const mta::game_de::MoveAnimWorkloadRequestV1& request,
+                                                               mta::game_de::MoveAnimWorkloadStateV1&         output)
+{
+    using namespace mta::game_de;
+    if (!RequireOwnerThread("BeginMoveAnimWorkload"))
+        return m_adapter ? Status::WrongThread : Status::NotInitialized;
+    if (!HasMoveAnimWorkloadService())
+        return Status::Unsupported;
+    if (!RequireClockRetired() || !RequireLocalInputRetired() || m_renderObservation || m_renderObservationV2 || m_renderObservationV3 ||
+        m_renderObservationV4 || m_renderObservationV5 || m_renderObservationV6)
+        return Status::Unsupported;
+    if (request.size != sizeof(request) || request.version != MoveAnimWorkloadVersionV1 || !request.durationMs ||
+        request.durationMs > MoveAnimWorkloadMaximumDurationMsV1 || request.preferredGroup < 54 || request.preferredGroup > 56 ||
+        std::any_of(std::begin(request.reserved), std::end(request.reserved), [](auto value) { return value != 0; }))
+        return Status::InvalidArgument;
+    m_error.reserve(512);
+    m_moveAnimDiagnostics = true;
+    m_moveAnimAttemptPending = true;
+    m_moveAnimCompleted = false;
+    m_moveAnimGeneration = 0;
+    m_lastMoveAnimWorkload = {};
+    // Even Unsupported can return a valid native generation/retained prefix.
+    // Publish this attempt before crossing the export, not after success.
+    MoveAnimWorkloadStateV1 next;
+    const auto              status = m_moveAnimBegin(MoveAnimWorkloadVersionV1, m_adapter, &request, &next);
+    if (!ValidMoveAnimReport(next))
+    {
+        SetError("Movement workload Begin returned an invalid report; retain cleanup");
+        return Status::InvalidArgument;
+    }
+    m_moveAnimGeneration = next.owner.generation;
+    m_lastMoveAnimWorkload = output = next;
+    RecordStatus(status, "BeginMoveAnimWorkload");
+    return status;
+}
+
+mta::game_de::Status CGameAdapterModule::RenewMoveAnimWorkload(std::uint64_t generation)
+{
+    using namespace mta::game_de;
+    if (!RequireOwnerThread("RenewMoveAnimWorkload"))
+        return m_adapter ? Status::WrongThread : Status::NotInitialized;
+    if (!HasMoveAnimWorkloadService() || !m_moveAnimAttemptPending || !generation || generation != m_moveAnimGeneration)
+        return Status::InvalidArgument;
+    const auto status = m_moveAnimRenew(MoveAnimWorkloadVersionV1, m_adapter, generation);
+    RecordStatus(status, "RenewMoveAnimWorkload");
+    return status;
+}
+
+mta::game_de::Status CGameAdapterModule::ReadMoveAnimWorkload(mta::game_de::MoveAnimWorkloadStateV1& output)
+{
+    using namespace mta::game_de;
+    if (!RequireOwnerThread("ReadMoveAnimWorkload"))
+        return m_adapter ? Status::WrongThread : Status::NotInitialized;
+    if (!HasMoveAnimWorkloadService())
+        return Status::Unsupported;
+    if (!m_moveAnimAttemptPending && m_moveAnimCompleted)
+    {
+        output = m_lastMoveAnimWorkload;
+        return Status::Ok;
+    }
+    MoveAnimWorkloadStateV1 next;
+    const auto              status = m_moveAnimRead(MoveAnimWorkloadVersionV1, m_adapter, &next);
+    if (status != Status::Ok)
+    {
+        RecordStatus(status, "ReadMoveAnimWorkload");
+        return status;
+    }
+    // Never replace a retained nonzero token with a default/foreign report.
+    // A first valid read may recover the generation omitted by refused Begin.
+    if (!ValidMoveAnimReport(next) || (m_moveAnimGeneration && (next.owner.generation != m_moveAnimGeneration || next.notEntered)) ||
+        (m_moveAnimAttemptPending && !m_moveAnimGeneration && !next.owner.generation && !next.notEntered))
+        return Status::InvalidArgument;
+    if (m_moveAnimAttemptPending && !m_moveAnimGeneration)
+        m_moveAnimGeneration = next.owner.generation;
+    m_lastMoveAnimWorkload = output = next;
+    return Status::Ok;
+}
+
+mta::game_de::Status CGameAdapterModule::EndMoveAnimWorkload(std::uint64_t generation, mta::game_de::MoveAnimWorkloadStateV1& output)
+{
+    using namespace mta::game_de;
+    if (!RequireOwnerThread("EndMoveAnimWorkload"))
+        return m_adapter ? Status::WrongThread : Status::NotInitialized;
+    if (!HasMoveAnimWorkloadService() || generation != m_moveAnimGeneration)
+        return Status::InvalidArgument;
+    if (!m_moveAnimAttemptPending)
+    {
+        if (!m_moveAnimCompleted)
+            return Status::NotInitialized;
+        output = m_lastMoveAnimWorkload;
+        return Status::Ok;
+    }
+    MoveAnimWorkloadStateV1 next;
+    const auto              status = m_moveAnimEnd(MoveAnimWorkloadVersionV1, m_adapter, generation, &next);
+    // End may publish truthful partial progress on refusal, but its report
+    // cannot revoke the exact generation still needed for the next retry.
+    if (!ValidMoveAnimReport(next) || next.owner.generation != generation || (generation ? next.notEntered : !next.notEntered))
+        return Status::InvalidArgument;
+    m_lastMoveAnimWorkload = output = next;
+    // The module's process-lifetime GetModuleHandleEx(PIN) is not
+    // retained native effect debt. Exact End/token/resource ACKs
+    // below remain authoritative even while that permanent pin lives.
+    const bool acknowledged = !next.cleanupPending && !next.owner.active && !next.owner.hooked && !next.owner.inFlight &&
+                              ((generation && next.endAcknowledged && !next.notEntered) || (!generation && next.notEntered && !next.endAcknowledged));
+    if (status == Status::Ok && acknowledged)
+    {
+        m_moveAnimAttemptPending = false;
+        m_moveAnimCompleted = true;
+        m_moveAnimDiagnostics = false;
+    }
+    RecordStatus(status, "EndMoveAnimWorkload");
+    return status == Status::Ok && !acknowledged ? Status::InvalidArgument : status;
 }
 
 bool CGameAdapterModule::BeginNativeClockService(const mta::game_de::ClockServiceRequestV1& request, mta::game_de::ClockServiceStateV1& state)
@@ -1884,6 +2049,21 @@ void CGameAdapterModule::Stop() noexcept
         SetError("Game adapter teardown requires its owning Core thread; module retained");
         return;
     }
+    if (m_adapter && m_moveAnimAttemptPending)
+    {
+        try
+        {
+            mta::game_de::MoveAnimWorkloadStateV1 state;
+            ReadMoveAnimWorkload(state);
+            if (EndMoveAnimWorkload(m_moveAnimGeneration, state) != mta::game_de::Status::Ok || m_moveAnimAttemptPending)
+                return;
+        }
+        catch (...)
+        {
+            SetError("Movement workload cleanup is still retained");
+            return;
+        }
+    }
     // A borrowed facade cannot keep intent alive while the adapter retires
     // Clock/M-held work. Export pointers were resolved before admission.
     if (!RetirePresentationClient())
@@ -1943,6 +2123,13 @@ void CGameAdapterModule::Stop() noexcept
     m_localLeaseAttemptPending = false;
     m_localLeaseGeneration = 0;
     m_localLeaseDiagnostics = false;
+    m_moveAnimBegin = nullptr;
+    m_moveAnimRenew = nullptr;
+    m_moveAnimRead = nullptr;
+    m_moveAnimEnd = nullptr;
+    m_moveAnimAttemptPending = m_moveAnimDiagnostics = m_moveAnimCompleted = false;
+    m_moveAnimGeneration = 0;
+    m_lastMoveAnimWorkload = {};
     m_clockBegin = nullptr;
     m_clockSubmit = nullptr;
     m_clockRenew = nullptr;
@@ -1982,7 +2169,7 @@ std::string CGameAdapterModule::GameplayUnavailableReason() const
 {
     // Returning a new explanation could allocate behind a suspended heap
     // owner. Cleanup callers use the already reserved GetError storage instead.
-    if (m_clockAttemptPending)
+    if (m_clockAttemptPending || m_moveAnimAttemptPending)
         return {};
     if (!m_adapter)
         return "Game DE adapter is not initialized";

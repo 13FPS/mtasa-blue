@@ -328,6 +328,12 @@ CORE_API DefinitiveFrontendRuntime::Status MTA_ReadDEFrontendRuntimeAdmissionV1(
     return DefinitiveFrontendRuntime::ReadAdmissionOwner(handle, output);
 }
 
+CORE_API DefinitiveFrontendRuntime::Status MTA_ReadDEFrontendRuntimeMoveAnimWorkloadV1(void* handle, std::uint32_t version,
+                                                                                       DefinitiveMoveAnimWorkload::ReportV1* output)
+{
+    return DefinitiveFrontendRuntime::ReadMoveAnimWorkloadOwner(handle, version, output);
+}
+
 CORE_API DefinitiveFrontendRuntime::Status MTA_PulseDEFrontendRuntime(void* handle)
 {
     return DefinitiveFrontendRuntime::PulseOwner(handle);

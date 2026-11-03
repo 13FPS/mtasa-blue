@@ -12,6 +12,7 @@
 #include <game/CGameRenderDeviceLease.h>
 #include <game/CGameRenderDeviceWindowLease.h>
 #include <game/CGameClockService.h>
+#include <game/CGameMoveAnimWorkload.h>
 #include <game/CGameApplicationFrameObservation.h>
 #include <game/CGameStartupObservation.h>
 #include <game/CGameConstructorPreparation.h>
@@ -1925,6 +1926,129 @@ namespace
               "API6 registration and cleanup cannot grant or destroy a historical V5 diagnostic capability");
         historical->Release();
     }
+
+    void TestMoveAnimWorkloadContract()
+    {
+        const auto firstCheck = checks;
+        const auto module = GetModuleHandleW(L"game_de.dll");
+        Check(module != nullptr, "movement workload checks use the actual loaded game module");
+        for (const char* name : {"BeginGameMoveAnimWorkloadV1", "RenewGameMoveAnimWorkloadV1", "ReadGameMoveAnimWorkloadV1", "EndGameMoveAnimWorkloadV1"})
+            Check(GetProcAddress(module, name) != nullptr, "the complete optional movement workload export group exists");
+        OwnedAdapter              adapter;
+        OwnerIdentity             owner;
+        MoveAnimWorkloadRequestV1 request;
+        MoveAnimWorkloadStateV1   output;
+        output.sequence = 0xa5a5;
+        output.handle = 0x5a5a;
+        const auto sentinel = output;
+        const auto unchanged = [&] { return std::memcmp(&output, &sentinel, sizeof(output)) == 0; };
+        Check(BeginGameMoveAnimWorkloadV1(1, adapter.value, &request, &output) == Status::NotInitialized && unchanged(),
+              "movement workload requires the real initialized adapter owner and preserves output");
+        Check(ReadGameMoveAnimWorkloadV1(1, adapter.value, &output) == Status::NotInitialized && unchanged(),
+              "an uninitialized workload read cannot replace caller data");
+        Check(EndGameMoveAnimWorkloadV1(1, adapter.value, 0, &output) == Status::NotInitialized && unchanged(),
+              "End0 cannot invent an initialized workload attempt");
+        Check(adapter.value->Initialize(owner.Get()) == Status::Ok, "initialize one opaque real module owner, without a complete CGame");
+        Check(ReadGameMoveAnimWorkloadV1(1, adapter.value, &output) == Status::NotInitialized && unchanged(),
+              "no command means no movement workload publication");
+        Check(EndGameMoveAnimWorkloadV1(1, adapter.value, 0, &output) == Status::NotInitialized && unchanged(),
+              "zero is not a wildcard before an explicit workload attempt");
+        Check(BeginGameMoveAnimWorkloadV1(0, adapter.value, &request, &output) == Status::InvalidArgument && unchanged(),
+              "movement Begin version refusal preserves caller values");
+        Check(ReadGameMoveAnimWorkloadV1(0, adapter.value, &output) == Status::InvalidArgument && unchanged(),
+              "movement Read version refusal preserves caller values");
+        Check(EndGameMoveAnimWorkloadV1(0, adapter.value, 0, &output) == Status::InvalidArgument && unchanged(),
+              "movement End version refusal preserves caller values");
+        Check(RenewGameMoveAnimWorkloadV1(0, adapter.value, 1) == Status::InvalidArgument, "movement renewal is separately version checked");
+        Check(BeginGameMoveAnimWorkloadV1(1, nullptr, &request, &output) == Status::InvalidArgument && unchanged(), "movement Begin rejects a missing adapter");
+        Check(ReadGameMoveAnimWorkloadV1(1, reinterpret_cast<IGameAdapter*>(std::uintptr_t{1}), &output) == Status::InvalidArgument && unchanged(),
+              "movement registry refuses an arbitrary identity without dereferencing it");
+        Check(BeginGameMoveAnimWorkloadV1(1, adapter.value, nullptr, &output) == Status::InvalidArgument && unchanged(),
+              "movement Begin needs its own typed request");
+        for (unsigned invalid = 0; invalid != 7; ++invalid)
+        {
+            auto bad = request;
+            switch (invalid)
+            {
+                case 0:
+                    bad.size = 0;
+                    break;
+                case 1:
+                    bad.version = 0;
+                    break;
+                case 2:
+                    bad.durationMs = 0;
+                    break;
+                case 3:
+                    bad.durationMs = MoveAnimWorkloadMaximumDurationMsV1 + 1;
+                    break;
+                case 4:
+                    bad.preferredGroup = 0;
+                    break;
+                case 5:
+                    bad.preferredGroup = 57;
+                    break;
+                case 6:
+                    bad.reserved[3] = 1;
+                    break;
+            }
+            Check(BeginGameMoveAnimWorkloadV1(1, adapter.value, &bad, &output) == Status::InvalidArgument && unchanged(),
+                  "invalid movement request facts cannot start native ownership or alter output");
+        }
+        for (unsigned invalid = 0; invalid != 3; ++invalid)
+        {
+            auto bad = output;
+            if (invalid == 0)
+                bad.size = 0;
+            if (invalid == 1)
+                bad.version = 0;
+            if (invalid == 2)
+                bad.reserved[2] = 1;
+            const auto before = bad;
+            Check(BeginGameMoveAnimWorkloadV1(1, adapter.value, &request, &bad) == Status::InvalidArgument && std::memcmp(&bad, &before, sizeof(bad)) == 0,
+                  "invalid movement output headers are refused without replacing the buffer");
+        }
+        std::array<Status, 4> foreign{};
+        std::thread           wrongThread(
+            [&]
+            {
+                foreign[0] = BeginGameMoveAnimWorkloadV1(1, adapter.value, &request, &output);
+                foreign[1] = ReadGameMoveAnimWorkloadV1(1, adapter.value, &output);
+                foreign[2] = RenewGameMoveAnimWorkloadV1(1, adapter.value, 1);
+                foreign[3] = EndGameMoveAnimWorkloadV1(1, adapter.value, 0, &output);
+            });
+        wrongThread.join();
+        Check(std::all_of(foreign.begin(), foreign.end(), [](Status value) { return value == Status::WrongThread; }) && unchanged(),
+              "all four movement exports retain the actual Core producer thread");
+        Check(BeginGameMoveAnimWorkloadV1(1, adapter.value, &request, &output) == Status::Unsupported,
+              "the actual nongame host refuses movement before claiming a native owner");
+        Check(output.phase == MoveAnimWorkloadPhaseV1::Refused && output.result == ClockResult::UnsupportedBuild && output.notEntered == 1 &&
+                  !output.owner.generation && !output.owner.bound && !output.owner.hooked && !output.owner.patchInstalled && !output.owner.modulePinned &&
+                  !output.owner.inFlight && !output.tokenRegistered && !output.hooksEnabled && !output.overridePublished && !output.writeAcknowledged &&
+                  !output.reapplyAcknowledged && !output.cleanupPending && !output.endAcknowledged && output.physicalConfirmationRequired == 1 &&
+                  !output.fullMtaReady,
+              "wrong-host movement report is an explicit no-token refusal with no native or physical-success claim");
+        const auto refused = output;
+        Check(RenewGameMoveAnimWorkloadV1(1, adapter.value, 0) == Status::InvalidArgument, "a no-token refusal cannot renew a native lease");
+        Check(EndGameMoveAnimWorkloadV1(1, adapter.value, 1, &output) == Status::InvalidArgument && std::memcmp(&output, &refused, sizeof(output)) == 0,
+              "a foreign nonzero generation cannot retire the no-token attempt");
+        Check(BeginGameMoveAnimWorkloadV1(1, adapter.value, &request, &output) == Status::Unsupported && std::memcmp(&output, &refused, sizeof(output)) == 0,
+              "even a no-token explicit attempt needs its own End before another Begin");
+        Check(ReadGameMoveAnimWorkloadV1(1, adapter.value, &output) == Status::Ok && std::memcmp(&output, &refused, sizeof(output)) == 0,
+              "the separate movement report preserves the actual refusal instead of inventing a cached safe context");
+        Check(EndGameMoveAnimWorkloadV1(1, adapter.value, 0, &output) == Status::Ok && output.notEntered && !output.cleanupPending && !output.endAcknowledged &&
+                  std::memcmp(&output, &refused, sizeof(output)) == 0,
+              "End0 acknowledges only this proven no-token attempt without a forged native End receipt");
+        Check(EndGameMoveAnimWorkloadV1(1, adapter.value, 0, &output) == Status::Ok && !output.cleanupPending,
+              "the same no-token retirement remains idempotent");
+        Check(adapter.value->GetCapabilities() == implementedCapabilities && adapter.value->GetGameInterface() == nullptr,
+              "a physical movement workload does not advertise an SDK player factory or complete CGame");
+        Check(adapter.value->Reset() == Status::Ok && adapter.value->Shutdown() == Status::Ok, "explicit workload refusal preserves actual adapter shutdown");
+        output = sentinel;
+        Check(ReadGameMoveAnimWorkloadV1(1, adapter.value, &output) == Status::NotInitialized && unchanged(), "workload reads follow the real owner shutdown");
+        std::cout << "Production movement workload optional adapter contract fixture completed " << checks - firstCheck << " checks\n";
+    }
+
 }
 
 int main(int argc, char** argv)
@@ -2029,6 +2153,8 @@ int main(int argc, char** argv)
         TestRenderObservationV2FactoryRejection();
         TestRenderObservationV3FactoryRejection();
         TestRenderObservationV4FactoryRejection();
+        // Preserve the complete historical body; validate only the new optional surface here.
+        TestMoveAnimWorkloadContract();
         std::cout << "Passed " << checks << " MTA Game DE adapter checks\n";
         return 0;
     }

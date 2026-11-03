@@ -96,6 +96,7 @@ namespace deonline
         std::uint32_t ReadPersistentFrontendLifecycle(std::uint32_t field) const noexcept;
         std::uint32_t BeginFrontendRuntime(const void* moduleAddress, bool localInput = false, bool bindingPersistence = false,
                                            bool loadedWorldAutoShow = false) noexcept;
+        bool          CaptureFrontendMoveAnimWorkload(std::uint32_t generation, DefinitiveMoveAnimWorkload::ReportV1& output) const noexcept;
         bool          CaptureLocalInputRuntime() noexcept;
         std::uint32_t ReadLocalInputRuntime(std::uint32_t field) const noexcept;
         bool          CommandFrontendRuntime(std::uint32_t generation, std::uint32_t sequence, std::uint32_t command) noexcept;
@@ -219,16 +220,20 @@ namespace deonline
         DefinitiveGuiSurfaceReference::Snapshot                                                   publishedGuiSurface{}, capturedGuiSurface{};
         bool                                                                                      guiFrontendRequested = false, guiFrontendAvailable = false;
         DefinitiveGuiFrontendReference::Snapshot                                                  publishedGuiFrontend{}, capturedGuiFrontend{};
-        bool                                                      guiFrontendInputRequested = false, guiFrontendInputAvailable = false;
-        DefinitiveGuiFrontendInputReference::Snapshot             publishedGuiFrontendInput{}, capturedGuiFrontendInput{};
-        bool                                                      frontendStartupRequested = false;
-        bool                                                      persistentFrontendRequested = false;
-        PersistentFrontendHostLease                               persistentHostLease;
-        bool                                                      frontendRuntimeRequested = false;
-        bool                                                      localInputRuntimeRequested = false;
-        bool                                                      bindingPersistenceRequested = false;
-        bool                                                      loadedWorldAutoShowRequested = false;
-        FrontendValueCache<FrontendAdmissionSample::Snapshot>     frontendAdmissionCache;
+        bool                                                  guiFrontendInputRequested = false, guiFrontendInputAvailable = false;
+        DefinitiveGuiFrontendInputReference::Snapshot         publishedGuiFrontendInput{}, capturedGuiFrontendInput{};
+        bool                                                  frontendStartupRequested = false;
+        bool                                                  persistentFrontendRequested = false;
+        PersistentFrontendHostLease                           persistentHostLease;
+        bool                                                  frontendRuntimeRequested = false;
+        bool                                                  localInputRuntimeRequested = false;
+        bool                                                  bindingPersistenceRequested = false;
+        bool                                                  loadedWorldAutoShowRequested = false;
+        FrontendValueCache<FrontendAdmissionSample::Snapshot> frontendAdmissionCache;
+        using MoveAnimWorkloadWords = std::array<std::uint32_t, sizeof(DefinitiveMoveAnimWorkload::ReportV1) / sizeof(std::uint32_t)>;
+        static_assert(sizeof(DefinitiveMoveAnimWorkload::ReportV1) % sizeof(std::uint32_t) == 0);
+        FrontendValueCache<MoveAnimWorkloadWords> moveAnimWorkloadCache;
+
         FrontendValueCache<DefinitiveLocalInputRuntime::Snapshot> localInputRuntimeCache;
         DefinitiveLocalInputRuntime::Snapshot                     capturedLocalInputRuntime{};
         FrontendRuntimeMailbox                                    runtimeMailbox;

@@ -13,6 +13,7 @@
 #include <game/CGameFrontendInputLease.h>
 #include <game/CGameLocalInputLease.h>
 #include <game/CGameClockService.h>
+#include <game/CGameMoveAnimWorkload.h>
 #include <game/CGameApplicationFrameObservation.h>
 #include <game/CGameStartupObservation.h>
 #include <game/CGameConstructorPreparation.h>
@@ -26,6 +27,8 @@
 #include "NativeMovementInput.h"
 #include "NativePadUpdateControl.h"
 #include "NativeClockService.h"
+#include "NativeMoveAnimWorkload.h"
+#include "NativeImageAccess.h"
 #include "NativeGameTimeReader.h"
 #include "NativeGameStateReader.h"
 #include "NativeRenderObservation.h"
@@ -96,6 +99,184 @@ namespace mta::game_de
                 Read,
                 End
             };
+            enum class MoveAnimAction
+            {
+                Begin,
+                Renew,
+                Read,
+                End
+            };
+            static bool ValidMoveAnimOutput(const MoveAnimWorkloadStateV1& value) noexcept
+            {
+                if (value.size != sizeof(value) || value.version != MoveAnimWorkloadVersionV1)
+                    return false;
+                for (const auto reserved : value.reserved)
+                    if (reserved)
+                        return false;
+                return true;
+            }
+            static void MoveAnimTick(NativeGameTimingAccess& access, void* context) noexcept
+            {
+                static_cast<NativeMoveAnimWorkload*>(context)->Tick(access, GetTickCount64());
+            }
+            bool EndClock(std::uint64_t selected = 0) noexcept
+            {
+                if (moveAnimWorkloadAttemptPending && !moveAnimWorkloadActive && !moveAnimWorkloadGeneration)
+                {
+                    MoveAnimWorkloadStateV1 refused;
+                    if (!moveAnimWorkload.Read(refused) || !refused.notEntered || refused.cleanupPending)
+                        return false;
+                    moveAnimWorkloadAttemptPending = false;
+                    return true;
+                }
+                if (moveAnimWorkloadActive)
+                    moveAnimWorkload.RequestStop();
+                const bool ended = selected ? nativeClock.End(selected) : nativeClock.End();
+                if (ended && moveAnimWorkloadActive)
+                {
+                    ClockServiceStateV1 ownerState;
+                    if (!nativeClock.Read(ownerState))
+                        return false;
+                    moveAnimWorkload.Retired(ownerState);
+                    moveAnimWorkloadActive = false;
+                    moveAnimWorkloadAttemptPending = false;
+                }
+                return ended;
+            }
+            static Status MoveAnimService(IGameAdapter* adapter, MoveAnimAction action, const MoveAnimWorkloadRequestV1* request, std::uint64_t generation,
+                                          MoveAnimWorkloadStateV1* output) noexcept
+            {
+                // The existing registry and producer identity own the real
+                // adapter/context. Optional symbol discovery cannot turn a
+                // foreign object or a background reader into a gameplay owner.
+                if (!TryAcquireSRWLockShared(&frontendAdapterLock))
+                    return Status::Unsupported;
+                Status result = Status::InvalidArgument;
+                for (auto* current = frontendAdapters; current; current = current->nextFrontendAdapter)
+                {
+                    if (static_cast<IGameAdapter*>(current) != adapter)
+                        continue;
+                    result = current->Access();
+                    if (result != Status::Ok)
+                        break;
+                    if (output && !ValidMoveAnimOutput(*output))
+                    {
+                        result = Status::InvalidArgument;
+                        break;
+                    }
+                    if (action == MoveAnimAction::Begin)
+                    {
+                        if (!request || !NativeMoveAnimWorkload::ValidRequest(*request))
+                        {
+                            result = Status::InvalidArgument;
+                            break;
+                        }
+                        if (current->nativeMovement.IsBound() || current->nativeClock.IsRetained() || current->moveAnimWorkloadAttemptPending)
+                        {
+                            result = Status::Unsupported;
+                            break;
+                        }
+                        if (!current->moveAnimWorkload.Reset(*request))
+                        {
+                            result = Status::Unsupported;
+                            break;
+                        }
+                        current->ResetApplicationObservation(false);
+                        current->ResetStartupObservation(false);
+                        current->ResetConstructorPreparation(false);
+                        current->moveAnimWorkloadConfigured = true;
+                        current->moveAnimWorkloadAttemptPending = true;
+                        current->moveAnimWorkloadActive = true;
+                        current->moveAnimWorkloadGeneration = 0;
+                        if (!NativeImageAccess::CheckExecutableBuild())
+                        {
+                            // A wrong host can refuse before even claiming a
+                            // native generation. Keep a separate authoritative
+                            // no-token attempt for explicit End(0), rather than
+                            // inventing a deferred gameplay observation.
+                            current->moveAnimWorkload.NotEntered(ClockResult::UnsupportedBuild);
+                            current->moveAnimWorkloadActive = false;
+                            MoveAnimWorkloadStateV1 refused;
+                            if (current->moveAnimWorkload.Read(refused))
+                                *output = refused;
+                            result = Status::Unsupported;
+                            break;
+                        }
+                        ClockServiceRequestV1 nativeRequest;
+                        nativeRequest.reserved[0] = NativeClockService::GameTimingAfterApplicationFrameV1;
+                        ClockServiceStateV1 ownerState;
+                        const bool          began = current->nativeClock.BeginGameTiming(nativeRequest, ownerState, &MoveAnimTick, &current->moveAnimWorkload);
+                        current->moveAnimWorkloadGeneration = ownerState.generation;
+                        if (!began && !ownerState.generation && !current->nativeClock.IsRetained())
+                        {
+                            current->moveAnimWorkload.NotEntered(ClockResult::OwnerConflict);
+                            current->moveAnimWorkloadActive = false;
+                        }
+                        else if (!began && !current->nativeClock.IsRetained())
+                        {
+                            // Even refused setup uses the existing End owner;
+                            // a no-generation refusal cannot leave a trial
+                            // context that later adapter shutdown skips.
+                            current->EndClock();
+                            current->nativeClock.Read(ownerState);
+                        }
+                        MoveAnimWorkloadStateV1 next;
+                        if (current->moveAnimWorkload.Read(next))
+                        {
+                            next.owner = ownerState;
+                            *output = next;
+                        }
+                        result = began ? Status::Ok : Status::Unsupported;
+                        break;
+                    }
+                    if (!current->moveAnimWorkloadConfigured)
+                    {
+                        result = Status::NotInitialized;
+                        break;
+                    }
+                    if (action != MoveAnimAction::Read &&
+                        (generation != current->moveAnimWorkloadGeneration || (action == MoveAnimAction::Renew && !generation)))
+                    {
+                        result = Status::InvalidArgument;
+                        break;
+                    }
+                    if (action == MoveAnimAction::Renew)
+                    {
+                        result = current->nativeClock.Renew(generation) ? Status::Ok : Status::Unsupported;
+                        break;
+                    }
+                    if (!current->moveAnimWorkloadGeneration)
+                    {
+                        MoveAnimWorkloadStateV1 refused;
+                        if (!current->moveAnimWorkload.Read(refused) || !refused.notEntered || refused.cleanupPending)
+                        {
+                            result = Status::Unsupported;
+                            break;
+                        }
+                        // Authoritative no-token End acknowledgement for this
+                        // exact attempt, never an End(0) of a foreign owner.
+                        if (action == MoveAnimAction::End)
+                            current->moveAnimWorkloadAttemptPending = false;
+                        *output = refused;
+                        result = Status::Ok;
+                        break;
+                    }
+                    const bool              ended = action != MoveAnimAction::End || current->EndClock(generation);
+                    MoveAnimWorkloadStateV1 next;
+                    ClockServiceStateV1     ownerState;
+                    if (!current->moveAnimWorkload.Read(next) || !current->nativeClock.Read(ownerState))
+                    {
+                        result = Status::Unsupported;
+                        break;
+                    }
+                    next.owner = ownerState;
+                    *output = next;
+                    result = ended ? Status::Ok : Status::Unsupported;
+                    break;
+                }
+                ReleaseSRWLockShared(&frontendAdapterLock);
+                return result;
+            }
             enum class LocalLeaseAction
             {
                 Begin,
@@ -272,12 +453,18 @@ namespace mta::game_de
                     result = current->Access();
                     if (result != Status::Ok)
                         break;
+                    if (current->moveAnimWorkloadAttemptPending && action != ClockAction::End)
+                    {
+                        result = Status::Unsupported;
+                        break;
+                    }
                     bool completed = false;
                     switch (action)
                     {
                         case ClockAction::Begin:
                             if (current->nativeMovement.IsBound() || current->nativeClock.IsRetained())
                                 break;
+                            current->moveAnimWorkloadConfigured = false;
                             current->applicationObservationMode.store(false);
                             current->startupObservationMode.store(false);
                             current->ResetConstructorPreparation(false);
@@ -295,6 +482,7 @@ namespace mta::game_de
                             }
                             if (current->nativeMovement.IsBound() || current->nativeClock.IsRetained())
                                 break;
+                            current->moveAnimWorkloadConfigured = false;
                             // Reset only after the prior callback/context is
                             // retired. Failed admission may still retain this
                             // exact object and its partially installed hook.
@@ -329,7 +517,7 @@ namespace mta::game_de
                             completed = current->nativeClock.Read(*output);
                             break;
                         case ClockAction::End:
-                            completed = current->nativeClock.End(generation);
+                            completed = current->EndClock(generation);
                             break;
                     }
                     if (result != Status::InvalidArgument)
@@ -670,8 +858,8 @@ namespace mta::game_de
                     return status;
                 // Client intent must stop before M's Clock retirement. The
                 // shared present hook retires last, after Clock releases it.
-                if (presentationOperation.load() || presentation.RetireAll() != ClockResult::Ok || !nativeClock.End() ||
-                    presentation.End() != ClockResult::Ok || presentation.Pending() || !EndMovement())
+                if (presentationOperation.load() || presentation.RetireAll() != ClockResult::Ok || !EndClock() || presentation.End() != ClockResult::Ok ||
+                    presentation.Pending() || !EndMovement())
                     return Status::Unsupported;
                 Clear();
                 return Status::Ok;
@@ -684,8 +872,8 @@ namespace mta::game_de
                     return status;
                 // Client intent must stop before M's Clock retirement. The
                 // shared present hook retires last, after Clock releases it.
-                if (presentationOperation.load() || presentation.RetireAll() != ClockResult::Ok || !nativeClock.End() ||
-                    presentation.End() != ClockResult::Ok || presentation.Pending() || !EndMovement())
+                if (presentationOperation.load() || presentation.RetireAll() != ClockResult::Ok || !EndClock() || presentation.End() != ClockResult::Ok ||
+                    presentation.Pending() || !EndMovement())
                     return Status::Unsupported;
                 Clear();
                 initialized = false;
@@ -697,7 +885,7 @@ namespace mta::game_de
                 // A live detour still references this module's state. A caller
                 // cannot turn failed cleanup into a dangling callback by Release.
                 if ((ownerThread.load() && ownerThread.load() != GetCurrentThreadId()) || presentationOperation.load() ||
-                    presentation.RetireAll() != ClockResult::Ok || !nativeClock.End() || presentation.End() != ClockResult::Ok || presentation.Pending() ||
+                    presentation.RetireAll() != ClockResult::Ok || !EndClock() || presentation.End() != ClockResult::Ok || presentation.Pending() ||
                     !EndMovement())
                     return;
                 delete this;
@@ -1248,11 +1436,15 @@ namespace mta::game_de
             bool                           hasInputState = false;
             static constexpr std::uint64_t BaseCapabilities =
                 static_cast<std::uint64_t>(AdapterCapability::ObservationIngest) | static_cast<std::uint64_t>(AdapterCapability::MtaInputSynthesis);
-            std::atomic<std::uint64_t>    capabilities{BaseCapabilities};
-            NativePadReader               nativePad;
-            NativeMovementInput           nativeMovement;
-            NativePadUpdateControl        nativePadUpdate;
-            NativeClockService            nativeClock;
+            std::atomic<std::uint64_t> capabilities{BaseCapabilities};
+            NativePadReader            nativePad;
+            NativeMovementInput        nativeMovement;
+            NativePadUpdateControl     nativePadUpdate;
+            NativeClockService         nativeClock;
+            NativeMoveAnimWorkload     moveAnimWorkload;
+            bool                       moveAnimWorkloadConfigured = false, moveAnimWorkloadActive = false, moveAnimWorkloadAttemptPending = false;
+            std::uint64_t              moveAnimWorkloadGeneration = 0;
+
             NativePresentationPolicyOwner presentation;
             std::atomic<bool>             presentationOperation{false};
             NativeGameTimeReader          nativeGameTime;
@@ -1910,6 +2102,32 @@ namespace mta::game_de
         return GameAdapter::FrontendLease(adapter, GameAdapter::FrontendLeaseAction::End, nullptr, generation, nullptr, nullptr);
     }
 
+    extern "C" Status BeginGameMoveAnimWorkloadV1(std::uint32_t version, IGameAdapter* adapter, const MoveAnimWorkloadRequestV1* request,
+                                                  MoveAnimWorkloadStateV1* output) noexcept
+    {
+        if (version != MoveAnimWorkloadVersionV1 || !adapter || !request || !output)
+            return Status::InvalidArgument;
+        return GameAdapter::MoveAnimService(adapter, GameAdapter::MoveAnimAction::Begin, request, 0, output);
+    }
+    extern "C" Status RenewGameMoveAnimWorkloadV1(std::uint32_t version, IGameAdapter* adapter, std::uint64_t generation) noexcept
+    {
+        if (version != MoveAnimWorkloadVersionV1 || !adapter || !generation)
+            return Status::InvalidArgument;
+        return GameAdapter::MoveAnimService(adapter, GameAdapter::MoveAnimAction::Renew, nullptr, generation, nullptr);
+    }
+    extern "C" Status ReadGameMoveAnimWorkloadV1(std::uint32_t version, IGameAdapter* adapter, MoveAnimWorkloadStateV1* output) noexcept
+    {
+        if (version != MoveAnimWorkloadVersionV1 || !adapter || !output)
+            return Status::InvalidArgument;
+        return GameAdapter::MoveAnimService(adapter, GameAdapter::MoveAnimAction::Read, nullptr, 0, output);
+    }
+    extern "C" Status EndGameMoveAnimWorkloadV1(std::uint32_t version, IGameAdapter* adapter, std::uint64_t generation,
+                                                MoveAnimWorkloadStateV1* output) noexcept
+    {
+        if (version != MoveAnimWorkloadVersionV1 || !adapter || !output)
+            return Status::InvalidArgument;
+        return GameAdapter::MoveAnimService(adapter, GameAdapter::MoveAnimAction::End, nullptr, generation, output);
+    }
     extern "C" Status BeginGameClockServiceV1(std::uint32_t version, IGameAdapter* adapter, const ClockServiceRequestV1* request,
                                               ClockServiceStateV1* output) noexcept
     {

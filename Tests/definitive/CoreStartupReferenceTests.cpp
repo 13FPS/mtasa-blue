@@ -2173,6 +2173,8 @@ namespace
     }
 }
 
+#include "FrontendMoveAnimWorkerTests.inl"
+
 int wmain(int argc, wchar_t** argv)
 {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
@@ -2223,6 +2225,11 @@ int wmain(int argc, wchar_t** argv)
         {
             Check(argc == 4, "frontend admission fixture requires its controlled Core DLL");
             TestFrontendAdmissionWorker(worker, root, argv[2], argv[3]);
+        }
+        else if (std::wstring(argv[2]).find(L"moveanim-worker-") == 0)
+        {
+            Check(argc == 4, "movement worker fixture requires its controlled Core DLL");
+            TestMoveAnimWorker(worker, root, argv[2], argv[3]);
         }
         else if (std::wstring(argv[2]).find(L"binding-runtime-") == 0)
         {

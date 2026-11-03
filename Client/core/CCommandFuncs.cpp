@@ -34,6 +34,15 @@ void CCommandFuncs::Help(const char* szParameters)
     pConsole->Printf("***[--------------]***\n");
 }
 
+void CCommandFuncs::TestMoveAnim(const char* parameters)
+{
+#if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
+    CCore::GetSingleton().ExecuteFrontendMoveAnimCommand(parameters);
+#else
+    (void)parameters;
+#endif
+}
+
 void CCommandFuncs::Exit(const char* szParameters)
 {
     g_pCore->Quit();

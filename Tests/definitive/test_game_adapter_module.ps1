@@ -332,6 +332,7 @@ $sourceNames += @('Client/game_de/WeaponFireHandlerAccess.h','Client/game_de/CWe
 $sourceNames += @('Client/sdk/game/CGamePresentationPolicy.h','Client/game_de/NativePresentationPolicyAccess.h',
     'Client/game_de/CGamePresentationPolicyDE.h','Client/game_de/NativePresentationPolicyOwner.h','Client/game_de/NativePresentationPolicyOwner.cpp',
     'Client/game_de/NativePresentTransitionGate.h','Client/game_de/NativePresentTransitionGate.cpp')
+$sourceNames += @('Client/sdk/game/CGameMoveAnimWorkload.h', 'Client/game_de/NativeMoveAnimWorkload.h', 'Client/game_de/NativeMoveAnimWorkload.cpp')
 $sourceHashes = @($sourceNames | ForEach-Object {
     $taskPath = Join-Path $taskRoot $_
     [ordered]@{ path=$_; exists=(Test-Path -LiteralPath $taskPath); sha256=$(if (Test-Path -LiteralPath $taskPath) {
@@ -367,6 +368,9 @@ if ($reuseModule) {
     $names = @($exports | ForEach-Object { if ($_ -match '^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]+\s+(\S+)(?:\s+=\s+\S+)?\s*$') { $Matches[1] } })
     if ('CreateGameAdapter' -notin $names -or 'ReadGameFrontendAdmissionV1' -notin $names) {
         throw 'The supplied backend lacks the actual factory or admission export.'
+    }
+    foreach ($movementExport in @('BeginGameMoveAnimWorkloadV1', 'RenewGameMoveAnimWorkloadV1', 'ReadGameMoveAnimWorkloadV1', 'EndGameMoveAnimWorkloadV1')) {
+        if ($movementExport -notin $names) { throw ('The supplied backend lacks the optional movement workload export ' + $movementExport) }
     }
     $definition = Join-Path $outputRoot 'game_de.def'
     @('LIBRARY game_de.dll','EXPORTS') + $names | Set-Content -LiteralPath $definition -Encoding ascii
@@ -548,7 +552,7 @@ if ((Test-Path -LiteralPath $moduleSource) -and $detoursLibraryExit -eq 0) {
         (Join-Path $taskRoot 'Client/game_de/CWeatherScalarsDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePadUpdateControl.cpp'), (Join-Path $taskRoot 'Client/game_de/NativePadUpdateProfile.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePeerThreads.cpp'), (Join-Path $taskRoot 'Client/game_de/NativeFunctionRange.cpp'),
-        (Join-Path $taskRoot 'Client/game_de/NativeClockService.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeStaticAssociationInitializeCalls.cpp'), (Join-Path $taskRoot 'Client/game_de/NativeStartGameCalls.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/NativeClockService.cpp'), (Join-Path $taskRoot 'Client/game_de/NativeMoveAnimWorkload.cpp'),(Join-Path $taskRoot 'Client/game_de/NativeStaticAssociationInitializeCalls.cpp'), (Join-Path $taskRoot 'Client/game_de/NativeStartGameCalls.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeGameTimeReader.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeMovementInput.cpp'), (Join-Path $taskRoot 'Client/game_de/NativeRenderObservation.cpp'), (Join-Path $taskRoot 'Client/game_de/NativePresentOwner.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativePresentationPolicyOwner.cpp'), (Join-Path $taskRoot 'Client/game_de/NativePresentTransitionGate.cpp'),
@@ -584,6 +588,11 @@ if ($compilerExit -eq 0 -and $moduleExit -eq 0) {
 $constructorAdapterContractTested = -not $FrontendAdmissionOnly -and
     (($testOutput -join "`n").Contains('Production constructor preparation optional adapter contract fixture completed'))
 $constructorAdapterContractRequired = [bool]$FrontendAdmissionOnly -or $constructorAdapterContractTested
+$moveAnimAdapterContractTested = -not $FrontendAdmissionOnly -and
+    (($testOutput -join "`n") -match 'Production movement workload optional adapter contract fixture completed (\d+) checks')
+$moveAnimAdapterContractChecks = if ($moveAnimAdapterContractTested) { [int]$Matches[1] } else { 0 }
+$moveAnimAdapterContractRequired = [bool]$FrontendAdmissionOnly -or $moveAnimAdapterContractTested
+
 $sourceUnchanged = $true
 foreach ($entry in $sourceHashes) {
     $taskPath = Join-Path $taskRoot $entry.path
@@ -596,13 +605,14 @@ $normalBackendUnchanged = -not $reuseModule -or
     ((Get-FileHash -LiteralPath $GameDeDll -Algorithm SHA256).Hash -eq $ExpectedGameDeSha256 -and
      (Get-FileHash -LiteralPath $module -Algorithm SHA256).Hash -eq $ExpectedGameDeSha256)
 $record = [ordered]@{ recordedAt=[DateTimeOffset]::Now.ToString('o'); directory=$outputRoot;
-    success=($moduleExit -eq 0 -and $compilerExit -eq 0 -and $testExit -eq 0 -and $null -ne $testCount -and $sourceUnchanged -and $normalBackendUnchanged -and $constructorAdapterContractRequired);
+    success=($moduleExit -eq 0 -and $compilerExit -eq 0 -and $testExit -eq 0 -and $null -ne $testCount -and $sourceUnchanged -and $normalBackendUnchanged -and $constructorAdapterContractRequired -and $moveAnimAdapterContractRequired);
     sourceHashes=$sourceHashes; sourceUnchanged=$sourceUnchanged; architecture='x64'; moduleCompilerExit=$(if ($reuseModule) { $null } else { $moduleExit });
     normalBackendReused=$reuseModule; normalBackendSource=$(if ($reuseModule) { $GameDeDll } else { $null });
     expectedNormalBackendSha256=$(if ($reuseModule) { $ExpectedGameDeSha256.ToLowerInvariant() } else { $null });
     normalBackendUnchanged=$normalBackendUnchanged;
     frontendAdmissionOnly=[bool]$FrontendAdmissionOnly;
     actualConstructorPreparationAdapterContractTested=$constructorAdapterContractTested;
+    actualMoveAnimWorkloadAdapterContractTested=$moveAnimAdapterContractTested; moveAnimWorkloadAdapterChecks=$moveAnimAdapterContractChecks;
     detoursCompilerExit=$detoursCompilerExit; detoursLibraryExit=$detoursLibraryExit; detoursLibrary=$detoursLibrary;
     detoursLibrarySha256=$(if (Test-Path -LiteralPath $detoursLibrary) { (Get-FileHash -LiteralPath $detoursLibrary -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null });
     compilerExit=$compilerExit; testExit=$testExit; checks=$testCount; module=$module;

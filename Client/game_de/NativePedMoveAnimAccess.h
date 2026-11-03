@@ -26,6 +26,11 @@ namespace mta::game_de
         virtual ClockResult PublishPlayerMoveAnimOverride(const NativePedReferenceToken&, std::int32_t) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult WithdrawPlayerMoveAnimOverride(const NativePedReferenceToken&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult RetirePlayerMoveAnimHooks() noexcept { return ClockResult::NotInitialized; }
+        // Explicit live-workload preflight uses existing player/pool proofs,
+        // never a guessed handle1, a fabricated facade or a speculative load.
+        // Successful facts are immediate; every effect rechecks its own owner.
+        virtual ClockResult ReadCurrentPlayerMoveAnimCandidate(std::uint32_t&, std::uint32_t&, std::int32_t&) noexcept { return ClockResult::NotInitialized; }
+        virtual ClockResult CheckPlayerMoveAnimWorkloadGroup(std::int32_t) noexcept { return ClockResult::NotInitialized; }
 
     protected:
         ~NativePedMoveAnimAccess() = default;

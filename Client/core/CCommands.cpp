@@ -47,7 +47,8 @@ void CCommands::Add(const char* szCommand, const char* szDescription, PFNCOMMAND
     // and execution, so a later caller cannot accidentally reopen fallthrough.
     if (IsFrontendLocal() &&
         (!szCommand || bModCommand || bAllowScriptedBind ||
-         !((!stricmp(szCommand, "help") && pfnHandler == CCommandFuncs::Help) || (!stricmp(szCommand, "clear") && pfnHandler == CCommandFuncs::Clear))))
+         !((!stricmp(szCommand, "help") && pfnHandler == CCommandFuncs::Help) || (!stricmp(szCommand, "clear") && pfnHandler == CCommandFuncs::Clear) ||
+           (!stricmp(szCommand, "testmoveanim") && pfnHandler == CCommandFuncs::TestMoveAnim))))
         return;
     auto          ownedCommand = std::make_unique<COMMANDENTRY>();
     COMMANDENTRY* pCommand = ownedCommand.get();
@@ -258,8 +259,10 @@ bool CCommands::ExecuteFrontend(const char* command, const char* parameters, boo
     const auto* entry = Get(command);
     const bool  help = !stricmp(command, "help");
     const bool  clear = !stricmp(command, "clear");
+    const bool  movementTest = !stricmp(command, "testmoveanim");
     if (remotely || scriptedBind || !entry || entry->bModCommand || !entry->bEnabled ||
-        !((help && entry->pfnCmdFunc == CCommandFuncs::Help) || (clear && entry->pfnCmdFunc == CCommandFuncs::Clear)))
+        !((help && entry->pfnCmdFunc == CCommandFuncs::Help) || (clear && entry->pfnCmdFunc == CCommandFuncs::Clear) ||
+          (movementTest && entry->pfnCmdFunc == CCommandFuncs::TestMoveAnim)))
     {
         if (m_FrontendRejected != UINT32_MAX)
             ++m_FrontendRejected;
@@ -273,7 +276,7 @@ bool CCommands::ExecuteFrontend(const char* command, const char* parameters, boo
     ExecuteHandler(entry->pfnCmdFunc, parameters ? parameters : "");
     if (m_FrontendExecuted != UINT32_MAX)
         ++m_FrontendExecuted;
-    m_FrontendLastCommand = static_cast<std::uint32_t>(help ? Command::Help : Command::Clear);
+    m_FrontendLastCommand = static_cast<std::uint32_t>(help ? Command::Help : clear ? Command::Clear : Command::MoveAnimTest);
     return true;
 }
 

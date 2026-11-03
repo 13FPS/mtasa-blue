@@ -27,6 +27,21 @@
 #include "../../Client/core/DefinitiveLocalInputRuntime.h"
 #include <filesystem>
 #include <stdexcept>
+#if defined(CORE_FIXTURE_MOVEANIM_WORKER)
+    #include "../../Client/core/DefinitiveMoveAnimWorkload.h"
+namespace MoveAnimWorkerFixture
+{
+    bool                       Enabled() noexcept;
+    void                       Began() noexcept;
+    void                       Pulsed() noexcept;
+    bool                       BeforeLocal(unsigned) noexcept;
+    bool                       BeforeView() noexcept;
+    void                       ViewStarted() noexcept;
+    void                       ViewReturned() noexcept;
+    DefinitiveFrontend::Status Shutdown() noexcept;
+    void                       Detached() noexcept;
+}
+#endif
 
 namespace
 {
@@ -513,6 +528,10 @@ extern "C" __declspec(dllexport) void* MTA_BeginDEFrontendRuntime(std::uint32_t 
     localRuntime[DefinitiveLocalInputRuntime::Phase] = static_cast<std::uint32_t>(DefinitiveLocalInputRuntime::State::Disabled);
     localRuntime[DefinitiveLocalInputRuntime::OwnerThread] = GetCurrentThreadId();
     localRuntime[DefinitiveLocalInputRuntime::CleanupComplete] = 1;
+#if defined(CORE_FIXTURE_MOVEANIM_WORKER)
+    if (MoveAnimWorkerFixture::Enabled())
+        MoveAnimWorkerFixture::Began();
+#endif
     wchar_t path[32768]{};
     GetModuleFileNameW(nullptr, path, 32768);
     frontendBackend = LoadLibraryExW((std::filesystem::path(path).parent_path() / L"game_de.dll").c_str(), nullptr,
@@ -534,6 +553,10 @@ extern "C" __declspec(dllexport) DefinitiveFrontendRuntime::Status MTA_PulseDEFr
     Call(46);
     if (handle != &runtimeOwner)
         return DefinitiveFrontend::Status::InvalidArgument;
+#if defined(CORE_FIXTURE_MOVEANIM_WORKER)
+    if (MoveAnimWorkerFixture::Enabled())
+        MoveAnimWorkerFixture::Pulsed();
+#endif
     ++runtimeOwner[DefinitiveFrontendStartup::Pulses];
     return DefinitiveFrontend::Status::Ok;
 }
@@ -590,6 +613,10 @@ extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ConfigureDELocal
                                                                                              const DefinitiveLocalInputRuntime::RequestV1* request)
 {
     namespace L = DefinitiveLocalInputRuntime;
+#if defined(CORE_FIXTURE_MOVEANIM_WORKER)
+    if (MoveAnimWorkerFixture::Enabled() && !MoveAnimWorkerFixture::BeforeLocal(0))
+        return DefinitiveFrontend::Status::Busy;
+#endif
     Call(54);
     if (handle != &runtimeOwner || !request || request->size != sizeof(*request) || request->version != 1 || request->reserved[0] || request->reserved[1] ||
         runtimeViewActive || !runtimeOwner[DefinitiveFrontendRuntime::ViewsRetired])
@@ -613,6 +640,10 @@ extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ConfigureDELocal
 extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_PulseDELocalInputRuntime(void* handle)
 {
     namespace L = DefinitiveLocalInputRuntime;
+#if defined(CORE_FIXTURE_MOVEANIM_WORKER)
+    if (MoveAnimWorkerFixture::Enabled() && !MoveAnimWorkerFixture::BeforeLocal(1))
+        return DefinitiveFrontend::Status::Busy;
+#endif
     Call(55);
     if (handle != &runtimeOwner || runtimeViewActive)
     {
@@ -659,6 +690,10 @@ extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_ReadDELocalInput
 extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_SuspendDELocalInputRuntime(void* handle)
 {
     namespace L = DefinitiveLocalInputRuntime;
+#if defined(CORE_FIXTURE_MOVEANIM_WORKER)
+    if (MoveAnimWorkerFixture::Enabled() && !MoveAnimWorkerFixture::BeforeLocal(2))
+        return DefinitiveFrontend::Status::Busy;
+#endif
     Call(57);
     if (handle != &runtimeOwner || runtimeViewActive)
     {
@@ -687,6 +722,10 @@ extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_SuspendDELocalIn
 extern "C" __declspec(dllexport) DefinitiveFrontend::Status MTA_DisableDELocalInputRuntime(void* handle)
 {
     namespace L = DefinitiveLocalInputRuntime;
+    #if defined(CORE_FIXTURE_MOVEANIM_WORKER)
+    if (MoveAnimWorkerFixture::Enabled() && !MoveAnimWorkerFixture::BeforeLocal(3))
+        return DefinitiveFrontend::Status::Busy;
+    #endif
     Call(58);
     if (handle != &runtimeOwner || runtimeViewActive)
     {
@@ -747,6 +786,10 @@ extern "C"
     namespace C = DefinitiveFrontendRuntime;
     namespace S = DefinitiveFrontendStartup;
     namespace P = DefinitivePersistentFrontend;
+#if defined(CORE_FIXTURE_MOVEANIM_WORKER)
+    if (MoveAnimWorkerFixture::Enabled() && !MoveAnimWorkerFixture::BeforeView())
+        return DefinitiveFrontend::Status::Busy;
+#endif
     Call(47);
     if (localRuntime[DefinitiveLocalInputRuntime::NativeAttempted] || localRuntime[DefinitiveLocalInputRuntime::NativeBound] ||
         localRuntime[DefinitiveLocalInputRuntime::NativeActive] || localRuntime[DefinitiveLocalInputRuntime::CleanupPending] ||
@@ -820,6 +863,10 @@ extern "C"
         return DefinitiveFrontend::Status::Failed;
     }
     runtimeViewActive = true;
+#if defined(CORE_FIXTURE_MOVEANIM_WORKER)
+    if (MoveAnimWorkerFixture::Enabled())
+        MoveAnimWorkerFixture::ViewStarted();
+#endif
     ++runtimeOwner[C::ViewsAttached];
     ++runtimeOwner[S::ViewRuns];
     runtimeOwner[C::ViewGenerationLow] = static_cast<std::uint32_t>(request->generation);
@@ -935,6 +982,10 @@ extern "C"
     publish();
     Call(51);
     runtimeViewActive = false;
+#if defined(CORE_FIXTURE_MOVEANIM_WORKER)
+    if (MoveAnimWorkerFixture::Enabled())
+        MoveAnimWorkerFixture::ViewReturned();
+#endif
     runtimeOwner[C::RuntimePhase] = 2;
     runtimeOwner[C::ViewBorrowed] = 0;
     runtimeOwner[C::HiddenNeutralVerified] = runtimeOwner[S::LastViewCleanupComplete] = 1;
@@ -959,6 +1010,10 @@ extern "C" __declspec(dllexport) DefinitiveFrontendRuntime::Status MTA_ShutdownD
     Call(48);
     if (handle != &runtimeOwner || runtimeViewActive)
         return DefinitiveFrontend::Status::Busy;
+#if defined(CORE_FIXTURE_MOVEANIM_WORKER)
+    if (MoveAnimWorkerFixture::Enabled())
+        return MoveAnimWorkerFixture::Shutdown();
+#endif
     if (Setting(L"MTA_CORE_FIXTURE_LOCAL_RUNTIME_MODE") &&
         (localRuntime[DefinitiveLocalInputRuntime::NativeAttempted] || localRuntime[DefinitiveLocalInputRuntime::NativeBound] ||
          localRuntime[DefinitiveLocalInputRuntime::NativeActive] || localRuntime[DefinitiveLocalInputRuntime::CleanupPending] ||
@@ -1969,6 +2024,11 @@ extern "C" __declspec(dllexport) int InitializeCore()
     return !mtaSet ? 3 : !gtaSet ? 4 : 5;
 }
 
+// This optional instrumentation leaves every historical fixture mode unchanged.
+#if defined(CORE_FIXTURE_MOVEANIM_WORKER)
+    #include "FrontendMoveAnimWorkerTests.inl"
+#endif
+
 BOOL WINAPI DllMain(HINSTANCE, DWORD reason, LPVOID)
 {
     if (reason == DLL_PROCESS_ATTACH)
@@ -2007,6 +2067,9 @@ BOOL WINAPI DllMain(HINSTANCE, DWORD reason, LPVOID)
     }
     else if (reason == DLL_PROCESS_DETACH)
     {
+#if defined(CORE_FIXTURE_MOVEANIM_WORKER)
+        MoveAnimWorkerFixture::Detached();
+#endif
         if (counters)
         {
             InterlockedExchange(counters + 1, static_cast<LONG>(GetCurrentThreadId()));

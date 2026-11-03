@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('PlayerMoveAnimSetterOwner','PlayerMoveAnimHookOwner','PlayerMoveAnimReapply','PreparedGameBorrow','BuildingPoolDefault','StartupLifecycle','CameraMainTarget','CameraWidescreen','CameraGetCam','CameraTargetSetter','CameraTarget','CameraHistory','CameraRowBorrow','CameraDirection','CameraFovWrite','CameraJumpCut','CameraBasics','ModelTimeGetter','VehiclePredicates','EmptyBlockRemoval','BlockRegistration','BankPostprocess','BankEviction','BankDecompression','ApplicationTiming','AnimationHierarchyUncompress','NumericAssociationOwner','DynamicClumpOwner','AnimationAssociationGroupFactories','GroupSourceCreationOwner','JointTemporaryStaticInitializerOwner','GroupReplacementOwner','GroupCopyAnimationOwner','GroupEmptyInitialization','AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','PresentTransitionClock','StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
+    [ValidateSet('PlayerMoveAnimWorkloadReader','PlayerMoveAnimSetterOwner','PlayerMoveAnimHookOwner','PlayerMoveAnimReapply','PreparedGameBorrow','BuildingPoolDefault','StartupLifecycle','CameraMainTarget','CameraWidescreen','CameraGetCam','CameraTargetSetter','CameraTarget','CameraHistory','CameraRowBorrow','CameraDirection','CameraFovWrite','CameraJumpCut','CameraBasics','ModelTimeGetter','VehiclePredicates','EmptyBlockRemoval','BlockRegistration','BankPostprocess','BankEviction','BankDecompression','ApplicationTiming','AnimationHierarchyUncompress','NumericAssociationOwner','DynamicClumpOwner','AnimationAssociationGroupFactories','GroupSourceCreationOwner','JointTemporaryStaticInitializerOwner','GroupReplacementOwner','GroupCopyAnimationOwner','GroupEmptyInitialization','AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','PresentTransitionClock','StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -23,6 +23,12 @@ $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;a
 # Historical markers start false and are set only by the branch that actually
 # executed. Focus mode must never inherit the cumulative suite's claims.
 $record['runScope'] = $Scope
+$record['nativePlayerMoveAnimWorkloadReaderTested']=$false
+$record['nativePlayerMoveAnimWorkloadCandidateTested']=$false
+$record['nativePlayerMoveAnimWorkloadGroupTested']=$false
+$record['nativePlayerMoveAnimWorkloadReaderRefusalsTested']=$false
+$record['nativePlayerMoveAnimWorkloadReaderRenewalTested']=$false
+$record['nativePlayerMoveAnimWorkloadReaderEndTested']=$false
 $record['nativePlayerMoveAnimSetterActualRuntimeTested']=$false
 $record['nativePlayerMoveAnimSetterMatchedIntentTested']=$false
 $record['nativePlayerMoveAnimSetterRefusalsTested']=$false
@@ -1469,7 +1475,8 @@ namespace ClockPrivateHierarchyParentWriteFixture {
     # process retirement; keep its large synthetic PE in owned disposable scratch.
     # Preserve the argument vector: an if result with one item becomes a
     # scalar string, so later += would append the switch to the path.
-    $fixtureArguments = @(if ($Scope -in @('AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','StartupPreparationReadiness','StartupNumericGarages','StartupStreamingReceiver','StartupInitializationReadiness','StartupLifecycle','BuildingPoolDefault','PreparedGameBorrow','PresentTransitionClock')) { $scratchRoot } else { $outputRoot })
+    $fixtureArguments = @(if ($Scope -in @('PlayerMoveAnimWorkloadReader','AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','StartupPreparationReadiness','StartupNumericGarages','StartupStreamingReceiver','StartupInitializationReadiness','StartupLifecycle','BuildingPoolDefault','PreparedGameBorrow','PresentTransitionClock')) { $scratchRoot } else { $outputRoot })
+    if($Scope -eq 'PlayerMoveAnimWorkloadReader'){$fixtureArguments += '--player-moveanim-workload-reader'}
     if ($Scope -eq 'ModelTimeGetter') { $fixtureArguments += '--model-time-getter' }
     if ($Scope -eq 'VehiclePredicates') { $fixtureArguments += '--vehicle-predicates' }
     if ($Scope -eq 'PresentTransitionClock') { $fixtureArguments += '--present-transition-clock' }
@@ -2656,7 +2663,7 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         $text = $texts -join [Environment]::NewLine
     } else {
         $testExecutable = $executable
-    if ($Scope -in @('AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','StartupPreparationReadiness','StartupNumericGarages','StartupStreamingReceiver','StartupInitializationReadiness','StartupLifecycle','BuildingPoolDefault','PreparedGameBorrow','PresentTransitionClock')) {
+    if ($Scope -in @('PlayerMoveAnimWorkloadReader','AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','StartupPreparationReadiness','StartupNumericGarages','StartupStreamingReceiver','StartupInitializationReadiness','StartupLifecycle','BuildingPoolDefault','PreparedGameBorrow','PresentTransitionClock')) {
         # The fixture's existing path guard requires its backing-image directory
         # to equal its executable directory. Run an exact owned scratch copy so
         # that guard stays intact and neither retained synthetic PE survives.
@@ -2671,7 +2678,20 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if($Scope -eq 'PlayerMoveAnimSetterOwner'){
+    if($Scope -eq 'PlayerMoveAnimWorkloadReader'){
+        $record['testRuns']=@($record.testRun)
+        $record.nativePlayerMoveAnimWorkloadCandidateTested=$text.Contains('Production movement workload candidate readers completed')
+        $record.nativePlayerMoveAnimWorkloadGroupTested=$text.Contains('Production movement workload group readers completed')
+        $record.nativePlayerMoveAnimWorkloadReaderRefusalsTested=$text.Contains('Production movement workload reader refusals completed')
+        $record.nativePlayerMoveAnimWorkloadReaderRenewalTested=$text.Contains('Production movement workload reader renewal completed')
+        $record.nativePlayerMoveAnimWorkloadReaderEndTested=$text.Contains('Production movement workload reader End completed')
+        $record.nativePlayerMoveAnimWorkloadReaderTested=$text.Contains('Production movement workload reader scope completed') -and
+            $record.nativePlayerMoveAnimWorkloadCandidateTested -and $record.nativePlayerMoveAnimWorkloadGroupTested -and
+            $record.nativePlayerMoveAnimWorkloadReaderRefusalsTested -and $record.nativePlayerMoveAnimWorkloadReaderRenewalTested -and
+            $record.nativePlayerMoveAnimWorkloadReaderEndTested -and $record.testRuns.Count -eq 1
+        if(-not $record.nativePlayerMoveAnimWorkloadReaderTested){throw 'Focused actual movement workload reader scope incomplete'}
+        $record.productionNativeCallbackTested=$true
+    } elseif($Scope -eq 'PlayerMoveAnimSetterOwner'){
         $record.nativePlayerMoveAnimSetterActualRuntimeTested=$text.Contains('Production player move animation setter actual runtime completed')
         $record.nativePlayerMoveAnimSetterMatchedIntentTested=$text.Contains('Production player move animation setter matched intent completed')
         $record.nativePlayerMoveAnimSetterRefusalsTested=$text.Contains('Production player move animation setter refusals completed')

@@ -2099,6 +2099,7 @@ struct CCore::FrontendRuntimeResources
     fs::path                                 bindingPersistencePath;
     bool                                     bindingPersistenceEnabled = false;
     bool                                     bindingCommitActive = false;
+    DefinitiveMoveAnimWorkload::Route        moveAnimWorkload;
     std::unique_ptr<CoreInteractionServices> interaction;
 };
 
@@ -2355,6 +2356,106 @@ bool CCore::FlushFrontendRuntimeBindings() noexcept
     }
 }
 
+bool CCore::FrontendMoveAnimWorkloadBlocksAdmission() const noexcept
+{
+    return m_frontendRuntimeResources && m_frontendRuntimeResources->moveAnimWorkload.BlocksAdmission();
+}
+
+DefinitiveMoveAnimWorkload::ReportV1 CCore::ReadFrontendMoveAnimWorkload() const noexcept
+{
+    // This report is a cached CPU copy. Reading it never invokes an optional
+    // native export, renews a lease, hides a menu, or changes an old snapshot.
+    auto result = m_frontendRuntimeResources ? m_frontendRuntimeResources->moveAnimWorkload.Read() : DefinitiveMoveAnimWorkload::ReportV1{};
+    result.available = m_DefinitiveAdapter.HasMoveAnimWorkloadService() ? 1u : 0u;
+    return result;
+}
+
+void CCore::ExecuteFrontendMoveAnimCommand(const char* parameters) noexcept
+{
+    if (GetCurrentThreadId() != m_frontendCoreOwnerThread || !m_frontendStartupOwned || !m_frontendRuntimeResources || !m_frontendResources ||
+        !m_frontendResources->runtimeBorrowed || !m_pLocalGUI || !m_pLocalGUI->GetConsole())
+        return;
+    auto& route = m_frontendRuntimeResources->moveAnimWorkload;
+    // Native admission cannot overlap this visible console. Do not allocate
+    // or print through a mistakenly reentered view while native debt remains.
+    if (route.Read().attemptPending)
+        return;
+    try
+    {
+        std::string command = parameters ? parameters : "";
+        const auto  first = command.find_first_not_of(" \t"), last = command.find_last_not_of(" \t");
+        command = first == std::string::npos ? "" : command.substr(first, last - first + 1);
+        auto* console = m_pLocalGUI->GetConsole();
+        if (command == "status")
+        {
+            const auto state = route.Read();
+            console->Printf("Movement test: phase=%u queued=%u retained=%u group=%d write=%u reapply=%u result=%u. Physical confirmation is still required.",
+                            static_cast<unsigned>(state.phase), state.queued, state.attemptPending, state.native.selectedGroup, state.native.writeAcknowledged,
+                            state.native.reapplyAcknowledged, static_cast<unsigned>(state.native.result));
+        }
+        else if (command == "stop")
+        {
+            route.Cancel();
+            console->Print("Queued movement test cancelled.");
+        }
+        else if (!command.empty())
+            console->Print("Usage: testmoveanim [status|stop]");
+        else if (!m_DefinitiveAdapter.HasMoveAnimWorkloadService())
+            console->Print("This backend does not provide the optional movement test.");
+        else if (!route.Queue())
+            console->Print("A movement test is already queued or retained.");
+        else
+        {
+            // Availability is CPU-only. The visible console can queue intent,
+            // but only a later completely hidden owner may call native Begin.
+            route.Pulse(m_DefinitiveAdapter, false, false);
+            console->Print(
+                "Movement test queued. Close the MTA menu, keep GTA focused, and walk normally for eight seconds; the selected group is intentional and is not "
+                "restored.");
+        }
+    }
+    catch (...)
+    {
+        // Parsing/output failure never starts or transfers native ownership.
+    }
+}
+
+void CCore::PulseFrontendMoveAnimWorkload() noexcept
+{
+    if (GetCurrentThreadId() != m_frontendCoreOwnerThread || !m_frontendRuntimeResources)
+        return;
+    auto&      route = m_frontendRuntimeResources->moveAnimWorkload;
+    const auto before = route.Read();
+    const bool hidden = !m_frontendResources && !m_pGUI && !m_pLocalGUI;
+    bool       retired = LocalInputAllowsFrontend();
+    if (hidden && before.queued && !retired)
+        retired = StopLocalInputRuntime(false) == DefinitiveFrontend::Status::Ok && LocalInputAllowsFrontend();
+    // A queued physical trial waits indefinitely until this process really
+    // owns foreground input. Losing focus during a retained attempt follows
+    // the same existing admission-loss drain, never another Begin or a timer.
+    route.Pulse(m_DefinitiveAdapter, hidden && InputReferenceFocused(), retired);
+    const auto after = route.Read();
+    if (!after.attemptPending && (after.native.endAcknowledged || after.native.notEntered) &&
+        (before.attemptPending || (!before.beginAttempted && after.beginAttempted)))
+    {
+        // File/logger work is deferred until End has acknowledged every native
+        // hold. Cached reads remain available while an uncertain attempt lives.
+        const auto& value = after.native;
+        try
+        {
+            WriteDebugEvent(
+                SString("DE testmoveanim retired: selector=%u handle=%u groups=%d/%d/%d enable=%u publish=%u write=%u reapply=%u withdraw=%u/%u release=%u/%u "
+                        "end=%u ownerEnd=%u notEntered=%u result=%u physicalConfirmationRequired=1 fullMtaReady=0",
+                        value.selector, value.handle, value.beforeGroup, value.selectedGroup, value.afterGroup, value.hooksEnabled, value.overridePublished,
+                        value.writeAcknowledged, value.reapplyAcknowledged, value.withdrawAttempted, value.withdrawAcknowledged, value.releaseAttempted,
+                        value.releaseAcknowledged, value.endAcknowledged, value.cleanupViaOwnerEnd, value.notEntered, static_cast<unsigned>(value.result)));
+        }
+        catch (...)
+        {
+        }
+    }
+}
+
 bool CCore::LocalInputAllowsFrontend() const noexcept
 {
     using namespace DefinitiveLocalInputRuntime;
@@ -2516,7 +2617,8 @@ DefinitiveLocalInputRuntime::Status CCore::ConfigureLocalInputRuntime(const Defi
     if (request.size != sizeof(request) || request.version != ApiVersion || request.reserved[0] || request.reserved[1] || !window || !IsWindow(window) ||
         GetAncestor(window, GA_ROOT) != window || !GetWindowThreadProcessId(window, &process) || process != GetCurrentProcessId())
         return Status::InvalidArgument;
-    if (!m_frontendStartupOwned || !m_frontendRuntimeResources || !m_frontendRuntimeResources->bindings || m_frontendResources || !LocalInputAllowsFrontend())
+    if (!m_frontendStartupOwned || !m_frontendRuntimeResources || !m_frontendRuntimeResources->bindings || m_frontendResources ||
+        FrontendMoveAnimWorkloadBlocksAdmission() || !LocalInputAllowsFrontend())
         return Status::Busy;
     try
     {
@@ -2797,6 +2899,8 @@ DefinitiveFrontend::Status CCore::StopFrontendRuntimeServices() noexcept
         return Status::Ok;
     state[CleanupPending] = 1;
     state[RuntimePhase] = static_cast<std::uint32_t>(Phase::Stopping);
+    if (!resources.moveAnimWorkload.Stop(m_DefinitiveAdapter))
+        return Status::Busy;
     try
     {
         if (resources.interaction)
@@ -3699,7 +3803,10 @@ DefinitiveFrontend::Status CCore::EnableFrontendConsole()
         m_pCommands->DeleteAll();
         m_pCommands->Add("help", _("this help screen"), CCommandFuncs::Help);
         m_pCommands->Add("clear", _("clears the console"), CCommandFuncs::Clear);
-        if (m_pCommands->Count() != 2)
+        const bool movementTest = resources.runtimeBorrowed && m_frontendRuntimeResources && m_DefinitiveAdapter.HasMoveAnimWorkloadService();
+        if (movementTest)
+            m_pCommands->Add("testmoveanim", _("queue an eight-second movement test; status or stop"), CCommandFuncs::TestMoveAnim);
+        if (m_pCommands->Count() != (movementTest ? 3u : 2u))
             throw std::runtime_error("Frontend console command registration failed");
         const CConsole::FrontendHost host{this, &CCore::FrontendConsoleInputOwnership};
         m_pLocalGUI->EnableFrontendConsole(host);

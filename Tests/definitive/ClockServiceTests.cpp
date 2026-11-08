@@ -3,6 +3,9 @@
  * LICENSE: See LICENSE in the repository root
  * PURPOSE: Exercise the actual MTA clock interface and checked service boundary
  *****************************************************************************/
+#if defined(MTA_TEST_WORLD_REMOVE_OWNER)
+    #include "WorldRemoveOwnerEntryFixture.h"
+#endif
 #if defined(MTA_TEST_WORLD_COVER_OWNER)
     #include "WorldCoverOwnerEntryFixture.h"
 #endif
@@ -4010,6 +4013,21 @@ namespace ClockObjectGroupOwnerTest
 #include "../../Client/game_de/NativeWorldCoverCalls.cpp"
 #undef MTA_DE_WORLD_COVER_NATIVE_INVOKE
 #include "../../Client/game_de/NativeWorldCoverDomain.cpp"
+#include "../../Client/game_de/NativeWorldLodMemory.cpp"
+#include "../../Client/game_de/NativeWorldLodRebasePlan.cpp"
+#include "../../Client/game_de/NativeWorldBoundRectMemory.cpp"
+#if defined(MTA_TEST_WORLD_REMOVE_OWNER)
+    #define MTA_DE_WORLD_BOUND_RECT_NATIVE_INVOKE (&::ClockWorldRemoveOwnerTest::ReadBound)
+#endif
+#include "../../Client/game_de/NativeWorldBoundRectCalls.cpp"
+#undef MTA_DE_WORLD_BOUND_RECT_NATIVE_INVOKE
+#include "../../Client/game_de/NativeWorldRemoveMemory.cpp"
+#if defined(MTA_TEST_WORLD_REMOVE_OWNER)
+    #define MTA_DE_WORLD_REMOVE_NATIVE_INVOKE (&::ClockWorldRemoveOwnerTest::Invoke)
+#endif
+#include "../../Client/game_de/NativeWorldRemoveCalls.cpp"
+#undef MTA_DE_WORLD_REMOVE_NATIVE_INVOKE
+#include "../../Client/game_de/NativeWorldRemoveDomain.cpp"
 
 #include "../../Client/game_de/NativeWorldIplLoadedMemory.cpp"
 #include "../../Client/game_de/NativeWorldIplMemory.cpp"
@@ -9351,6 +9369,15 @@ namespace
     #include "WorldCoverOwnerTests.inl"
 #endif
 
+#if defined(MTA_TEST_WORLD_LOD_REBASE_OWNER)
+    #include "NativeWorldLodFixture.h"
+    #include "NativeWorldLodOwnerTests.inl"
+#endif
+#if defined(MTA_TEST_WORLD_REMOVE_OWNER)
+    #include "NativeWorldRemoveFixture.h"
+    #include "WorldRemoveOwnerTests.inl"
+#endif
+
 #if defined(MTA_TEST_NATIVE_STARTUP_EFFECTS)
     #include "../../Client/game_de/CGameModelDummiesResetDE.h"
     #include "NativeModelDummiesFixture.h"
@@ -9482,6 +9509,24 @@ int main(int argc, char** argv)
                                                    : argc == 3 && std::strcmp(argv[2], "--model-object-group-owner-unknown") == 0  ? 2u
                                                                                                                                    : 3u;
     const bool     modelObjectGroupOwnerOnly = modelObjectGroupOwnerScenario < 3;
+#if defined(MTA_TEST_WORLD_REMOVE_OWNER)
+    unsigned worldRemoveOwnerScenario = 3;
+    if (argc == 3)
+    {
+        constexpr std::array<const char*, 3> flags{"--world-remove-owner-healthy", "--world-remove-owner-refused", "--world-remove-owner-unknown"};
+        for (unsigned index = 0; index < flags.size(); ++index)
+            if (std::strcmp(argv[2], flags[index]) == 0)
+                worldRemoveOwnerScenario = index;
+    }
+    const bool worldRemoveOwnerOnly = worldRemoveOwnerScenario < 3;
+#else
+    const bool worldRemoveOwnerOnly = false;
+#endif
+#if defined(MTA_TEST_WORLD_LOD_REBASE_OWNER)
+    const bool worldLodRebaseOwnerOnly = argc == 3 && std::strcmp(argv[2], "--world-lod-rebase-owner") == 0;
+#else
+    const bool worldLodRebaseOwnerOnly = false;
+#endif
 #if defined(MTA_TEST_WORLD_COVER_OWNER)
     unsigned worldCoverOwnerScenario = 3;
     if (argc == 3)
@@ -9956,22 +10001,22 @@ int main(int argc, char** argv)
            collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly || worldLineOnly ||
            worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly || cameraSphereOnly ||
            pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || modelWheelResetOwnerOnly || modelObjectGroupOwnerOnly || nativeStartupEffectsOnly ||
-           worldPoolMatrixOwnerOnly || worldCoverOwnerOnly || playerMoveAnimWorkloadReaderOnly || playerMoveAnimSetterOwnerOnly ||
-           playerMoveAnimHookOwnerOnly || playerMoveAnimReapplyOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly || animationBlockRefsOnly ||
-           animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly || animationGatewayOnly ||
-           customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly || customAnimationSequenceNameOnly ||
-           freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly || privateHierarchyParentOnly ||
-           privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly ||
-           customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly ||
-           animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly || animationGroupValidityOnly ||
-           animationIdValidityOnly || animationAssociationGroupReadsOnly || cameraBasicsOnly || cameraJumpCutOnly || cameraFovWriteOnly ||
-           cameraDirectionOnly || cameraRowBorrowOnly || cameraHistoryOnly || cameraTargetOnly || cameraTargetSetterOnly || cameraGetCamOnly ||
-           cameraWidescreenOnly || cameraMainTargetOnly || applicationTimingOnly || emptyBlockRemovalOnly || blockRegistrationOnly || bankPostprocessOnly ||
-           bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly || dynamicClumpOnly || groupFactoriesOnly ||
-           groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly || groupEmptyInitializationOnly ||
-           animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly || animationStaticAssociationReadsOnly ||
-           staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly || privateAssociationsOnly || associationBonesOnly ||
-           associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
+           worldPoolMatrixOwnerOnly || worldCoverOwnerOnly || worldLodRebaseOwnerOnly || worldRemoveOwnerOnly || playerMoveAnimWorkloadReaderOnly ||
+           playerMoveAnimSetterOwnerOnly || playerMoveAnimHookOwnerOnly || playerMoveAnimReapplyOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly ||
+           animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly ||
+           animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly ||
+           customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly ||
+           privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly ||
+           privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly ||
+           sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly ||
+           animationDefinitionBlockNamesOnly || animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly ||
+           cameraBasicsOnly || cameraJumpCutOnly || cameraFovWriteOnly || cameraDirectionOnly || cameraRowBorrowOnly || cameraHistoryOnly || cameraTargetOnly ||
+           cameraTargetSetterOnly || cameraGetCamOnly || cameraWidescreenOnly || cameraMainTargetOnly || applicationTimingOnly || emptyBlockRemovalOnly ||
+           blockRegistrationOnly || bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly ||
+           dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
+           groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
+           animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
+           privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
               std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
           "durable fixture evidence is restricted to the explicit owned executable output directory");
     if (presentTransitionClockOnly)
@@ -9998,6 +10043,28 @@ int main(int argc, char** argv)
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }
+#if defined(MTA_TEST_WORLD_REMOVE_OWNER)
+    if (worldRemoveOwnerOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        WorldRemoveOwnerFixture::Run(fixture, worldRemoveOwnerScenario);
+        std::printf("World remove case %u completed\n", worldRemoveOwnerScenario);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+#endif
+#if defined(MTA_TEST_WORLD_LOD_REBASE_OWNER)
+    if (worldLodRebaseOwnerOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        WorldLodRebaseOwnerFixture::Run(fixture);
+        std::puts("World LOD rebase owner case completed");
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+#endif
 #if defined(MTA_TEST_WORLD_COVER_OWNER)
     if (worldCoverOwnerOnly)
     {

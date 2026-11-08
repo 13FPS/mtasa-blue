@@ -159,6 +159,7 @@
 #include "NativeObjectGroupPropertiesDomain.h"
 #include "NativeWorldPoolMatrixDomain.h"
 #include "NativeWorldCoverDomain.h"
+#include "NativeWorldRemoveDomain.h"
 #include "NativeWorldIplCalls.h"
 #include "NativeModelArchiveReader.h"
 #include "NativeModelObjectReader.h"
@@ -420,6 +421,8 @@ namespace mta::game_de
             ClockResult DetachWorldPoolMatrix(NativeWorldPoolMatrixAccess::Kind, std::uint32_t) noexcept override;
             ClockResult RestoreWorldPoolMatrix(NativeWorldPoolMatrixAccess::Kind, std::uint32_t) noexcept override;
             ClockResult RestoreAllWorldPoolMatrices() noexcept override;
+            ClockResult CheckWorldEntityRemoveReady(NativeWorldRemoveAccess::Kind, std::uint32_t) noexcept override;
+            ClockResult RemoveWorldEntity(NativeWorldRemoveAccess::Kind, std::uint32_t) noexcept override;
             ClockResult CheckWorldCoverCleanupReady() noexcept override;
             ClockResult RemoveAllWorldCovers() noexcept override;
             ClockResult CheckWorldIplStreamingReady() noexcept override;
@@ -763,6 +766,9 @@ namespace mta::game_de
             // Cover removal owns reference/list effects in this generation.
             // End must retain an accepted prefix or unknown native return.
             NativeWorldCoverDomain worldCovers;
+            // Keep entered-unknown unlink intent in this same generation.
+            // A detached timer cannot certify retirement or retry it.
+            NativeWorldRemoveDomain worldRemovals;
             // World removal and restoration share this generation. End cannot
             // replace the SDK's pool-restoration-before-IPL-enable itinerary.
             NativeWorldIplCalls::Controller worldIpl;
@@ -1058,13 +1064,14 @@ namespace mta::game_de
                    runtime.pedModelCreationBusy.load() || runtime.pedModelCreationRetained.load() || runtime.modelBackingReferences.IsRetained() ||
                    runtime.modelWheels.Pending() || runtime.modelObjectGroups.Pending() || runtime.modelDummies.Pending() ||
                    runtime.objectGroupProperties.Pending() || runtime.worldPoolMatrices.Pending() || runtime.worldCovers.Pending() ||
-                   runtime.worldIpl.Retained() || runtime.pedReferences.IsRetained() || WorldIgnoreRetained() || runtime.customSequences.IsRetained() ||
-                   runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained() || runtime.groupCreations.IsRetained() ||
-                   runtime.hierarchyUncompress.IsRetained() || runtime.cameraRestore.IsRetained() || runtime.cameraTargetSetter.IsRetained() ||
-                   runtime.cameraFovWrite.IsRetained() || runtime.cameraDirection.IsRetained() || runtime.cameraWidescreen.IsRetained() ||
-                   runtime.playerMoveAnimReapply.IsRetained() || runtime.playerMoveAnimGroupWrite.IsRetained() || runtime.playerMoveAnimHooks.IsRetained() ||
-                   runtime.playerMoveAnimHookPeers.Held() || runtime.playerMoveAnimHookPeers.PresentationHeld() || runtime.hierarchyCacheRemove.IsRetained() ||
-                   runtime.blockRegistration.IsRetained() || runtime.blockRemoval.IsRetained() || runtime.customSequences.HasPendingCleanup();
+                   runtime.worldRemovals.Pending() || runtime.worldIpl.Retained() || runtime.pedReferences.IsRetained() || WorldIgnoreRetained() ||
+                   runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained() ||
+                   runtime.groupCreations.IsRetained() || runtime.hierarchyUncompress.IsRetained() || runtime.cameraRestore.IsRetained() ||
+                   runtime.cameraTargetSetter.IsRetained() || runtime.cameraFovWrite.IsRetained() || runtime.cameraDirection.IsRetained() ||
+                   runtime.cameraWidescreen.IsRetained() || runtime.playerMoveAnimReapply.IsRetained() || runtime.playerMoveAnimGroupWrite.IsRetained() ||
+                   runtime.playerMoveAnimHooks.IsRetained() || runtime.playerMoveAnimHookPeers.Held() || runtime.playerMoveAnimHookPeers.PresentationHeld() ||
+                   runtime.hierarchyCacheRemove.IsRetained() || runtime.blockRegistration.IsRetained() || runtime.blockRemoval.IsRetained() ||
+                   runtime.customSequences.HasPendingCleanup();
         }
 
         bool WeatherOverrideRetained() noexcept
@@ -6139,6 +6146,22 @@ namespace mta::game_de
             return result;
         }
 
+        ClockResult NativeAccess::CheckWorldEntityRemoveReady(NativeWorldRemoveAccess::Kind kind, std::uint32_t index) noexcept
+        {
+            return runtime.worldRemovals.Ready(runtime.image, runtime.generation.load(), kind, index, &CheckTimingOwner, &CheckApplicationTimingOwner);
+        }
+
+        ClockResult NativeAccess::RemoveWorldEntity(NativeWorldRemoveAccess::Kind kind, std::uint32_t index) noexcept
+        {
+            const auto result =
+                runtime.worldRemovals.Remove(runtime.image, runtime.generation.load(), kind, index, &CheckTimingOwner, &CheckApplicationTimingOwner);
+            if (runtime.worldRemovals.Pending())
+                runtime.restored.store(false);
+            if (result != ClockResult::Ok && runtime.worldRemovals.Uncertain())
+                Stop(result);
+            return result;
+        }
+
         ClockResult NativeAccess::CheckWorldCoverCleanupReady() noexcept
         {
             return runtime.worldCovers.Ready(runtime.image, runtime.generation.load(), &CheckTimingOwner, &CheckApplicationTimingOwner);
@@ -9503,7 +9526,7 @@ namespace mta::game_de
                                                   runtime.startupMenuBusy.load() || runtime.startupMenuRetained.load() || runtime.modelWheels.Pending() ||
                                                   runtime.modelObjectGroups.Pending() || runtime.modelDummies.Pending() ||
                                                   runtime.objectGroupProperties.Pending() || runtime.worldPoolMatrices.Pending() ||
-                                                  runtime.worldCovers.Pending() || runtime.worldIpl.Retained();
+                                                  runtime.worldCovers.Pending() || runtime.worldRemovals.Pending() || runtime.worldIpl.Retained();
                     runtime.restored.store(!metadataRetained);
                     runtime.ready.store(false);
                     runtime.timerReady.store(false);
@@ -9576,7 +9599,7 @@ namespace mta::game_de
                                               runtime.startupMenuBusy.load() || runtime.startupMenuRetained.load() || runtime.modelWheels.Pending() ||
                                               runtime.modelObjectGroups.Pending() || runtime.modelDummies.Pending() ||
                                               runtime.objectGroupProperties.Pending() || runtime.worldPoolMatrices.Pending() || runtime.worldCovers.Pending() ||
-                                              runtime.worldIpl.Retained();
+                                              runtime.worldRemovals.Pending() || runtime.worldIpl.Retained();
                 // Clock/timing restoration has its own completed acknowledgement.
                 // A retained model must not make later callbacks rewind it again,
                 // while overall restoration/module release still remain blocked.

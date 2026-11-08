@@ -60,6 +60,7 @@
 #include "NativeObjectGroupPropertiesAccess.h"
 #include "NativeWorldPoolMatrixAccess.h"
 #include "NativeWorldCoverAccess.h"
+#include "NativeWorldRemoveAccess.h"
 #include "NativeWorldIplAccess.h"
 #include "NativePedPhysicalScalarsAccess.h"
 #include "NativePedRotationAccess.h"
@@ -157,6 +158,7 @@ namespace mta::game_de
                                    public NativeObjectGroupPropertiesAccess,
                                    public NativeWorldPoolMatrixAccess,
                                    public NativeWorldCoverAccess,
+                                   public NativeWorldRemoveAccess,
                                    public NativeWorldIplAccess,
                                    public NativeModelBackingReferenceAccess,
                                    public NativeNamedGarageAccess,

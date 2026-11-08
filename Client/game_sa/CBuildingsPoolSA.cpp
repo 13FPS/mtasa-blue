@@ -11,6 +11,7 @@
 
 #include "StdInc.h"
 #include "CBuildingsPoolSA.h"
+#include <game/CWorldPoolBackupPolicy.h>
 
 #include "CFileLoaderSA.h"
 #include <game/CWorld.h>
@@ -211,37 +212,50 @@ void CBuildingsPoolSA::RemoveAllWithBackup()
     // Without this, fields like CPed::pContactEntity can become dangling after pool slots
     // are released, causing crashes in SA code that reads m_nModelIndex from them
     // (e.g. CEventScanner::ScanForEvents). Mirrors the cleanup already done in Resize().
-    RemoveVehicleDamageLinks();
-    RemovePedsContactEnityLinks();
-    RemoveObjectEntityLinks();
+    MtaGame::CWorldPoolBackupPolicy::SweepLinks(
+        false, [this] { RemoveVehicleDamageLinks(); }, [this] { RemovePedsContactEnityLinks(); }, [this] { RemoveObjectEntityLinks(); });
     m_bLinkSweepsDone = true;
 
-    for (size_t i = 0; i < poolSize; i++)
-    {
-        if (pBuildsingsPool->IsContains(i))
+    CBuildingSAInterface* building = nullptr;
+    MtaGame::CWorldPoolBackupPolicy::BackupSlots(
+        poolSize,
+        [&](std::size_t index)
         {
-            CBuildingSAInterface* building = pBuildsingsPool->GetObject(i);
-
+            if (!pBuildsingsPool->IsContains(static_cast<std::int32_t>(index)))
+                return false;
+            building = pBuildsingsPool->GetObject(static_cast<std::int32_t>(index));
+            return true;
+        },
+        [&](std::size_t)
+        {
             RemoveBuildingFromWorld(building);
-
+            return true;
+        },
+        [&](std::size_t index)
+        {
             if (building->HasMatrix())
             {
-                // Keep original matrix
-                m_buildingMatrix[i] = *building->matrix;
-
+                m_buildingMatrix[index] = *building->matrix;
                 building->RemoveMatrix();
             }
-
-            pBuildsingsPool->Release(i);
-
-            (*m_pOriginalBuildingsBackup)[i].first = true;
-            std::memcpy(&(*m_pOriginalBuildingsBackup)[i].second, building, sizeof(CBuildingSAInterface));
-        }
-        else
+            return true;
+        },
+        [&](std::size_t index)
         {
-            (*m_pOriginalBuildingsBackup)[i].first = false;
-        }
-    }
+            pBuildsingsPool->Release(static_cast<uint>(index));
+            return true;
+        },
+        [&](std::size_t index)
+        {
+            (*m_pOriginalBuildingsBackup)[index].first = true;
+            std::memcpy(&(*m_pOriginalBuildingsBackup)[index].second, building, sizeof(CBuildingSAInterface));
+            return true;
+        },
+        [&](std::size_t index)
+        {
+            (*m_pOriginalBuildingsBackup)[index].first = false;
+            return true;
+        });
 }
 
 void CBuildingsPoolSA::RestoreBackup()
@@ -252,29 +266,39 @@ void CBuildingsPoolSA::RestoreBackup()
     auto* worldSA = pGame->GetWorld();
     auto* buildingRemovealSA = static_cast<CBuildingRemovalSA*>(pGame->GetBuildingRemoval());
 
-    auto&        originalData = *m_pOriginalBuildingsBackup;
-    auto         pBuildsingsPool = (*m_ppBuildingPoolInterface);
-    const size_t restoreCount = std::min(originalData.size(), static_cast<size_t>(pBuildsingsPool->m_nSize));
-    for (size_t i = 0; i < restoreCount; i++)
-    {
-        if (originalData[i].first)
+    auto&                 originalData = *m_pOriginalBuildingsBackup;
+    auto                  pBuildsingsPool = (*m_ppBuildingPoolInterface);
+    CBuildingSAInterface* pBuilding = nullptr;
+    MtaGame::CWorldPoolBackupPolicy::RestoreSlots(
+        originalData.size(), static_cast<std::size_t>(pBuildsingsPool->m_nSize), [&](std::size_t index) { return originalData[index].first; },
+        [&](std::size_t index)
         {
-            auto* pBuilding = pBuildsingsPool->AllocateAtNoInit(i);
-            std::memcpy(pBuilding, &originalData[i].second, sizeof(CBuildingSAInterface));
-
-            // Restore the matrix into the static list, where LoadObjectInstance put it originally;
-            // list1 links get stripped from their owner by GetOldestLink once the free list runs dry
-            auto it = m_buildingMatrix.find(i);
+            pBuilding = pBuildsingsPool->AllocateAtNoInit(static_cast<std::uint32_t>(index));
+            std::memcpy(pBuilding, &originalData[index].second, sizeof(CBuildingSAInterface));
+            return true;
+        },
+        [&](std::size_t index)
+        {
+            // Restored originals belong in the native static list. Dynamic
+            // list1 nodes can be stolen by GetOldestLink during later renders.
+            const auto it = m_buildingMatrix.find(index);
             if (it != m_buildingMatrix.end())
             {
                 pBuilding->AllocateStaticMatrix();
                 *pBuilding->matrix = it->second;
             }
-
+            return true;
+        },
+        [&](std::size_t)
+        {
             worldSA->Add(pBuilding, CBuildingPool_Constructor);
+            return true;
+        },
+        [&](std::size_t)
+        {
             buildingRemovealSA->AddDataBuildingAndReapplyRemoval(pBuilding);
-        }
-    }
+            return true;
+        });
 
     m_buildingMatrix.clear();
     m_pOriginalBuildingsBackup = nullptr;
@@ -310,7 +334,7 @@ void CBuildingsPoolSA::PurgeStaleSectorEntries(void* oldPool, int poolSize)
             auto* pNext = pNode->pNext;
             auto  entityAddr = reinterpret_cast<std::uintptr_t>(pNode->pItem);
 
-            if (entityAddr >= poolStart && entityAddr < poolEnd)
+            if (MtaGame::CWorldPoolBackupPolicy::InMovedRange(entityAddr, poolStart, poolEnd))
                 pList->RemoveItem(pNode->pItem);
 
             pNode = pNext;
@@ -405,25 +429,19 @@ bool CBuildingsPoolSA::Resize(int size)
     const auto oldPoolStart = reinterpret_cast<std::uintptr_t>(oldPool);
     const auto oldPoolEnd = oldPoolStart + static_cast<std::uintptr_t>(currentSize) * sizeof(CBuildingSAInterface);
 
-    if (oldPool != nullptr)
-    {
-        UpdateIplEntityArrayPointers(offset, oldPoolStart, oldPoolEnd);
-        UpdateObjectLods(offset, oldPoolStart, oldPoolEnd);
+    MtaGame::CWorldPoolBackupPolicy::RebaseMovedBuildings(
+        oldPool != nullptr, [&] { UpdateIplEntityArrayPointers(offset, oldPoolStart, oldPoolEnd); },
+        [&] { UpdateObjectLods(offset, oldPoolStart, oldPoolEnd); },
+        [&]
+        {
+            if (m_pOriginalBuildingsBackup)
+                UpdateBackupLodPointers(offset, oldPoolStart, oldPoolEnd);
+        },
+        [&] { pGame->GetPools()->GetDummyPool().UpdateBuildingLods(offset, oldPoolStart, oldPoolEnd); });
 
-        if (m_pOriginalBuildingsBackup)
-            UpdateBackupLodPointers(offset, oldPoolStart, oldPoolEnd);
-
-        pGame->GetPools()->GetDummyPool().UpdateBuildingLods(offset, oldPoolStart, oldPoolEnd);
-    }
-
-    // RemoveAllWithBackup already ran these in the same remove/resize cycle; skip them.
-    // Run when Resize is called directly without a prior backup (e.g. pool size change).
-    if (!skipLinkSweeps)
-    {
-        RemoveVehicleDamageLinks();
-        RemovePedsContactEnityLinks();
-        RemoveObjectEntityLinks();
-    }
+    // A preceding backup already swept these in the same remove/resize cycle.
+    MtaGame::CWorldPoolBackupPolicy::SweepLinks(
+        skipLinkSweeps, [this] { RemoveVehicleDamageLinks(); }, [this] { RemovePedsContactEnityLinks(); }, [this] { RemoveObjectEntityLinks(); });
 
     return true;
 }
@@ -448,7 +466,7 @@ void CBuildingsPoolSA::UpdateIplEntityArrayPointers(uint32_t offset, std::uintpt
         for (size_t j = 0; j < arraySize; j++)
         {
             auto entityAddress = reinterpret_cast<std::uintptr_t>((*ppArray)[j]);
-            if (entityAddress >= oldPoolStart && entityAddress < oldPoolEnd)
+            if (MtaGame::CWorldPoolBackupPolicy::InMovedRange(entityAddress, oldPoolStart, oldPoolEnd))
                 (*ppArray)[j] = reinterpret_cast<CBuildingSAInterface*>(entityAddress + offset);
         }
     }
@@ -464,7 +482,7 @@ void CBuildingsPoolSA::UpdateBackupLodPointers(uint32_t offset, std::uintptr_t o
         {
             CBuildingSAInterface* building = reinterpret_cast<CBuildingSAInterface*>(&data.second);
             auto                  lodAddress = reinterpret_cast<std::uintptr_t>(building->m_pLod);
-            if (lodAddress >= oldPoolStart && lodAddress < oldPoolEnd)
+            if (MtaGame::CWorldPoolBackupPolicy::InMovedRange(lodAddress, oldPoolStart, oldPoolEnd))
             {
                 building->m_pLod = reinterpret_cast<CBuildingSAInterface*>(lodAddress + offset);
             }
@@ -570,7 +588,7 @@ void CBuildingsPoolSA::UpdateObjectLods(uint32_t offset, std::uintptr_t oldPoolS
 
         auto* object = reinterpret_cast<CObjectSAInterface*>(pPoolBase + i * kObjectPoolStride);
         auto  lodAddress = reinterpret_cast<std::uintptr_t>(object->GetLod());
-        if (lodAddress >= oldPoolStart && lodAddress < oldPoolEnd)
+        if (MtaGame::CWorldPoolBackupPolicy::InMovedRange(lodAddress, oldPoolStart, oldPoolEnd))
             object->SetLod(reinterpret_cast<CEntitySAInterface*>(lodAddress + offset));
     }
 }

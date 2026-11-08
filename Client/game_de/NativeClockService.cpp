@@ -157,6 +157,7 @@
 #include "NativeModelObjectGroupDomain.h"
 #include "NativeModelDummiesDomain.h"
 #include "NativeObjectGroupPropertiesDomain.h"
+#include "NativeWorldPoolMatrixDomain.h"
 #include "NativeWorldIplCalls.h"
 #include "NativeModelArchiveReader.h"
 #include "NativeModelObjectReader.h"
@@ -414,6 +415,10 @@ namespace mta::game_de
             ClockResult SetObjectGroupProperty(std::uint8_t, NativeObjectGroupProperty, float, bool&) noexcept override;
             ClockResult RestoreObjectGroupProperties(std::uint8_t, bool&) noexcept override;
             ClockResult RestoreAllObjectGroupProperties() noexcept override;
+            ClockResult ReadWorldPoolMatrix(NativeWorldPoolMatrixAccess::Kind, std::uint32_t, NativeWorldPoolMatrixAccess::Transform&, bool&) noexcept override;
+            ClockResult DetachWorldPoolMatrix(NativeWorldPoolMatrixAccess::Kind, std::uint32_t) noexcept override;
+            ClockResult RestoreWorldPoolMatrix(NativeWorldPoolMatrixAccess::Kind, std::uint32_t) noexcept override;
+            ClockResult RestoreAllWorldPoolMatrices() noexcept override;
             ClockResult CheckWorldIplStreamingReady() noexcept override;
             ClockResult DisableWorldIplStreaming() noexcept override;
             ClockResult EnableWorldIplStreaming(MtaGame::CGameWorldPolicy::IplFilter) noexcept override;
@@ -749,6 +754,9 @@ namespace mta::game_de
             // Dummy holds cannot borrow a facade family's reference cycle.
             NativeModelDummiesDomain          modelDummies;
             NativeObjectGroupPropertiesDomain objectGroupProperties;
+            // Matrix effects belong to this same owner. Pool wrapper teardown
+            // and End cannot drop a detached transform or replay allocation.
+            NativeWorldPoolMatrixDomain worldPoolMatrices;
             // World removal and restoration share this generation. End cannot
             // replace the SDK's pool-restoration-before-IPL-enable itinerary.
             NativeWorldIplCalls::Controller worldIpl;
@@ -1043,14 +1051,14 @@ namespace mta::game_de
                    runtime.startupMenuRetained.load() || runtime.startupCollisionBusy.load() || runtime.startupCollisionRetained.load() ||
                    runtime.pedModelCreationBusy.load() || runtime.pedModelCreationRetained.load() || runtime.modelBackingReferences.IsRetained() ||
                    runtime.modelWheels.Pending() || runtime.modelObjectGroups.Pending() || runtime.modelDummies.Pending() ||
-                   runtime.objectGroupProperties.Pending() || runtime.worldIpl.Retained() || runtime.pedReferences.IsRetained() || WorldIgnoreRetained() ||
-                   runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained() ||
-                   runtime.groupCreations.IsRetained() || runtime.hierarchyUncompress.IsRetained() || runtime.cameraRestore.IsRetained() ||
-                   runtime.cameraTargetSetter.IsRetained() || runtime.cameraFovWrite.IsRetained() || runtime.cameraDirection.IsRetained() ||
-                   runtime.cameraWidescreen.IsRetained() || runtime.playerMoveAnimReapply.IsRetained() || runtime.playerMoveAnimGroupWrite.IsRetained() ||
-                   runtime.playerMoveAnimHooks.IsRetained() || runtime.playerMoveAnimHookPeers.Held() || runtime.playerMoveAnimHookPeers.PresentationHeld() ||
-                   runtime.hierarchyCacheRemove.IsRetained() || runtime.blockRegistration.IsRetained() || runtime.blockRemoval.IsRetained() ||
-                   runtime.customSequences.HasPendingCleanup();
+                   runtime.objectGroupProperties.Pending() || runtime.worldPoolMatrices.Pending() || runtime.worldIpl.Retained() ||
+                   runtime.pedReferences.IsRetained() || WorldIgnoreRetained() || runtime.customSequences.IsRetained() ||
+                   runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained() || runtime.groupCreations.IsRetained() ||
+                   runtime.hierarchyUncompress.IsRetained() || runtime.cameraRestore.IsRetained() || runtime.cameraTargetSetter.IsRetained() ||
+                   runtime.cameraFovWrite.IsRetained() || runtime.cameraDirection.IsRetained() || runtime.cameraWidescreen.IsRetained() ||
+                   runtime.playerMoveAnimReapply.IsRetained() || runtime.playerMoveAnimGroupWrite.IsRetained() || runtime.playerMoveAnimHooks.IsRetained() ||
+                   runtime.playerMoveAnimHookPeers.Held() || runtime.playerMoveAnimHookPeers.PresentationHeld() || runtime.hierarchyCacheRemove.IsRetained() ||
+                   runtime.blockRegistration.IsRetained() || runtime.blockRemoval.IsRetained() || runtime.customSequences.HasPendingCleanup();
         }
 
         bool WeatherOverrideRetained() noexcept
@@ -6080,6 +6088,51 @@ namespace mta::game_de
             return result;
         }
 
+        ClockResult NativeAccess::ReadWorldPoolMatrix(NativeWorldPoolMatrixAccess::Kind kind, std::uint32_t index,
+                                                      NativeWorldPoolMatrixAccess::Transform& transform, bool& present) noexcept
+        {
+            return runtime.worldPoolMatrices.Read(runtime.image, runtime.generation.load(), kind, index, &CheckTimingOwner, &CheckApplicationTimingOwner,
+                                                  transform, present);
+        }
+
+        ClockResult NativeAccess::DetachWorldPoolMatrix(NativeWorldPoolMatrixAccess::Kind kind, std::uint32_t index) noexcept
+        {
+            const auto result =
+                runtime.worldPoolMatrices.Detach(runtime.image, runtime.generation.load(), kind, index, &CheckTimingOwner, &CheckApplicationTimingOwner);
+            // Only an explicit SDK/native-owner request may restore matrices;
+            // an entered-unknown allocation/store is retained without replay.
+            if (runtime.worldPoolMatrices.Pending())
+                runtime.restored.store(false);
+            if (result != ClockResult::Ok && runtime.worldPoolMatrices.Uncertain())
+                Stop(result);
+            return result;
+        }
+
+        ClockResult NativeAccess::RestoreWorldPoolMatrix(NativeWorldPoolMatrixAccess::Kind kind, std::uint32_t index) noexcept
+        {
+            const auto result =
+                runtime.worldPoolMatrices.RestoreOne(runtime.image, runtime.generation.load(), kind, index, &CheckTimingOwner, &CheckApplicationTimingOwner);
+            // Only an explicit SDK/native-owner request may restore matrices;
+            // an entered-unknown allocation/store is retained without replay.
+            if (runtime.worldPoolMatrices.Pending())
+                runtime.restored.store(false);
+            if (result != ClockResult::Ok && runtime.worldPoolMatrices.Uncertain())
+                Stop(result);
+            return result;
+        }
+
+        ClockResult NativeAccess::RestoreAllWorldPoolMatrices() noexcept
+        {
+            const auto result = runtime.worldPoolMatrices.RestoreAll(runtime.image, runtime.generation.load(), &CheckTimingOwner, &CheckApplicationTimingOwner);
+            // Only an explicit SDK/native-owner request may restore matrices;
+            // an entered-unknown allocation/store is retained without replay.
+            if (runtime.worldPoolMatrices.Pending())
+                runtime.restored.store(false);
+            if (result != ClockResult::Ok && runtime.worldPoolMatrices.Uncertain())
+                Stop(result);
+            return result;
+        }
+
         ClockResult NativeAccess::CheckWorldIplStreamingReady() noexcept
         {
             return runtime.worldIpl.Ready(runtime.image, runtime.generation.load(), &CheckTimingOwner, &CheckApplicationTimingOwner);
@@ -9426,7 +9479,7 @@ namespace mta::game_de
                                                   runtime.startupCollisionBusy.load() || runtime.startupCollisionRetained.load() ||
                                                   runtime.startupMenuBusy.load() || runtime.startupMenuRetained.load() || runtime.modelWheels.Pending() ||
                                                   runtime.modelObjectGroups.Pending() || runtime.modelDummies.Pending() ||
-                                                  runtime.objectGroupProperties.Pending() || runtime.worldIpl.Retained();
+                                                  runtime.objectGroupProperties.Pending() || runtime.worldPoolMatrices.Pending() || runtime.worldIpl.Retained();
                     runtime.restored.store(!metadataRetained);
                     runtime.ready.store(false);
                     runtime.timerReady.store(false);
@@ -9498,7 +9551,7 @@ namespace mta::game_de
                                               runtime.startupCollisionBusy.load() || runtime.startupCollisionRetained.load() ||
                                               runtime.startupMenuBusy.load() || runtime.startupMenuRetained.load() || runtime.modelWheels.Pending() ||
                                               runtime.modelObjectGroups.Pending() || runtime.modelDummies.Pending() ||
-                                              runtime.objectGroupProperties.Pending() || runtime.worldIpl.Retained();
+                                              runtime.objectGroupProperties.Pending() || runtime.worldPoolMatrices.Pending() || runtime.worldIpl.Retained();
                 // Clock/timing restoration has its own completed acknowledgement.
                 // A retained model must not make later callbacks rewind it again,
                 // while overall restoration/module release still remain blocked.

@@ -3992,6 +3992,15 @@ namespace ClockObjectGroupOwnerTest
 #endif
 #include "../../Client/game_de/NativeModelDummiesDomain.cpp"
 #include "../../Client/game_de/NativeObjectGroupPropertiesDomain.cpp"
+#include "../../Client/game_de/NativeWorldPoolMatrixMemory.cpp"
+#if defined(MTA_TEST_WORLD_POOL_MATRIX_OWNER)
+    #include "WorldPoolMatrixOwnerEntryFixture.h"
+    #define MTA_DE_WORLD_POOL_ENTRY_NATIVE_INVOKE (&::ClockWorldPoolMatrixOwnerTest::Invoke)
+#endif
+#include "../../Client/game_de/NativeWorldPoolEntryCalls.cpp"
+#undef MTA_DE_WORLD_POOL_ENTRY_NATIVE_INVOKE
+#include "../../Client/game_de/NativeWorldPoolMatrixDomain.cpp"
+
 #include "../../Client/game_de/NativeWorldIplLoadedMemory.cpp"
 #include "../../Client/game_de/NativeWorldIplMemory.cpp"
 namespace NativeWorldIplFixture
@@ -9322,6 +9331,11 @@ namespace
 #include "../../Client/game_de/CGameObjectGroupResetDE.h"
 #include "NativeModelObjectGroupFixture.h"
 #include "NativeModelObjectGroupOwnerTests.inl"
+#if defined(MTA_TEST_WORLD_POOL_MATRIX_OWNER)
+    #include "NativeWorldPoolMatrixFixture.h"
+    #include "WorldPoolMatrixOwnerTests.inl"
+#endif
+
 #if defined(MTA_TEST_NATIVE_STARTUP_EFFECTS)
     #include "../../Client/game_de/CGameModelDummiesResetDE.h"
     #include "NativeModelDummiesFixture.h"
@@ -9453,6 +9467,21 @@ int main(int argc, char** argv)
                                                    : argc == 3 && std::strcmp(argv[2], "--model-object-group-owner-unknown") == 0  ? 2u
                                                                                                                                    : 3u;
     const bool     modelObjectGroupOwnerOnly = modelObjectGroupOwnerScenario < 3;
+#if defined(MTA_TEST_WORLD_POOL_MATRIX_OWNER)
+    unsigned worldPoolMatrixOwnerScenario = 3;
+    if (argc == 3)
+    {
+        constexpr std::array<const char*, 3> flags{"--world-pool-matrix-owner-healthy", "--world-pool-matrix-owner-retained",
+                                                   "--world-pool-matrix-owner-unknown"};
+        for (unsigned index = 0; index < flags.size(); ++index)
+            if (std::strcmp(argv[2], flags[index]) == 0)
+                worldPoolMatrixOwnerScenario = index;
+    }
+    const bool worldPoolMatrixOwnerOnly = worldPoolMatrixOwnerScenario < 3;
+#else
+    const bool worldPoolMatrixOwnerOnly = false;
+#endif
+
 #if defined(MTA_TEST_NATIVE_STARTUP_EFFECTS)
     unsigned nativeStartupEffectsScenario = 6;
     if (argc == 3)
@@ -9899,7 +9928,7 @@ int main(int argc, char** argv)
          animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly || fireCollisionOnly || fireOnly ||
          collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly || worldLineOnly || worldAreaOnly ||
          worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly || cameraSphereOnly || pedWeaponClearOnly ||
-         pedClothesOnly || pedRebuildOnly || modelWheelResetOwnerOnly || modelObjectGroupOwnerOnly || nativeStartupEffectsOnly ||
+         pedClothesOnly || pedRebuildOnly || modelWheelResetOwnerOnly || modelObjectGroupOwnerOnly || nativeStartupEffectsOnly || worldPoolMatrixOwnerOnly ||
          playerMoveAnimWorkloadReaderOnly || playerMoveAnimSetterOwnerOnly || playerMoveAnimHookOwnerOnly || playerMoveAnimReapplyOnly || pedMoveAnimOnly ||
          playerNativePrerequisitesOnly || animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly ||
          animationManagerRefsOnly || animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly ||
@@ -9941,6 +9970,17 @@ int main(int argc, char** argv)
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }
+#if defined(MTA_TEST_WORLD_POOL_MATRIX_OWNER)
+    if (worldPoolMatrixOwnerOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        WorldPoolMatrixOwnerFixture::Run(fixture, worldPoolMatrixOwnerScenario);
+        std::printf("World pool matrix case %u completed\n", worldPoolMatrixOwnerScenario);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+#endif
 #if defined(MTA_TEST_NATIVE_STARTUP_EFFECTS)
     if (nativeStartupEffectsOnly)
     {

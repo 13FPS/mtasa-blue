@@ -14,6 +14,7 @@
 #include <vector>
 #include <array>
 #include <memory>
+#include <game/CDynamicPoolCapacityPolicy.h>
 
 template <typename PoolObjT>
 class CDynamicPoolPart
@@ -55,7 +56,7 @@ template <std::size_t InitialSize, std::size_t AddSize>
 struct PoolGrowAddStrategy
 {
     static constexpr std::size_t GetInitialSize() { return InitialSize; }
-    static constexpr std::size_t GetNextSize(std::size_t index) { return AddSize; }
+    static constexpr std::size_t GetNextSize(std::size_t) { return AddSize; }
 };
 
 template <typename PoolObjT, typename GrowStrategy>
@@ -122,50 +123,9 @@ public:
 
     bool SetCapacity(std::size_t newSize)
     {
-        if (newSize == 0)
-            return false;
-
-        std::size_t currentSize = GetCapacity();
-
-        if (currentSize == newSize)
-            return false;
-        else if (currentSize < newSize)
-        {
-            // Grow
-            while (currentSize < newSize)
-            {
-                try
-                {
-                    auto& nextPart = AllocateNewPart();
-                    currentSize += nextPart.GetCapacity();
-                }
-                catch (const std::bad_alloc&)
-                {
-                    return false;
-                }
-            }
-        }
-        else
-        {
-            // Shrink
-            while (true)
-            {
-                auto& part = m_poolParts.back();
-                if (part.GetUsedSize() != 0)
-                    return false;
-
-                currentSize -= part.GetCapacity();
-                if (currentSize < newSize)
-                    return false;
-
-                m_poolParts.pop_back();
-
-                if (currentSize == newSize)
-                    return true;
-            }
-        }
-
-        return true;
+        return MtaGame::CDynamicPoolCapacityPolicy::Set(
+            newSize, [this] { return GetCapacity(); }, [this] { return AllocateNewPart().GetCapacity(); }, [this] { return m_poolParts.back().GetUsedSize(); },
+            [this] { return m_poolParts.back().GetCapacity(); }, [this] { m_poolParts.pop_back(); });
     }
 
 private:

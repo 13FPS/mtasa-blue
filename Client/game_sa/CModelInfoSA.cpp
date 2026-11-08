@@ -18,6 +18,7 @@
 #include <game/CModelRequestPolicy.h>
 #include <game/CModelPedCreationPolicy.h>
 #include <game/CModelWheelSizePolicy.h>
+#include <game/CModelObjectGroupPolicy.h>
 #include "CPedModelInfoSA.h"
 #include "CPedSA.h"
 #include "CPoolsSA.h"
@@ -2073,14 +2074,24 @@ void CModelInfoSA::ResetSupportedUpgrades()
 
 void CModelInfoSA::SetObjectPropertiesGroup(unsigned short usNewGroup)
 {
-    unsigned short usOrgGroup = GetObjectPropertiesGroup();
-    if (usOrgGroup == usNewGroup)
-        return;
-
-    if (!MapFind(ms_OriginalObjectPropertiesGroups, m_dwModelID))
-        MapSet(ms_OriginalObjectPropertiesGroups, m_dwModelID, usOrgGroup);
-
-    GetInterface()->usDynamicIndex = usNewGroup;
+    MtaGame::CModelObjectGroupPolicy::Set(
+        usNewGroup,
+        [&](std::uint16_t& current)
+        {
+            current = GetObjectPropertiesGroup();
+            return true;
+        },
+        [&](std::uint16_t original)
+        {
+            if (!MapFind(ms_OriginalObjectPropertiesGroups, m_dwModelID))
+                MapSet(ms_OriginalObjectPropertiesGroups, m_dwModelID, original);
+            return true;
+        },
+        [&](std::uint16_t value)
+        {
+            GetInterface()->usDynamicIndex = value;
+            return true;
+        });
 }
 
 unsigned short CModelInfoSA::GetObjectPropertiesGroup()
@@ -2090,23 +2101,33 @@ unsigned short CModelInfoSA::GetObjectPropertiesGroup()
 
 void CModelInfoSA::RestoreObjectPropertiesGroup()
 {
-    unsigned short* usGroupInMap = MapFind(ms_OriginalObjectPropertiesGroups, m_dwModelID);
-    if (usGroupInMap)
-    {
-        GetInterface()->usDynamicIndex = *usGroupInMap;
-        MapRemove(ms_OriginalObjectPropertiesGroups, m_dwModelID);
-    }
+    MtaGame::CModelObjectGroupPolicy::RestoreOne(
+        [&](std::uint16_t& original, bool& found)
+        {
+            const auto* saved = MapFind(ms_OriginalObjectPropertiesGroups, m_dwModelID);
+            found = saved != nullptr;
+            if (saved)
+                original = *saved;
+            return true;
+        },
+        [&](std::uint16_t value)
+        {
+            GetInterface()->usDynamicIndex = value;
+            return true;
+        },
+        [&] { MapRemove(ms_OriginalObjectPropertiesGroups, m_dwModelID); });
 }
 
 void CModelInfoSA::RestoreAllObjectsPropertiesGroups()
 {
-    for (const auto& pair : ms_OriginalObjectPropertiesGroups)
-    {
-        CBaseModelInfoSAInterface* pInterface = pGame->GetModelInfo(pair.first, true)->GetInterface();
-        if (pInterface)
-            pInterface->usDynamicIndex = pair.second;
-    }
-    ms_OriginalObjectPropertiesGroups.clear();
+    MtaGame::CModelObjectGroupPolicy::RestoreAll(ms_OriginalObjectPropertiesGroups,
+                                                 [&](DWORD model, std::uint16_t original)
+                                                 {
+                                                     CBaseModelInfoSAInterface* current = pGame->GetModelInfo(model, true)->GetInterface();
+                                                     if (current)
+                                                         current->usDynamicIndex = original;
+                                                     return true;
+                                                 });
 }
 
 eModelInfoType CModelInfoSA::GetModelType()

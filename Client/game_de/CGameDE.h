@@ -71,6 +71,10 @@ namespace mta::game_de
 
     protected:
         CWeaponInfo* ResolveWeaponInfoSlot(std::size_t slot) override;
+        // Later startup services share this game's captured constructor graph.
+        // A current native callback alone cannot renew an older game binding.
+        // Historical unprepared constructor routes keep their existing policy.
+        void RequirePreparedServiceBinding(const char* operation);
 
         enum class ConstructorServices : unsigned char
         {

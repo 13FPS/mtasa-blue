@@ -16,11 +16,16 @@ namespace mta::game_de
     public:
         CGarages* GetGarages() override
         {
+            RequirePreparedServiceBinding("get startup numeric garages");
             CGarages* selected = nullptr;
             auto      result = NativeWrites().GetStartupNumericGarages(selected);
             if (result == ClockResult::Ok && !selected)
                 result = ClockResult::NotInitialized;
             RequireNativeWrite(result, "get startup numeric garages");
+            // The provider may perform current native qualification before
+            // returning. Publish its pointer only while this same prepared
+            // game's constructor binding still passes the existing owner.
+            RequirePreparedServiceBinding("get startup numeric garages");
             return selected;
         }
 

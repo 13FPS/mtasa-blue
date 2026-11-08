@@ -22,7 +22,7 @@ $record = [ordered]@{
     generatedFixture=$null;results=@();failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;
     scope='Internal CPU prepared-graph envelope only: genuine test-issued token, exact identities, fresh publication, failure retention and explicit producer drain. Existing production partial graph remains abstract; no engine or full-factory authority.';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;completeCGameReady=$false;
-    preparedGameBorrowSdkTested=$false;preparedGameBorrowIdentityTested=$false;preparedGameBorrowPublicationTested=$false;preparedGameBorrowDrainTested=$false;preparedGameBorrowPureSurfaceTested=$false
+    preparedGameBorrowSdkTested=$false;preparedGameBorrowIdentityTested=$false;preparedGameBorrowPublicationTested=$false;preparedGameBorrowDrainTested=$false;preparedGameBorrowPureSurfaceTested=$false;preparedStartupServiceBindingSdkTested=$false
 }
 
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -86,6 +86,10 @@ try {
         'Client/game_de/NativeGameStateReader.cpp','Client/game_de/NativeGameStateMemory.cpp','Client/game_de/NativeDataFileNamesReader.cpp','Client/game_de/NativeImageAccess.cpp',
         'Client/game_de/NativeCheatProfile.cpp',
         'Client/game_de/CWeaponInfoReadDE.cpp','Client/game_de/CWeaponInfoWriteDE.cpp','Client/game_de/CWeaponInfoDE.cpp','Client/game_de/CWeaponInfoBankDE.cpp','Client/game_de/CWeaponStatNativeDE.cpp','Client/game_de/CWeaponStatManagerPolicyDE.cpp','Client/game_de/CWeaponStatManagerDE.cpp','Client/game_de/NativeWeaponInfoReader.cpp')
+    # Link the actual receivers so stale prepared service identities are tested
+    # through production getters rather than a second fixture implementation.
+    $productionSources += @('Client/game_de/CGaragesStartupDE.cpp','Client/game_de/CGarageNamedDE.cpp',
+        'Client/game_de/CStreamingDE.cpp','Client/game_de/CStreamingStartupDE.cpp')
     $sourceNames = $productionSources + @('Client/game_de/CGameModelPreparationDE.h','Client/sdk/game/CModelPedCreationPolicy.h','Client/game_de/NativeModelClassificationAccess.h','Client/sdk/game/CStreaming.h','Client/game_de/CGameInitializationDE.h','Client/game_de/CGaragesDE.h','Client/sdk/game/CGameInitializationPolicy.h','Client/sdk/game/CGameModelPreparationPolicy.h','Client/sdk/game/CModelInfo.h','Client/sdk/game/CGarageInitializationPolicy.h','Client/sdk/game/CGarages.h','Client/sdk/game/CGarage.h','Client/game_de/CGameDE.h','Client/game_de/CGameTimingDE.h','Client/game_de/CGameWeaponInfoDE.h','Client/sdk/game/CWeaponInfoIndexPolicy.h','Client/game_de/CClockDE.h',
         'Client/game_de/CWeaponStatFactoryDE.h','Client/sdk/game/CWeaponStatData.h','Client/sdk/game/CWeaponStatDefaults.h',
         'Client/sdk/game/CWeaponStatFlagPolicy.h','Client/sdk/game/CWeaponStatOwned.h','Client/sdk/game/CWeaponStat.h',
@@ -119,6 +123,12 @@ try {
     $sourceNames += @('Client/game_de/CGameResetMixinDE.inl','Client/game_de/CGameWorldMixinDE.inl','Client/game_de/CGameStartupLifecycleDE.h','Client/game_de/CGameStartupInitializationDE.h','Client/game_de/CGameStartupStreamingDE.h','Client/game_de/CGameNumericGaragesDE.h','Client/game_de/CGameNativeMenuDE.h','Client/game_de/CGameRenderPreparationDE.h','Client/game_de/CGamePresentationPolicyDE.h','Client/game_de/NativePresentationPolicyAccess.h','Client/game_de/WeaponFireHandlerAccess.h','Client/sdk/game/CGamePresentationPolicy.h','Client/game_de/CRenderWarePreparationDE.h','Client/sdk/game/CShaderTextureWatchTypes.h','Client/sdk/game/CShaderTextureWatch.h','Client/sdk/game/CShaderTextureWatch.inl','Client/sdk/game/CTextureWatchInitializationPolicy.h','Shared/sdk/SString.hpp','Shared/sdk/SharedUtil.FastHashMap.h','Shared/sdk/SharedUtil.FastHashSet.h','Tests/definitive/Write-StartupLifecycleFixture.ps1')
     $sourceNames += @('vendor/sparsehash/src/google/dense_hash_map','vendor/sparsehash/src/google/dense_hash_set','vendor/sparsehash/src/sparsehash/dense_hash_map','vendor/sparsehash/src/sparsehash/dense_hash_set','vendor/sparsehash/src/sparsehash/internal/densehashtable.h','vendor/sparsehash/src/sparsehash/internal/hashtable-common.h','vendor/sparsehash/src/sparsehash/internal/libc_allocator_with_realloc.h','vendor/sparsehash/src/sparsehash/type_traits.h','vendor/sparsehash/src/sparsehash/template_util.h','vendor/sparsehash/src/windows/sparsehash/internal/sparseconfig.h')
     $sourceNames += @('Client/game_de/CGameBuildingPoolDefaultDE.h','Tests/definitive/Write-PreparedGameBorrowFixture.ps1','Client/game_de/CGamePreparedBorrowDE.h','Client/game_de/NativePreparedGameBorrow.h')
+    $sourceNames += @('Client/game_de/CGaragesStartupDE.h','Client/game_de/CGarageNamedDE.h',
+        'Client/game_de/NativeNumericGarageAccess.h','Client/game_de/NativeNumericGarageProfile.h','Client/game_de/NativeNamedGarageAccess.h',
+        'Client/game_de/CStreamingDE.h','Client/game_de/CStreamingStartupDE.h','Client/game_de/NativeStreamingModelAccess.h',
+        'Client/game_de/NativeStreamingModelGroupsReader.h','Client/game_de/NativeStreamingModelGroupsProfile.h',
+        'Client/game_de/NativeModelLoadedReader.h','Client/game_de/NativeModelBankReader.h','Client/game_de/NativePedPoolProfile.h',
+        'Client/sdk/game/CModelRequestPolicy.h','Client/sdk/game/CAnimBlock.h','Shared/sdk/CVector.h')
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
@@ -137,7 +147,10 @@ try {
     $visualStudio = [IO.File]::ReadAllText($discovery.stdout).Trim()
     if ($discovery.exitCode -ne 0 -or $discovery.timedOut -or -not $visualStudio) { throw 'Visual Studio x64 tools are required.' }
     $developerCommand = Join-Path $visualStudio 'Common7/Tools/VsDevCmd.bat'
-    foreach($architecture in @('x86','x64')) {
+    # This fixture now includes the actual DE model/UObject owner headers,
+    # whose native pointer layout explicitly requires x64. Classic x86 uses
+    # its separate backend; it cannot instantiate this DE ownership graph.
+    foreach($architecture in @('x64')) {
         $directory=Join-Path $outputRoot $architecture
         [IO.Directory]::CreateDirectory($directory)|Out-Null
         $environmentScript=Join-Path $directory 'capture-msvc.cmd'
@@ -174,9 +187,10 @@ try {
         $result['preparedGameBorrowPublicationTested']=$stdout.Contains('Prepared game borrow publication and output preservation fixture completed')
         $result['preparedGameBorrowDrainTested']=$stdout.Contains('Prepared game borrow producer drain fixture completed')
         $result['preparedGameBorrowPureSurfaceTested']=$stdout.Contains('All prepared graph SDK obligations and thirteen lifecycle hooks remain abstract')
+        $result['preparedStartupServiceBindingSdkTested']=[regex]::Matches($stdout,'(?m)^Production prepared startup service binding SDK fixture completed\r?$').Count -eq 1
         $expectedBits=if($architecture -eq 'x86'){32}else{64}
-        if($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -ne 37 -or $result.pointerBits -ne $expectedBits -or
-            -not($result.preparedGameBorrowSdkTested -and $result.preparedGameBorrowIdentityTested -and $result.preparedGameBorrowPublicationTested -and $result.preparedGameBorrowDrainTested -and $result.preparedGameBorrowPureSurfaceTested)) {
+        if($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -ne 91 -or $result.pointerBits -ne $expectedBits -or
+            -not($result.preparedGameBorrowSdkTested -and $result.preparedGameBorrowIdentityTested -and $result.preparedGameBorrowPublicationTested -and $result.preparedGameBorrowDrainTested -and $result.preparedGameBorrowPureSurfaceTested -and $result.preparedStartupServiceBindingSdkTested)) {
             throw "$architecture prepared borrow SDK checks or required lifetime evidence failed"
         }
         # A separate owned process verifies the deliberately fatal live-token
@@ -191,10 +205,14 @@ try {
         $result.checks++
 
     }
-    foreach($marker in @('preparedGameBorrowSdkTested','preparedGameBorrowIdentityTested','preparedGameBorrowPublicationTested','preparedGameBorrowDrainTested','preparedGameBorrowPureSurfaceTested')) {
+    foreach($marker in @('preparedGameBorrowSdkTested','preparedGameBorrowIdentityTested','preparedGameBorrowPublicationTested','preparedGameBorrowDrainTested','preparedGameBorrowPureSurfaceTested','preparedStartupServiceBindingSdkTested')) {
         $record[$marker]=@($record.results|Where-Object{-not $_[$marker]}).Count -eq 0
     }
-    $record.success=$record.results.Count -eq 2 -and $record.preparedGameBorrowSdkTested -and $record.preparedGameBorrowIdentityTested -and $record.preparedGameBorrowPublicationTested -and $record.preparedGameBorrowDrainTested -and $record.preparedGameBorrowPureSurfaceTested
+    # Index the dictionaries explicitly: a single-architecture result must
+    # aggregate the same way as a multi-result PowerShell pipeline.
+    $record['checks']=0
+    foreach($completed in $record.results){$record['checks'] += [int]$completed['checks']}
+    $record.success=$record.results.Count -eq 1 -and $record.checks -eq 92 -and $record.preparedGameBorrowSdkTested -and $record.preparedGameBorrowIdentityTested -and $record.preparedGameBorrowPublicationTested -and $record.preparedGameBorrowDrainTested -and $record.preparedGameBorrowPureSurfaceTested -and $record.preparedStartupServiceBindingSdkTested
 
 
 } catch { AddFailure ($_.Exception.ToString()) }

@@ -17,11 +17,15 @@ namespace mta::game_de
     public:
         CStreaming* GetStreaming() override
         {
+            RequirePreparedServiceBinding("get startup streaming");
             CStreaming* selected = nullptr;
             auto        result = NativeWrites().GetStartupStreaming(selected);
             if (result == ClockResult::Ok && !selected)
                 result = ClockResult::NotInitialized;
             RequireNativeWrite(result, "get startup streaming");
+            // Keep MakePedModel's late lookup, but never let a successful
+            // provider result escape after this prepared binding is revoked.
+            RequirePreparedServiceBinding("get startup streaming");
             return selected;
         }
 

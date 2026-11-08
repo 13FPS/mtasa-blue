@@ -12,6 +12,8 @@
 #include "../../Client/game_de/CGameBuildingPoolDefaultDE.h"
 #include "../../Client/game_de/NativeGameTimingAccess.h"
 #include "../../Client/game_de/CClockDE.h"
+#include "../../Client/game_de/CGaragesStartupDE.h"
+#include "../../Client/game_de/CStreamingStartupDE.h"
 #include <game/CFireManager.h>
 #include <game/CCamera.h>
 #include <game/CHud.h>
@@ -22,8 +24,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <initializer_list>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <type_traits>
 #include "PreparedGameBorrowFixture.generated.h"
@@ -57,6 +61,25 @@ namespace
     class Owner final : public NativeGameTimingAccess
     {
     public:
+        enum class StartupEvent
+        {
+            Validate,
+            Garages,
+            Streaming
+        };
+        enum class LookupMutation
+        {
+            None,
+            Generation,
+            Bundle
+        };
+        struct StartupLookup
+        {
+            ClockResult    result = ClockResult::Ok;
+            bool           absent = false;
+            LookupMutation mutation = LookupMutation::None;
+            unsigned       calls = 0;
+        };
         NativePreparedGameBorrow           ledger;
         NativePreparedGameBorrow::Identity identity{7, 19, 0x10000000u, GetCurrentThreadId()};
         NativeGameConstructorServices      bundle;
@@ -66,6 +89,16 @@ namespace
         unsigned    closeAtTokenValidation = 0;
         CGamePreparedBorrowDE* closeEnvelope = nullptr;
         std::uint64_t          issuedId = 0;
+        // Real complete SDK receivers keep these getter tests on the actual
+        // startup graph. Their constructors perform no native operation; the
+        // provider double below alone selects and faults their publication.
+        CGaragesStartupDE           garagesSdk{*this};
+        CStreamingStartupDE         streamingSdk{*this};
+        StartupLookup               garagesLookup, streamingLookup;
+        std::array<StartupEvent, 8> startupEvents{};
+        unsigned                    startupEventCount = 0;
+        bool                        recordStartupEvents = false;
+        std::uintptr_t              foreignServiceTag = 0;
         Owner()
         {
             if (ledger.Open(identity) != ClockResult::Ok)
@@ -77,9 +110,51 @@ namespace
         ClockResult ValidateConstructorServices(const NativeGameConstructorServices& selected) noexcept override
         {
             ++bundleValidations;
+            RecordStartupEvent(StartupEvent::Validate);
             if (validationResult != ClockResult::Ok)
                 return validationResult;
             return selected.Same(bundle) ? ClockResult::Ok : ClockResult::OwnerConflict;
+        }
+        void RecordStartupEvent(StartupEvent event) noexcept
+        {
+            if (recordStartupEvents)
+            {
+                if (startupEventCount == startupEvents.size())
+                    std::abort();
+                startupEvents[startupEventCount++] = event;
+            }
+        }
+        void BeginStartupTrace() noexcept
+        {
+            startupEventCount = 0;
+            recordStartupEvents = true;
+            garagesLookup.calls = 0;
+            streamingLookup.calls = 0;
+        }
+        template <class Receiver, class Base>
+        ClockResult SelectStartup(StartupLookup& lookup, StartupEvent event, Receiver& receiver, Base*& output) noexcept
+        {
+            ++lookup.calls;
+            RecordStartupEvent(event);
+            if (lookup.result != ClockResult::Ok)
+                return lookup.result;
+            output = lookup.absent ? nullptr : &receiver;
+            // A successful lookup can race a generation or any other captured
+            // service identity. Mutation after assigning the selected receiver
+            // proves the actual CGame getter needs its second bundle bookend.
+            if (lookup.mutation == LookupMutation::Generation)
+                ++bundle.generation;
+            else if (lookup.mutation == LookupMutation::Bundle)
+                bundle.stats = reinterpret_cast<CStats*>(&foreignServiceTag);
+            return ClockResult::Ok;
+        }
+        ClockResult GetStartupNumericGarages(CGarages*& output) noexcept override
+        {
+            return SelectStartup(garagesLookup, StartupEvent::Garages, garagesSdk, output);
+        }
+        ClockResult GetStartupStreaming(CStreaming*& output) noexcept override
+        {
+            return SelectStartup(streamingLookup, StartupEvent::Streaming, streamingSdk, output);
         }
         ClockResult CaptureConstructorServices(const CClock* clock, NativeGameConstructorServices& output) noexcept override
         {
@@ -177,6 +252,10 @@ namespace
                   std::is_nothrow_constructible_v<CGamePreparedBorrowDE, NativeGameTimingAccess&> && std::is_nothrow_destructible_v<CGamePreparedBorrowDE>);
     static_assert(std::is_abstract_v<CGameBuildingPoolDefaultDE> && std::is_abstract_v<CGamePresentationPolicyMixinDE<CGameBuildingPoolDefaultDE>> &&
                   std::is_convertible_v<CGamePresentationPolicyMixinDE<CGameBuildingPoolDefaultDE>*, CGame*>);
+    // The strict fixture must inherit the production startup getters. A future
+    // generated replacement could otherwise hide the exact binding regression.
+    static_assert(std::is_same_v<decltype(&prepared_game_fixture::Game::GetGarages), decltype(&CGameNumericGaragesDE::GetGarages)> &&
+                  std::is_same_v<decltype(&prepared_game_fixture::Game::GetStreaming), decltype(&CGameStartupStreamingDE::GetStreaming)>);
     void Lifetime()
     {
         Context               c;
@@ -319,6 +398,151 @@ namespace
         Check(envelope.ReleaseOnProducer() == ClockResult::Ok && !c.owner.ledger.IsRetained(), "constructor failure causes no implicit or foreign release");
         std::puts("All prepared graph SDK obligations and thirteen lifecycle hooks remain abstract");
     }
+    bool StartupTrace(const Owner& owner, std::initializer_list<Owner::StartupEvent> expected)
+    {
+        if (owner.startupEventCount != expected.size())
+            return false;
+        unsigned index = 0;
+        for (const auto event : expected)
+            if (owner.startupEvents[index++] != event)
+                return false;
+        return true;
+    }
+    void* ReadStartupService(CGame& game, Owner::StartupEvent service)
+    {
+        // Invoke through the real common SDK. The strict generated lifecycle
+        // receiver inherits both production getters instead of replacing them.
+        return service == Owner::StartupEvent::Garages ? static_cast<void*>(game.GetGarages()) : static_cast<void*>(game.GetStreaming());
+    }
+    bool StartupRefuses(CGame& game, Owner::StartupEvent service, ClockResult expected, void*& published)
+    {
+        try
+        {
+            published = ReadStartupService(game, service);
+        }
+        catch (const std::runtime_error& error)
+        {
+            const std::string status = "(status " + std::to_string(static_cast<std::uint32_t>(expected)) + ")";
+            return std::string(error.what()).find(status) != std::string::npos;
+        }
+        return false;
+    }
+    void StartupServiceBinding()
+    {
+        using Event = Owner::StartupEvent;
+        using Mutation = Owner::LookupMutation;
+        for (const auto service : {Event::Garages, Event::Streaming})
+        {
+            Context     c;
+            auto        graph = std::make_unique<prepared_game_fixture::Game>(c.reader, c.clock, c.owner, c.streaming, c.state, c.owner.bundle);
+            CGame&      common = *graph;
+            auto&       lookup = service == Event::Garages ? c.owner.garagesLookup : c.owner.streamingLookup;
+            auto&       unrelated = service == Event::Garages ? c.owner.streamingLookup : c.owner.garagesLookup;
+            void* const expected = service == Event::Garages ? static_cast<void*>(static_cast<CGarages*>(&c.owner.garagesSdk))
+                                                             : static_cast<void*>(static_cast<CStreaming*>(&c.owner.streamingSdk));
+            void* const sentinel = &c.tags[127];
+            void*       published = sentinel;
+            const auto  original = c.owner.bundle;
+
+            c.owner.BeginStartupTrace();
+            auto validations = c.owner.bundleValidations;
+            Check(ReadStartupService(common, service) == expected && lookup.calls == 1 && !unrelated.calls,
+                  "prepared startup getter returns its real same-owner SDK receiver after one late lookup");
+            Check(StartupTrace(c.owner, {Event::Validate, service, Event::Validate}),
+                  "prepared startup getter bookends the late lookup with current bundle validation");
+            Check(c.owner.bundleValidations == validations + 2, "healthy prepared getter performs exactly two bundle checks");
+
+            ++c.owner.bundle.generation;
+            c.owner.BeginStartupTrace();
+            Check(StartupRefuses(common, service, ClockResult::OwnerConflict, published) && published == sentinel,
+                  "stale prepared generation refuses without publishing a receiver");
+            Check(!lookup.calls && !unrelated.calls && StartupTrace(c.owner, {Event::Validate}),
+                  "stale generation refuses before either startup provider runs");
+            c.owner.bundle = original;
+
+            c.owner.bundle.stats = reinterpret_cast<CStats*>(&c.owner.foreignServiceTag);
+            c.owner.BeginStartupTrace();
+            Check(StartupRefuses(common, service, ClockResult::OwnerConflict, published) && published == sentinel,
+                  "foreign captured bundle member refuses without publishing a receiver");
+            Check(!lookup.calls && !unrelated.calls && StartupTrace(c.owner, {Event::Validate}),
+                  "changed captured service identity refuses before the startup provider");
+            c.owner.bundle = original;
+
+            c.owner.validationResult = ClockResult::BindingChanged;
+            c.owner.BeginStartupTrace();
+            Check(StartupRefuses(common, service, ClockResult::BindingChanged, published) && published == sentinel,
+                  "explicit current owner refusal preserves the exact validation status and caller publication");
+            Check(!lookup.calls && StartupTrace(c.owner, {Event::Validate}), "owner validation refusal skips provider selection entirely");
+            c.owner.validationResult = ClockResult::Ok;
+
+            for (const auto mutation : {Mutation::Generation, Mutation::Bundle})
+            {
+                lookup.mutation = mutation;
+                c.owner.BeginStartupTrace();
+                Check(StartupRefuses(common, service, ClockResult::OwnerConflict, published) && published == sentinel,
+                      "bundle drift after assigning a successful provider result withholds the selected pointer");
+                Check(lookup.calls == 1 && !unrelated.calls && StartupTrace(c.owner, {Event::Validate, service, Event::Validate}),
+                      "post-selection generation and member drift are caught by the final current bundle check");
+                c.owner.bundle = original;
+            }
+            lookup.mutation = Mutation::None;
+
+            lookup.absent = true;
+            c.owner.BeginStartupTrace();
+            Check(StartupRefuses(common, service, ClockResult::NotInitialized, published) && published == sentinel,
+                  "successful absent startup receiver becomes NotInitialized without successful-null publication");
+            Check(lookup.calls == 1 && StartupTrace(c.owner, {Event::Validate, service}),
+                  "null provider refusal does not run the successful-publication bookend");
+            lookup.absent = false;
+
+            lookup.result = ClockResult::WrongThread;
+            c.owner.BeginStartupTrace();
+            Check(StartupRefuses(common, service, ClockResult::WrongThread, published) && published == sentinel,
+                  "startup provider failure preserves its exact status and caller output");
+            Check(lookup.calls == 1 && StartupTrace(c.owner, {Event::Validate, service}), "provider failure cannot be hidden by an additional validator call");
+            lookup.result = ClockResult::Ok;
+
+            c.owner.BeginStartupTrace();
+            Check(ReadStartupService(common, service) == expected && lookup.calls == 1,
+                  "fresh successful lookup remains possible after no-publication refusals");
+            Check(StartupTrace(c.owner, {Event::Validate, service, Event::Validate}), "retry retains both real prepared getter bookends");
+
+            auto   unprepared = std::make_unique<prepared_game_fixture::Game>(c.reader, c.clock, c.owner, c.streaming, c.state);
+            CGame& legacy = *unprepared;
+            // Deliberately reject constructor-bundle validation. The original
+            // unprepared route has no such bundle, and must keep its existing
+            // native provider lookup rather than gain a new readiness gate.
+            c.owner.validationResult = ClockResult::BindingChanged;
+            validations = c.owner.bundleValidations;
+            c.owner.BeginStartupTrace();
+            Check(ReadStartupService(legacy, service) == expected && lookup.calls == 1,
+                  "unprepared SDK route still returns its freshly selected real receiver");
+            Check(c.owner.bundleValidations == validations && StartupTrace(c.owner, {service}), "unprepared startup getter adds no captured-bundle validation");
+
+            lookup.result = ClockResult::WrongThread;
+            c.owner.BeginStartupTrace();
+            Check(StartupRefuses(legacy, service, ClockResult::WrongThread, published) && published == sentinel,
+                  "unprepared route still observes later provider failures instead of caching its receiver");
+            Check(c.owner.bundleValidations == validations && lookup.calls == 1 && StartupTrace(c.owner, {service}),
+                  "unprepared failure keeps exactly the existing late provider call");
+            lookup.result = ClockResult::Ok;
+
+            lookup.absent = true;
+            c.owner.BeginStartupTrace();
+            Check(StartupRefuses(legacy, service, ClockResult::NotInitialized, published) && published == sentinel,
+                  "unprepared successful-null provider result retains its NotInitialized behavior");
+            Check(c.owner.bundleValidations == validations && StartupTrace(c.owner, {service}), "unprepared null refusal does not gain a bundle check");
+            lookup.absent = false;
+
+            lookup.mutation = Mutation::Generation;
+            c.owner.BeginStartupTrace();
+            Check(ReadStartupService(legacy, service) == expected && lookup.calls == 1,
+                  "unprepared publication remains independent of an uncaptured constructor generation");
+            Check(c.owner.bundleValidations == validations && StartupTrace(c.owner, {service}),
+                  "unprepared selection retains no new validator or cached binding");
+        }
+        std::puts("Production prepared startup service binding SDK fixture completed");
+    }
     Owner*            terminationOwner = nullptr;
     [[noreturn]] void ExpectedDestructorError() noexcept
     {
@@ -351,6 +575,7 @@ int main(int argc, char** argv)
         Lifetime();
         Refusals();
         ConstructorFailure();
+        StartupServiceBinding();
         std::printf("Passed %u prepared game borrow SDK checks (%u-bit; CPU provider doubles only)\n", checks, static_cast<unsigned>(sizeof(void*) * 8));
         return 0;
     }

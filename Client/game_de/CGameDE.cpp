@@ -55,6 +55,12 @@ namespace mta::game_de
         return preparedServices;
     }
 
+    void CGameDE::RequirePreparedServiceBinding(const char* operation)
+    {
+        if (preparedServices.generation)
+            RequirePreparedServices(operation);
+    }
+
     CWeaponInfo* CGameDE::ResolveWeaponInfoSlot(std::size_t slot)
     {
         // Selection stays with MTA's shared SDK policy. Its native owner alone

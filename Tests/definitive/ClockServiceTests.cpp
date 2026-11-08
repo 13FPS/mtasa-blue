@@ -4041,6 +4041,9 @@ namespace ClockObjectGroupOwnerTest
 #include "../../Client/game_de/NativeWorldAddEntryCalls.cpp"
 #undef MTA_DE_WORLD_ADD_NATIVE_INVOKE
 #include "../../Client/game_de/NativeWorldAddDomain.cpp"
+#if defined(MTA_TEST_WORLD_MEMBERSHIP_OWNER)
+    #include "../../Client/game_de/NativeWorldMembershipMemory.cpp"
+#endif
 
 #include "../../Client/game_de/NativeWorldIplLoadedMemory.cpp"
 #include "../../Client/game_de/NativeWorldIplMemory.cpp"
@@ -9386,6 +9389,91 @@ namespace
     #include "NativeWorldLodFixture.h"
     #include "NativeWorldLodOwnerTests.inl"
 #endif
+#if defined(MTA_TEST_WORLD_MEMBERSHIP_OWNER)
+    #include "NativeWorldMembershipTests.inl"
+namespace WorldMembershipOwnerFixture
+{
+    void Run(ClockImageFixture& fixture)
+    {
+        fixture.AdmitApplicationPins();
+        WorldGroundOwnerFixture::Writes writes{fixture, {}};
+        const auto                      apply = [&](std::uintptr_t rva, const void* value, std::size_t bytes, DWORD protection)
+        { WorldGroundOwnerFixture::Writes::Apply(&writes, rva, value, bytes, protection); };
+        const auto code = [&](const auto& pins)
+        {
+            for (const auto& pin : pins)
+                apply(pin.rva, pin.bytes, pin.size, PAGE_EXECUTE_READ);
+        };
+        const auto typed = [&](const auto& pins)
+        {
+            for (const auto& pin : pins)
+                apply(pin.rva, pin.bytes, pin.size, pin.code ? PAGE_EXECUTE_READ : PAGE_READONLY);
+        };
+        code(NativePedPoolProfile::Code);
+        code(NativeModelBankProfile::Code);
+        code(NativeStreamingLoadAllProfile::Code);
+        typed(NativeStartupOwnerProfile::pins);
+        typed(NativeStartupWorldProfile::pins);
+        typed(NativeGameStateProfile::pins);
+        code(NativeUObjectMembershipProfile::pins);
+        code(NativeBorrowedGcProfile::pins);
+        for (const auto& pin : NativeStartGameProfile::Code)
+            if (pin.rva == 0xab879c || pin.rva == 0xab92f0 || pin.rva == 0x1af4ef0)
+                apply(pin.rva, pin.bytes.data(), pin.size, PAGE_EXECUTE_READ);
+        NativeStreamingLoadAllFixture::Graph graph(fixture.image, reinterpret_cast<std::uintptr_t>(fixture.frameOwner.data()),
+                                                   &WorldGroundOwnerFixture::Writes::Apply, &writes);
+        NativeWorldIplFixture::State         world(fixture.image, &WorldGroundOwnerFixture::Writes::Apply, &writes);
+        Check(world.Ready(), "membership reader uses the existing genuine current native heap and world fixture");
+        writes.Global(NativeGameStateProfile::stateRva, std::uint32_t{9});
+        writes.Global(NativeStartGameProfile::ThreadInitializedRva, static_cast<unsigned char>(1));
+        writes.Global(NativeBorrowedGcProfile::markerRva, LONG{0});
+        fixture.frameOwner[0] = fixture.image + NativeApplicationFrameProfile::vtableRva;
+        fixture.SetFrameReceiver(fixture.frameOwner.data());
+        CameraRowBorrowOwnerFixture::EnginePump engine(fixture);
+        writes.Global(NativeStartGameProfile::ThreadIdRva, engine.thread.load());
+        const auto previousImage = ClockReaderTestHost::image;
+        ClockReaderTestHost::image = fixture.image;
+        NativeClockService                service;
+        WorldGroundOwnerFixture::Callback callback;
+        callback.action = [](NativeGameTimingAccess&) {};
+        ClockServiceRequestV1 request;
+        request.reserved[0] = NativeClockService::GameTimingAfterApplicationFrameV1;
+        ClockServiceStateV1 rejected, state;
+        Check(!service.BeginGameTiming(request, rejected, &WorldGroundOwnerFixture::Callback::Invoke, &callback) &&
+                  rejected.failure == ClockResult::UnsupportedBuild,
+              "membership scope preserves shipping executable refusal before explicit owned-image admission");
+        ClockNumericAssociationIssuedTest::admittedImage = fixture.image;
+        const bool began = service.BeginGameTiming(request, state, &WorldGroundOwnerFixture::Callback::Invoke, &callback);
+        ClockNumericAssociationIssuedTest::admittedImage = 0;
+        Check(began && state.bound && runtime.frameHooked.load(), "membership reads use the actual post-application Runtime owner");
+        const auto generation = state.generation;
+        unsigned   called = 0;
+        callback.action = [&](NativeGameTimingAccess& owner)
+        {
+            ++called;
+            Check(&owner == &runtime.access && GetCurrentThreadId() == engine.thread.load() && GetCurrentThreadId() != runtime.producerThread,
+                  "complete membership snapshots execute in one genuine engine callback with the same actual Runtime owner");
+            // The fixture's owned writes only set up or corrupt finite source
+            // graphs. Production executes current reads and equality fences;
+            // no final original, write adapter, lease, or world capability is
+            // substituted into the Runtime for this read-only observation.
+            NativeWorldMembershipFixture::Run(runtime.image, &WorldGroundOwnerFixture::Writes::Apply, &writes, generation, &CheckTimingOwner,
+                                              &CheckApplicationTimingOwner, [](bool condition, const char* message) { Check(condition, message); });
+        };
+        engine.Pulse(service, generation);
+        callback.action = [](NativeGameTimingAccess&) {};
+        Check(called == 1 && !runtime.stopping.load(), "one complete read-only membership scenario returns from one admitted native frame");
+        if (!service.End(generation))
+            engine.Pulse(service, generation, true);
+        Check(service.End(generation), "read-only membership observations retire with the actual current Runtime without retained native debt");
+        engine.Stop();
+        ClockReaderTestHost::image = previousImage;
+        writes.Restore();
+        std::puts("Production world membership owner completed");
+    }
+}
+#endif
+
 #if defined(MTA_TEST_WORLD_ADD_OWNER)
     #include "NativeWorldPoolMatrixFixture.h"
     #include "NativeWorldBoundRectFixture.h"
@@ -9527,6 +9615,11 @@ int main(int argc, char** argv)
                                                    : argc == 3 && std::strcmp(argv[2], "--model-object-group-owner-unknown") == 0  ? 2u
                                                                                                                                    : 3u;
     const bool     modelObjectGroupOwnerOnly = modelObjectGroupOwnerScenario < 3;
+#if defined(MTA_TEST_WORLD_MEMBERSHIP_OWNER)
+    const bool worldMembershipOwnerOnly = argc == 3 && std::strcmp(argv[2], "--world-membership-owner") == 0;
+#else
+    const bool worldMembershipOwnerOnly = false;
+#endif
 #if defined(MTA_TEST_WORLD_ADD_OWNER)
     unsigned worldAddOwnerScenario = 3;
     if (argc == 3)
@@ -10033,19 +10126,19 @@ int main(int argc, char** argv)
          collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly || worldLineOnly || worldAreaOnly ||
          worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly || cameraSphereOnly || pedWeaponClearOnly ||
          pedClothesOnly || pedRebuildOnly || modelWheelResetOwnerOnly || modelObjectGroupOwnerOnly || nativeStartupEffectsOnly || worldPoolMatrixOwnerOnly ||
-         worldCoverOwnerOnly || worldLodRebaseOwnerOnly || worldRemoveOwnerOnly || worldAddOwnerOnly || playerMoveAnimWorkloadReaderOnly ||
-         playerMoveAnimSetterOwnerOnly || playerMoveAnimHookOwnerOnly || playerMoveAnimReapplyOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly ||
-         animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly ||
-         animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly ||
-         customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly ||
-         privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly ||
-         privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly ||
-         sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly ||
-         animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly || cameraBasicsOnly || cameraJumpCutOnly ||
-         cameraFovWriteOnly || cameraDirectionOnly || cameraRowBorrowOnly || cameraHistoryOnly || cameraTargetOnly || cameraTargetSetterOnly ||
-         cameraGetCamOnly || cameraWidescreenOnly || cameraMainTargetOnly || applicationTimingOnly || emptyBlockRemovalOnly || blockRegistrationOnly ||
-         bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly || dynamicClumpOnly ||
-         groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
+         worldCoverOwnerOnly || worldLodRebaseOwnerOnly || worldRemoveOwnerOnly || worldAddOwnerOnly || worldMembershipOwnerOnly ||
+         playerMoveAnimWorkloadReaderOnly || playerMoveAnimSetterOwnerOnly || playerMoveAnimHookOwnerOnly || playerMoveAnimReapplyOnly || pedMoveAnimOnly ||
+         playerNativePrerequisitesOnly || animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly ||
+         animationManagerRefsOnly || animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly ||
+         animationHierarchyBankOnly || customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly ||
+         privateHierarchyNameOnly || privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly ||
+         privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly ||
+         animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly ||
+         animationDefinitionBlockNamesOnly || animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly || cameraBasicsOnly ||
+         cameraJumpCutOnly || cameraFovWriteOnly || cameraDirectionOnly || cameraRowBorrowOnly || cameraHistoryOnly || cameraTargetOnly ||
+         cameraTargetSetterOnly || cameraGetCamOnly || cameraWidescreenOnly || cameraMainTargetOnly || applicationTimingOnly || emptyBlockRemovalOnly ||
+         blockRegistrationOnly || bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly ||
+         dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
          groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
          animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
          privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
@@ -10075,6 +10168,17 @@ int main(int argc, char** argv)
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }
+#if defined(MTA_TEST_WORLD_MEMBERSHIP_OWNER)
+    if (worldMembershipOwnerOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        WorldMembershipOwnerFixture::Run(fixture);
+        std::puts("World membership owner case completed");
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+#endif
 #if defined(MTA_TEST_WORLD_ADD_OWNER)
     if (worldAddOwnerOnly)
     {

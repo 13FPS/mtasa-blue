@@ -136,6 +136,14 @@ project "Client Deathmatch"
 				"../../../vendor/bass/lib/x64/bassmix", "../../../vendor/bass/lib/x64/tags",
 				"winmm", "ole32"
 			}
+			-- pcre2 is a shared server/client dependency whose x64 build output
+			-- remains in server/x64. The client owner loads with its module's
+			-- directory first; a sibling server directory is not a DLL search
+			-- path. Stage that real dependency beside this opted-in client,
+			-- preserving both classic outputs and pcre2's existing build owner.
+			postbuildcommands {
+				"{COPY} \"%{wks.location}/../Bin/server/x64/pcre2.dll\" \"%{wks.location}/../Bin/mods/deathmatch/x64/\""
+			}
 		filter { "architecture:not x86", "configurations:not Release" }
 			flags { "ExcludeFromBuild" }
 		filter { "architecture:not x86", "architecture:not x86_64" }

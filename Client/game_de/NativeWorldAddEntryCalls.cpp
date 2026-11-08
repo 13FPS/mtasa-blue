@@ -5,6 +5,7 @@
  ****************************************************************************/
 #include "NativeWorldAddEntryCalls.h"
 #include <windows.h>
+#include <memory>
 #ifndef MTA_DE_WORLD_ADD_NATIVE_INVOKE
     #define MTA_DE_WORLD_ADD_NATIVE_INVOKE &Original
 #endif
@@ -42,8 +43,14 @@ namespace mta::game_de::NativeWorldAddEntryCalls
         NativeStreamingCompletionContext::Scope scope;
         try
         {
-            NativeWorldAddEntryMemory::Value before, expected;
-            auto result = NativeWorldAddEntryMemory::Capture(image, generation, kind, index, owner, after, before, rectInvoke, &receipt.rectangle);
+            // The genuine callback can have a smaller remaining stack than
+            // a standalone caller. Keep both complete admission snapshots in
+            // local storage that dies here; neither becomes a retained lease.
+            auto  beforeStorage = std::make_unique<NativeWorldAddEntryMemory::Value>();
+            auto  expectedStorage = std::make_unique<NativeWorldAddEntryMemory::Value>();
+            auto& before = *beforeStorage;
+            auto& expected = *expectedStorage;
+            auto  result = NativeWorldAddEntryMemory::Capture(image, generation, kind, index, owner, after, before, rectInvoke, &receipt.rectangle);
             if (result != ClockResult::Ok)
                 return finish(result);
             receipt.entity = before.budget.entity.address;

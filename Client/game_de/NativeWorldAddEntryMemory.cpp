@@ -7,6 +7,7 @@
 #include "NativeImageAccess.h"
 #include <algorithm>
 #include <cstring>
+#include <memory>
 #include <xmmintrin.h>
 namespace mta::game_de::NativeWorldAddEntryMemory
 {
@@ -76,7 +77,11 @@ namespace mta::game_de::NativeWorldAddEntryMemory
             *rectangleReceipt = {};
         if (kind != Kind::Building && kind != Kind::Dummy)
             return ClockResult::InvalidArgument;
-        Value value;
+        // This nested capture contains the full current world/matrix
+        // observations. Allocate locally before entry rather than consuming
+        // another large native callback stack frame.
+        auto  storage = std::make_unique<Value>();
+        auto& value = *storage;
         value.fpControls = _mm_getcsr() & 0xffc0u;
         auto result = EntryBounds::Capture(image, generation, kind, index, owner, after, value.bounds);
         if (result != ClockResult::Ok)
@@ -145,7 +150,10 @@ namespace mta::game_de::NativeWorldAddEntryMemory
     }
     bool Expected(const Value& before, Value& output)
     {
-        Value      next = before;
+        // Prepare all fallible CPU snapshot storage before the mutating
+        // original; keep the same local lifetime and unchanged-output failure.
+        auto       storage = std::make_unique<Value>(before);
+        auto&      next = *storage;
         const auto stride = EntryStride(next);
         const bool isDouble = next.budget.plan.pool == NativeWorldAddPlan::PoolKind::Double;
         if (next.budget.plan.steps.size() != next.budget.heads.size() || next.budget.plan.steps.size() != next.budget.allocatedPrefix.size() ||

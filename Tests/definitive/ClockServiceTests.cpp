@@ -3,6 +3,9 @@
  * LICENSE: See LICENSE in the repository root
  * PURPOSE: Exercise the actual MTA clock interface and checked service boundary
  *****************************************************************************/
+#if defined(MTA_TEST_WORLD_ADD_OWNER)
+    #include "WorldAddOwnerEntryFixture.h"
+#endif
 #if defined(MTA_TEST_WORLD_REMOVE_OWNER)
     #include "WorldRemoveOwnerEntryFixture.h"
 #endif
@@ -4018,6 +4021,8 @@ namespace ClockObjectGroupOwnerTest
 #include "../../Client/game_de/NativeWorldBoundRectMemory.cpp"
 #if defined(MTA_TEST_WORLD_REMOVE_OWNER)
     #define MTA_DE_WORLD_BOUND_RECT_NATIVE_INVOKE (&::ClockWorldRemoveOwnerTest::ReadBound)
+#elif defined(MTA_TEST_WORLD_ADD_OWNER)
+    #define MTA_DE_WORLD_BOUND_RECT_NATIVE_INVOKE (&::ClockWorldAddOwnerTest::ReadBound)
 #endif
 #include "../../Client/game_de/NativeWorldBoundRectCalls.cpp"
 #undef MTA_DE_WORLD_BOUND_RECT_NATIVE_INVOKE
@@ -4028,6 +4033,14 @@ namespace ClockObjectGroupOwnerTest
 #include "../../Client/game_de/NativeWorldRemoveCalls.cpp"
 #undef MTA_DE_WORLD_REMOVE_NATIVE_INVOKE
 #include "../../Client/game_de/NativeWorldRemoveDomain.cpp"
+#include "../../Client/game_de/NativeWorldAddBudgetMemory.cpp"
+#include "../../Client/game_de/NativeWorldAddEntryMemory.cpp"
+#if defined(MTA_TEST_WORLD_ADD_OWNER)
+    #define MTA_DE_WORLD_ADD_NATIVE_INVOKE (&::ClockWorldAddOwnerTest::Invoke)
+#endif
+#include "../../Client/game_de/NativeWorldAddEntryCalls.cpp"
+#undef MTA_DE_WORLD_ADD_NATIVE_INVOKE
+#include "../../Client/game_de/NativeWorldAddDomain.cpp"
 
 #include "../../Client/game_de/NativeWorldIplLoadedMemory.cpp"
 #include "../../Client/game_de/NativeWorldIplMemory.cpp"
@@ -9373,6 +9386,11 @@ namespace
     #include "NativeWorldLodFixture.h"
     #include "NativeWorldLodOwnerTests.inl"
 #endif
+#if defined(MTA_TEST_WORLD_ADD_OWNER)
+    #include "NativeWorldPoolMatrixFixture.h"
+    #include "NativeWorldBoundRectFixture.h"
+    #include "WorldAddOwnerTests.inl"
+#endif
 #if defined(MTA_TEST_WORLD_REMOVE_OWNER)
     #include "NativeWorldRemoveFixture.h"
     #include "WorldRemoveOwnerTests.inl"
@@ -9509,6 +9527,19 @@ int main(int argc, char** argv)
                                                    : argc == 3 && std::strcmp(argv[2], "--model-object-group-owner-unknown") == 0  ? 2u
                                                                                                                                    : 3u;
     const bool     modelObjectGroupOwnerOnly = modelObjectGroupOwnerScenario < 3;
+#if defined(MTA_TEST_WORLD_ADD_OWNER)
+    unsigned worldAddOwnerScenario = 3;
+    if (argc == 3)
+    {
+        constexpr std::array<const char*, 3> flags{"--world-add-owner-healthy", "--world-add-owner-refused", "--world-add-owner-unknown"};
+        for (unsigned index = 0; index < flags.size(); ++index)
+            if (std::strcmp(argv[2], flags[index]) == 0)
+                worldAddOwnerScenario = index;
+    }
+    const bool worldAddOwnerOnly = worldAddOwnerScenario < 3;
+#else
+    const bool worldAddOwnerOnly = false;
+#endif
 #if defined(MTA_TEST_WORLD_REMOVE_OWNER)
     unsigned worldRemoveOwnerScenario = 3;
     if (argc == 3)
@@ -9993,32 +10024,33 @@ int main(int argc, char** argv)
     const bool waterOnly = orientationWithWater || (argc == 3 && std::strcmp(argv[2], "--ped-water") == 0);
     const bool poseOnly = argc == 3 && std::strcmp(argv[2], "--ped-pose") == 0;
     const bool poolRegistryOnly = argc == 3 && std::strcmp(argv[2], "--ped-pool-registry") == 0;
-    Check((argc == 2 || presentTransitionClockOnly || preparedGameBorrowOnly || buildingPoolDefaultOnly || startupLifecycleOnly ||
-           startupInitializationReadinessOnly || startupStreamingReceiverOnly || startupNumericGaragesOnly || startupPreparationReadinessOnly ||
-           startupMenuOnly || startupCollisionOnly || pedCreationLifecycleOnly || constructorOnly || vehiclePredicatesOnly || modelTimeGetterOnly ||
-           pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly || waterOnly || animationOnly ||
-           animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly || fireCollisionOnly || fireOnly ||
-           collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly || worldLineOnly ||
-           worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly || cameraSphereOnly ||
-           pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || modelWheelResetOwnerOnly || modelObjectGroupOwnerOnly || nativeStartupEffectsOnly ||
-           worldPoolMatrixOwnerOnly || worldCoverOwnerOnly || worldLodRebaseOwnerOnly || worldRemoveOwnerOnly || playerMoveAnimWorkloadReaderOnly ||
-           playerMoveAnimSetterOwnerOnly || playerMoveAnimHookOwnerOnly || playerMoveAnimReapplyOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly ||
-           animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly ||
-           animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly ||
-           customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly ||
-           privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly ||
-           privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly ||
-           sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly ||
-           animationDefinitionBlockNamesOnly || animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly ||
-           cameraBasicsOnly || cameraJumpCutOnly || cameraFovWriteOnly || cameraDirectionOnly || cameraRowBorrowOnly || cameraHistoryOnly || cameraTargetOnly ||
-           cameraTargetSetterOnly || cameraGetCamOnly || cameraWidescreenOnly || cameraMainTargetOnly || applicationTimingOnly || emptyBlockRemovalOnly ||
-           blockRegistrationOnly || bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly ||
-           dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
-           groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
-           animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
-           privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
-              std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
-          "durable fixture evidence is restricted to the explicit owned executable output directory");
+    Check(
+        (argc == 2 || presentTransitionClockOnly || preparedGameBorrowOnly || buildingPoolDefaultOnly || startupLifecycleOnly ||
+         startupInitializationReadinessOnly || startupStreamingReceiverOnly || startupNumericGaragesOnly || startupPreparationReadinessOnly ||
+         startupMenuOnly || startupCollisionOnly || pedCreationLifecycleOnly || constructorOnly || vehiclePredicatesOnly || modelTimeGetterOnly ||
+         pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly || waterOnly || animationOnly ||
+         animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly || fireCollisionOnly || fireOnly ||
+         collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly || worldLineOnly || worldAreaOnly ||
+         worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly || cameraSphereOnly || pedWeaponClearOnly ||
+         pedClothesOnly || pedRebuildOnly || modelWheelResetOwnerOnly || modelObjectGroupOwnerOnly || nativeStartupEffectsOnly || worldPoolMatrixOwnerOnly ||
+         worldCoverOwnerOnly || worldLodRebaseOwnerOnly || worldRemoveOwnerOnly || worldAddOwnerOnly || playerMoveAnimWorkloadReaderOnly ||
+         playerMoveAnimSetterOwnerOnly || playerMoveAnimHookOwnerOnly || playerMoveAnimReapplyOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly ||
+         animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly ||
+         animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly ||
+         customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly ||
+         privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly ||
+         privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly ||
+         sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly ||
+         animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly || cameraBasicsOnly || cameraJumpCutOnly ||
+         cameraFovWriteOnly || cameraDirectionOnly || cameraRowBorrowOnly || cameraHistoryOnly || cameraTargetOnly || cameraTargetSetterOnly ||
+         cameraGetCamOnly || cameraWidescreenOnly || cameraMainTargetOnly || applicationTimingOnly || emptyBlockRemovalOnly || blockRegistrationOnly ||
+         bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly || dynamicClumpOnly ||
+         groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
+         groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
+         animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
+         privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
+            std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
+        "durable fixture evidence is restricted to the explicit owned executable output directory");
     if (presentTransitionClockOnly)
     {
         ClockImageFixture fixture;
@@ -10043,6 +10075,17 @@ int main(int argc, char** argv)
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }
+#if defined(MTA_TEST_WORLD_ADD_OWNER)
+    if (worldAddOwnerOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        WorldAddOwnerFixture::Run(fixture, worldAddOwnerScenario);
+        std::printf("World add case %u completed\n", worldAddOwnerScenario);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+#endif
 #if defined(MTA_TEST_WORLD_REMOVE_OWNER)
     if (worldRemoveOwnerOnly)
     {

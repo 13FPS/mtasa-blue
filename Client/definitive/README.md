@@ -1,10 +1,31 @@
-# Definitive Edition compatibility harness for the MTA port
+# Experimental MTA port for Definitive Edition
 
-**The target is the existing MTA client on Definitive Edition.** On October 13
-the user clarified that MTA's existing systems should be reused. This prototype
-is a compatibility test harness; its custom transport is not the target MTA
-network implementation. Further work starts from the existing client/game
-interfaces and synchronization code.
+**This port reuses the existing MTA client and game SDK. It is not yet playable.**
+The original prototype's custom transport is retained as development evidence;
+it is not the multiplayer implementation being developed.
+
+The existing MTA menu, Settings, console and key bindings have run inside DE.
+Live checks have covered menu reopening, session binding changes, walking and
+sprinting through MTA input, pointer release, and restoration of GTA controls.
+These frontend results do not establish a complete game interface or multiplayer
+session. Newer native startup work has separate offline validation and has not
+all been installed in GTA.
+
+The real Deathmatch client, Core and DE backend build as x64. Native startup
+work includes model preparation, streaming, garage mapping, world membership,
+pool queries, and model/object default restoration. The complete `CGame` and
+multiplayer factories still have missing engine methods. The startup gates stay
+closed until their required services exist; a successful build or a working menu
+does not bypass those gates.
+
+An SDK-compatible x64 client `netc.dll` is also required. The x64 server's
+`net.dll` cannot supply the client interface. Classic GTA SA keeps its separate
+x86 game and client modules. **EXPERIMENTAL** remains until the DE port is ready
+and validated.
+
+The sections below record individual implementation and validation boundaries.
+Their dated results apply to those specific builds, rather than every later
+source revision.
 
 The experimental x64 MTA launcher now offers explicit `--de-launch` startup
 through Steam after checking the native package, installation ownership and

@@ -14,7 +14,7 @@ function Write-ModelStartupCompositionFixture([string]$taskRoot,[string]$OutputP
         }
     }
     $modelProvided=@('GetInterface','GetRwObject','GetModel','GetModelType','IsPlayerModel','IsVehicle','GetVehicleType','IsAllocatedInArchive',
-        'IsBoat','IsCar','IsPlane','IsHeli','IsTrain','IsBike','IsBmx','IsTrailer','IsMonsterTruck','IsQuadBike','IsFakePlane','IsTowableBy','GetTime',
+        'IsDynamic','IsBoat','IsCar','IsPlane','IsHeli','IsTrain','IsBike','IsBmx','IsTrailer','IsMonsterTruck','IsQuadBike','IsFakePlane','IsTowableBy','GetTime',
         'Request','IsLoaded','ModelAddRef','RemoveRef','GetRefCount','IsValid','MakePedModel',
         'SetCustomModel','RestoreOriginalModel','SetColModel','RestoreColModel','MakeCustomModel','UnloadUnused',
         'GetVehicleWheelSize','SetVehicleWheelSize','ResetVehicleWheelSizes','GetObjectPropertiesGroup','SetObjectPropertiesGroup','RestoreObjectPropertiesGroup',
@@ -25,8 +25,8 @@ function Write-ModelStartupCompositionFixture([string]$taskRoot,[string]$OutputP
     $modelAll=@(Methods 'Client/sdk/game/CModelInfo.h')
     $modelInherited=@($modelAll|Where-Object{$_.name -in $modelProvided})
     $modelMethods=@($modelAll|Where-Object{$_.name -notin $modelProvided})
-    if($modelProvided.Count -ne 51 -or $modelInherited.Count -ne 51 -or $modelMethods.Count -ne 41 -or
-        @($modelProvided|Where-Object{$_ -notin $modelInherited.name}).Count){throw 'Actual startup model SDK partition changed; expected51 inherited/41 rejecting'}
+    if($modelProvided.Count -ne 52 -or $modelInherited.Count -ne 52 -or $modelMethods.Count -ne 40 -or
+        @($modelProvided|Where-Object{$_ -notin $modelInherited.name}).Count){throw 'Actual startup model SDK partition changed; expected52 inherited/40 rejecting'}
     $streamingAll=@(Methods 'Client/sdk/game/CStreaming.h')
     $streamingMethods=@($streamingAll|Where-Object{$_.name -notin $streamingProvided})
     $gameMethods=@(Methods 'Client/sdk/game/CGame.h'|Where-Object{$_.name -notin @('GetStreaming','GetBaseIDforTXD','GetBaseIDforIFP','GetModelInfo','IsASyncLoadingEnabled')})

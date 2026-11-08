@@ -24,6 +24,7 @@ namespace mta::game_de
         eModelInfoType             GetModelType() override;
         bool                       IsPlayerModel() override;
         bool                       IsVehicle() const override;
+        bool                       IsDynamic() override;
         BYTE                       GetVehicleType() const override;
         bool                       IsAllocatedInArchive() const override;
         bool                       IsBoat() override;

@@ -132,10 +132,11 @@ try {
     . (Join-Path $PSScriptRoot 'Write-ModelStartupCompositionFixture.ps1')
     $generated = Join-Path $scratchRoot 'ModelStartupCompositionFixture.generated.h'
     $record.generatedFixture = Write-ModelStartupCompositionFixture $taskRoot $generated
-    # A fixture rejector must never mask one of the 51 inherited production
+    # A fixture rejector must never mask one of the 52 inherited production
     # methods, particularly the model identity shared with request/reference.
-    if ($record.generatedFixture['inheritedModelMethods'] -ne 51 -or $record.generatedFixture['rejectingModelMethods'] -ne 41 -or
+    if ($record.generatedFixture['inheritedModelMethods'] -ne 52 -or $record.generatedFixture['rejectingModelMethods'] -ne 40 -or
         $record.generatedFixture['inheritedStreamingMethods'] -ne 12 -or 'GetModel' -notin $record.generatedFixture['modelInheritedNames'] -or
+        'IsDynamic' -notin $record.generatedFixture['modelInheritedNames'] -or
         $record.generatedFixture['productionFactoryPublished'] -ne $false) { throw 'Composed model fixture SDK partition changed' }
     $durableGenerated = Join-Path $outputRoot 'ModelStartupCompositionFixture.generated.h'
     Copy-Item -LiteralPath $generated -Destination $durableGenerated

@@ -3936,6 +3936,9 @@ namespace ClockModelWheelOwnerTest
     #pragma pop_macro("_InterlockedCompareExchange16")
 #endif
 #include "../../Client/game_de/NativeModelTimeDomain.cpp"
+// NativeAccess exposes this readonly observer in every Runtime vtable.
+// Link its genuine memory implementation once even in older scopes.
+#include "../../Client/game_de/NativeModelDynamicMemory.cpp"
 #if defined(MTA_TEST_MODEL_LOD_RESET_OWNER)
     #include "NativeModelLodMutationFixture.h"
     #pragma push_macro("_InterlockedCompareExchange")
@@ -9405,6 +9408,9 @@ namespace
 #include "NativeVehicleIdePredicatesOwnerTests.inl"
 #include "ModelTimeFixture.generated.h"
 #include "NativeModelTimeGetterOwnerTests.inl"
+#if defined(MTA_TEST_MODEL_DYNAMIC_OWNER)
+    #include "NativeModelDynamicOwnerTests.inl"
+#endif
 #include "../../Client/game_de/CGameWorldIplDE.h"
 #include "NativeWorldIplFixture.h"
 #if defined(MTA_TEST_MODEL_TIME_RESET_OWNER)
@@ -9655,7 +9661,12 @@ int main(int argc, char** argv)
     }
     const bool playerMoveAnimHookOwnerOnly = playerMoveAnimHookOwnerScenario != 6;
 
-    const bool     playerMoveAnimWorkloadReaderOnly = argc == 3 && std::strcmp(argv[2], "--player-moveanim-workload-reader") == 0;
+    const bool playerMoveAnimWorkloadReaderOnly = argc == 3 && std::strcmp(argv[2], "--player-moveanim-workload-reader") == 0;
+#if defined(MTA_TEST_MODEL_DYNAMIC_OWNER)
+    const bool modelDynamicOwnerOnly = argc == 3 && std::strcmp(argv[2], "--model-dynamic-owner") == 0;
+#else
+    constexpr bool modelDynamicOwnerOnly = false;
+#endif
     const unsigned objectPropertiesExtendedOwnerScenario = argc == 3 && std::strcmp(argv[2], "--object-properties-extended-owner-healthy") == 0    ? 0u
                                                            : argc == 3 && std::strcmp(argv[2], "--object-properties-extended-owner-retained") == 0 ? 1u
                                                            : argc == 3 && std::strcmp(argv[2], "--object-properties-extended-owner-unknown") == 0  ? 2u
@@ -10201,7 +10212,7 @@ int main(int argc, char** argv)
          animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly || fireCollisionOnly || fireOnly ||
          collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly || worldLineOnly || worldAreaOnly ||
          worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly || cameraSphereOnly || pedWeaponClearOnly ||
-         pedClothesOnly || pedRebuildOnly || objectPropertiesExtendedOwnerOnly || modelLodResetOwnerOnly || modelTimeResetOwnerOnly ||
+         pedClothesOnly || pedRebuildOnly || modelDynamicOwnerOnly || objectPropertiesExtendedOwnerOnly || modelLodResetOwnerOnly || modelTimeResetOwnerOnly ||
          modelWheelResetOwnerOnly || modelObjectGroupOwnerOnly || nativeStartupEffectsOnly || worldPoolMatrixOwnerOnly || worldCoverOwnerOnly ||
          worldLodRebaseOwnerOnly || worldRemoveOwnerOnly || worldAddOwnerOnly || worldMembershipOwnerOnly || poolUsageOwnerOnly || nestedPoolReadersOwnerOnly ||
          playerMoveAnimWorkloadReaderOnly || playerMoveAnimSetterOwnerOnly || playerMoveAnimHookOwnerOnly || playerMoveAnimReapplyOnly || pedMoveAnimOnly ||
@@ -10245,6 +10256,18 @@ int main(int argc, char** argv)
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }
+#if defined(MTA_TEST_MODEL_DYNAMIC_OWNER)
+    if (modelDynamicOwnerOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        ModelDynamicOwnerFixture::Run(fixture);
+        // Certify this one fresh Runtime only after its actual SDK owner returns.
+        std::puts("Model dynamic owner case completed");
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+#endif
 #if defined(MTA_TEST_MODEL_TIME_RESET_OWNER)
     if (modelTimeResetOwnerOnly)
     {

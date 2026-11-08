@@ -15,6 +15,10 @@ namespace mta::game_de
         // result. Refusal preserves the caller's previous observation.
         virtual ClockResult ReadModelArchiveAllocated(std::uint32_t, bool&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult ReadModelType(std::uint32_t, NativeModelTypeObservation&) noexcept { return ClockResult::NotInitialized; }
+        // This independent current predicate needs a qualified object-group
+        // WORD, not a type-based guess. Unsupported present metadata refuses;
+        // only a successfully rechecked absent bank association returns false.
+        virtual ClockResult ReadModelDynamic(std::uint32_t, bool&) noexcept { return ClockResult::NotInitialized; }
         // A missing owner cannot manufacture absent time metadata or a time
         // tuple. This distinct current read grants no persistent native lease.
         virtual ClockResult ReadModelTime(std::uint32_t, NativeModelTimeObservation&) noexcept { return ClockResult::NotInitialized; }

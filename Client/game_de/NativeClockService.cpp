@@ -153,6 +153,7 @@
 #include "NativeStreamingPriorityCalls.h"
 #include "NativeStreamingRemoveCalls.h"
 #include "NativeModelClassificationCalls.h"
+#include "NativeModelDynamicMemory.h"
 #include "NativeModelWheelDomain.h"
 #include "NativeModelTimeDomain.h"
 #include "NativeModelLodDomain.h"
@@ -401,6 +402,7 @@ namespace mta::game_de
             ClockResult RemoveStreamingModel(std::uint32_t) noexcept override;
             ClockResult ReadModelVehiclePredicate(std::uint32_t, NativeModelVehiclePredicate, bool&) noexcept override;
             ClockResult ReadModelType(std::uint32_t, NativeModelTypeObservation&) noexcept override;
+            ClockResult ReadModelDynamic(std::uint32_t, bool&) noexcept override;
             ClockResult ReadModelTime(std::uint32_t, NativeModelTimeObservation&) noexcept override;
             ClockResult ReadModelVehicleSubtype(std::uint32_t, std::uint32_t&) noexcept override;
             ClockResult ReadModelWheelSizes(std::uint32_t, NativeModelWheelSizes&) noexcept override;
@@ -5928,6 +5930,13 @@ namespace mta::game_de
             // The shared complete pure-leaf observation invokes no getter and
             // grants no model/archive lifetime beyond this current callback.
             return NativeModelClassificationCalls::ReadType(runtime.image, modelIndex, &CheckTimingOwner, output);
+        }
+        ClockResult NativeAccess::ReadModelDynamic(std::uint32_t model, bool& output) noexcept
+        {
+            // This immediate observation qualifies its own metadata families.
+            // It neither borrows the Atomic-only default registry nor owns
+            // a model reference, mutation journal or cleanup operation.
+            return NativeModelDynamicMemory::Read(runtime.image, runtime.generation.load(), model, &CheckTimingOwner, &CheckApplicationTimingOwner, output);
         }
         ClockResult NativeAccess::ReadModelVehicleSubtype(std::uint32_t model, std::uint32_t& output) noexcept
         {

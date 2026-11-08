@@ -76,6 +76,17 @@ namespace mta::game_de
         // opaque interface cannot be cast to the classic collision layout.
         return value;
     }
+    bool CModelInfoDE::IsDynamic()
+    {
+        bool       value = false;
+        const auto status = access.ReadModelDynamic(model, value);
+        if (status != ClockResult::Ok)
+            throw std::runtime_error("DE model owner refused IsDynamic: " + std::to_string(static_cast<unsigned>(status)));
+        // The native owner qualifies the current nullable metadata and its
+        // group WORD. A model type or an opaque interface cannot substitute
+        // for MTA's independent static-sentinel predicate.
+        return value;
+    }
     RwObject* CModelInfoDE::GetRwObject()
     {
         const auto     index = model;

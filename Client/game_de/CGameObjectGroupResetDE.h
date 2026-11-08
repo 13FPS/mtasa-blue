@@ -4,14 +4,14 @@
  * PURPOSE: Restore actual model-group defaults through the enclosing MTA game
  ****************************************************************************/
 #pragma once
-#include "CGameWorldIplDE.h"
+#include "CGameWorldCoverDE.h"
 
 namespace mta::game_de
 {
-    class CGameObjectGroupResetDE : public CGameWorldIplDE
+    class CGameObjectGroupResetDE : public CGameWorldCoverDE
     {
     protected:
-        using CGameWorldIplDE::CGameWorldIplDE;
+        using CGameWorldCoverDE::CGameWorldCoverDE;
         void RestoreObjectModelGroups() override;
     };
     // One more real Reset effect does not qualify the remaining game services,

@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('ModelTimeResetOwner','NestedPoolReadersOwner','PoolUsageOwner','WorldMembershipOwner','WorldAddOwner','WorldRemoveOwner','WorldLodRebaseOwner','WorldCoverOwner','WorldPoolMatrixOwner','NativeStartupEffectsOwner','ModelObjectGroupOwner','ModelWheelResetOwner','PlayerMoveAnimWorkloadReader','PlayerMoveAnimSetterOwner','PlayerMoveAnimHookOwner','PlayerMoveAnimReapply','PreparedGameBorrow','BuildingPoolDefault','StartupLifecycle','CameraMainTarget','CameraWidescreen','CameraGetCam','CameraTargetSetter','CameraTarget','CameraHistory','CameraRowBorrow','CameraDirection','CameraFovWrite','CameraJumpCut','CameraBasics','ModelTimeGetter','VehiclePredicates','EmptyBlockRemoval','BlockRegistration','BankPostprocess','BankEviction','BankDecompression','ApplicationTiming','AnimationHierarchyUncompress','NumericAssociationOwner','DynamicClumpOwner','AnimationAssociationGroupFactories','GroupSourceCreationOwner','JointTemporaryStaticInitializerOwner','GroupReplacementOwner','GroupCopyAnimationOwner','GroupEmptyInitialization','AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','PresentTransitionClock','StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
+    [ValidateSet('ModelLodResetOwner','ModelTimeResetOwner','NestedPoolReadersOwner','PoolUsageOwner','WorldMembershipOwner','WorldAddOwner','WorldRemoveOwner','WorldLodRebaseOwner','WorldCoverOwner','WorldPoolMatrixOwner','NativeStartupEffectsOwner','ModelObjectGroupOwner','ModelWheelResetOwner','PlayerMoveAnimWorkloadReader','PlayerMoveAnimSetterOwner','PlayerMoveAnimHookOwner','PlayerMoveAnimReapply','PreparedGameBorrow','BuildingPoolDefault','StartupLifecycle','CameraMainTarget','CameraWidescreen','CameraGetCam','CameraTargetSetter','CameraTarget','CameraHistory','CameraRowBorrow','CameraDirection','CameraFovWrite','CameraJumpCut','CameraBasics','ModelTimeGetter','VehiclePredicates','EmptyBlockRemoval','BlockRegistration','BankPostprocess','BankEviction','BankDecompression','ApplicationTiming','AnimationHierarchyUncompress','NumericAssociationOwner','DynamicClumpOwner','AnimationAssociationGroupFactories','GroupSourceCreationOwner','JointTemporaryStaticInitializerOwner','GroupReplacementOwner','GroupCopyAnimationOwner','GroupEmptyInitialization','AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','PresentTransitionClock','StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -27,6 +27,10 @@ $record['nativeNestedPoolReadersOwnerTested']=$false
 $record['nativeNestedPoolReadersActualSdkVirtualsTested']=$false
 $record['nativeNestedPoolReadersFreeSlotPredicateTested']=$false
 $record['nativeNestedPoolReadersOwnerRefusalTested']=$false
+$record['nativeModelLodResetOwnerTested']=$false
+$record['nativeModelLodHealthyTested']=$false
+$record['nativeModelLodKnownRetentionTested']=$false
+$record['nativeModelLodUnknownRetentionTested']=$false
 $record['nativeModelTimeResetOwnerTested']=$false
 $record['nativeModelTimeHealthyTested']=$false
 $record['nativeModelTimeKnownRetentionTested']=$false
@@ -1067,6 +1071,15 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
     if($Scope -eq 'ModelTimeResetOwner'){
         $sourceNames += @('Tests/definitive/NativeModelTimeMutationFixture.h','Tests/definitive/NativeModelTimeOwnerTests.inl','Tests/definitive/Write-ModelTimeMutationFixture.ps1')
     }
+    # These current modules back Runtime's vtable in every scope even though
+    # only the selected LOD scope enables its owned CAS fixture wrapper.
+    $sourceNames += @('Client/game_de/NativeModelLodAccess.h','Client/game_de/NativeModelLodMemory.h','Client/game_de/NativeModelLodMemory.cpp',
+        'Client/game_de/NativeModelLodDomain.h','Client/game_de/NativeModelLodDomain.cpp','Client/game_de/NativeModelLodProfile.h',
+        'Client/sdk/game/CModelLodDistancePolicy.h','Client/game_de/CModelInfoLodDE.h','Client/game_de/CModelInfoLodDE.cpp',
+        'Client/game_de/CGameModelLodResetDE.h','Client/game_de/CGameModelLodResetDE.cpp')
+    if($Scope -eq 'ModelLodResetOwner'){
+        $sourceNames += @('Tests/definitive/NativeModelLodMutationFixture.h','Tests/definitive/NativeModelLodOwnerTests.inl','Tests/definitive/Write-ModelLodMutationFixture.ps1')
+    }
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
@@ -1251,6 +1264,13 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         $mutationEvidence=Join-Path $outputRoot 'ModelTimeMutationFixture.generated.h'
         Copy-Item -LiteralPath $mutationFixture.path -Destination $mutationEvidence
         $record['modelTimeMutationGeneratedFixture']=@{path=$mutationEvidence;sha256=(Sha $mutationEvidence);generation=$mutationFixture}
+    }
+    if($Scope -eq 'ModelLodResetOwner'){
+        . (Join-Path $PSScriptRoot 'Write-ModelLodMutationFixture.ps1')
+        $lodMutationFixture=Write-ModelLodMutationFixture $taskRoot (Join-Path $scratchRoot 'ModelLodMutationFixture.generated.h')
+        $lodMutationEvidence=Join-Path $outputRoot 'ModelLodMutationFixture.generated.h'
+        Copy-Item -LiteralPath $lodMutationFixture.path -Destination $lodMutationEvidence
+        $record['modelLodMutationGeneratedFixture']=@{path=$lodMutationEvidence;sha256=(Sha $lodMutationEvidence);generation=$lodMutationFixture}
     }
     . (Join-Path $PSScriptRoot 'Write-ModelTimeFixture.ps1')
     $timeFixture=Write-ModelTimeFixture $taskRoot (Join-Path $scratchRoot 'ModelTimeFixture.generated.h')
@@ -1556,6 +1576,7 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         (Join-Path $taskRoot 'Client/game_de/CAnimBlockRequestDE.cpp'),
         # RequestDE's inherited dependency getter and creator dispatch need
         # the actual base implementation, even in a focused runtime scope.
+        (Join-Path $taskRoot 'Client/game_de/CModelInfoLodDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CGameModelLodResetDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CModelInfoTimeDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CGameModelTimeResetDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CModelInfoDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CModelInfoWheelDE.cpp'),
@@ -1575,6 +1596,7 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         (Join-Path $taskRoot 'Client/game_de/NativeImageAccess.cpp')) +
         $runtimeDependencies + @(('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'fixture.pdb')),('/Fe'+$executable),'/link','bcrypt.lib','user32.lib') + $objects
     if($Scope -eq 'ModelTimeResetOwner'){ $arguments=@('/DMTA_TEST_MODEL_TIME_RESET_OWNER')+$arguments }
+    if($Scope -eq 'ModelLodResetOwner'){ $arguments=@('/DMTA_TEST_MODEL_LOD_RESET_OWNER')+$arguments }
     if($Scope -eq 'NestedPoolReadersOwner'){
         # The nested SDK objects share the actual existing pools receiver.
         # Compile its two adapters and both new read-only receivers once;
@@ -1719,7 +1741,7 @@ namespace ClockPrivateHierarchyParentWriteFixture {
     # This owner scope compiles the actual Runtime and both new memory domains.
     # Its larger translation-unit set needs a bounded compile window on slower
     # hosts; a compiler timeout must not be confused with a native-owner failure.
-    $compileDeadlineMs = if ($Scope -in @('ModelTimeResetOwner','ModelWheelResetOwner','ModelObjectGroupOwner','NativeStartupEffectsOwner','WorldPoolMatrixOwner','WorldCoverOwner','WorldLodRebaseOwner','WorldRemoveOwner','WorldAddOwner','WorldMembershipOwner','PoolUsageOwner','NestedPoolReadersOwner')) { 600000 } else { 120000 }
+    $compileDeadlineMs = if ($Scope -in @('ModelLodResetOwner','ModelTimeResetOwner','ModelWheelResetOwner','ModelObjectGroupOwner','NativeStartupEffectsOwner','WorldPoolMatrixOwner','WorldCoverOwner','WorldLodRebaseOwner','WorldRemoveOwner','WorldAddOwner','WorldMembershipOwner','PoolUsageOwner','NestedPoolReadersOwner')) { 600000 } else { 120000 }
     $record['compileDeadlineMs']=$compileDeadlineMs
     $record.compileRuns += RunBounded $compiler $arguments 'compile' $compileDeadlineMs
     if ($record.compileRuns[-1].exitCode -ne 0 -or $record.compileRuns[-1].timedOut) { throw 'Clock SDK/runtime fixture compilation failed.' }
@@ -1830,6 +1852,37 @@ namespace ClockPrivateHierarchyParentWriteFixture {
             $run['ownedImageRemoved']=$true
         }
         if($record.testRuns.Count -ne 3){throw 'Model-time owner requires exactly three fresh processes'}
+        $record.testRun=$record.testRuns[-1];$text=$texts -join [Environment]::NewLine
+    } elseif($Scope -eq 'ModelLodResetOwner'){
+        # One compile supplies three fresh actual Runtime lifetimes. The
+        # genuine production 32-bit CAS touches only owned synthetic metadata.
+        $record['testRuns']=@();$texts=@();$compiledHash=Sha $executable
+        $copy=Join-Path $scratchRoot ([IO.Path]::GetFileName($executable))
+        if(Test-Path -LiteralPath $copy){throw 'Fresh model-lod execution copy already exists'}
+        Copy-Item -LiteralPath $executable -Destination $copy
+        if((Sha $copy) -cne $compiledHash){throw 'Model-lod execution copy differs'}
+        $record['modelLodExecutionCopy']=@{path=$copy;sha256=$compiledHash;removedWithOwnedScratch=$true}
+        $names=@('healthy','retained','unknown')
+        for($index=0;$index -lt $names.Count;$index++){
+            $name=$names[$index]
+            $run=RunBounded $copy @($scratchRoot,('--model-lod-reset-owner-'+$name)) ('test-model-lod-reset-owner-'+$name) 60000
+            $record.testRuns+=$run
+            $part=[IO.File]::ReadAllText($run.stdout)+[IO.File]::ReadAllText($run.stderr)
+            $returned=$part.Contains(('Model lod reset case '+$index+' completed'))
+            $run['selectedRunReturned']=$returned
+            if($run.exitCode -ne 0 -or $run.timedOut -or -not $returned -or $part -notmatch 'Passed (\d+) production clock service checks'){
+                throw ('Model-lod owner '+$name+' failed or did not return')
+            }
+            $record.checks+=[int]$Matches[1];$texts+=$part
+            if((Sha $copy) -cne $compiledHash){throw 'Model-lod executable changed'}
+            $ownedImage=Join-Path $scratchRoot 'owned-clock-image.bin'
+            if(-not(Test-Path -LiteralPath $ownedImage) -or ((Get-Item -LiteralPath $ownedImage -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)){
+                throw 'Expected owned model-lod image missing or linked'
+            }
+            Remove-Item -LiteralPath $ownedImage -Force
+            $run['ownedImageRemoved']=$true
+        }
+        if($record.testRuns.Count -ne 3){throw 'Model-lod owner requires exactly three fresh processes'}
         $record.testRun=$record.testRuns[-1];$text=$texts -join [Environment]::NewLine
     } elseif($Scope -eq 'NestedPoolReadersOwner'){
         # Exactly one compile and one new actual Runtime lifetime. This adds
@@ -3272,6 +3325,14 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         $record['modelTimeNativeStoreIsProduction']=$true
         $record['modelTimeCompleteFactoryReady']=$false
         if(-not $record.nativeModelTimeResetOwnerTested){throw 'Actual model-time Runtime restoration scope incomplete'}
+    } elseif($Scope -eq 'ModelLodResetOwner'){
+        $record.nativeModelLodHealthyTested=$text.Contains('Production model lod healthy completed')
+        $record.nativeModelLodKnownRetentionTested=$text.Contains('Production model lod retained completed')
+        $record.nativeModelLodUnknownRetentionTested=$text.Contains('Production model lod unknown completed')
+        $record.nativeModelLodResetOwnerTested=$record.nativeModelLodHealthyTested -and $record.nativeModelLodKnownRetentionTested -and $record.nativeModelLodUnknownRetentionTested -and $record.testRuns.Count -eq 3
+        $record['modelLodNativeStoreIsProduction']=$true
+        $record['modelLodCompleteFactoryReady']=$false
+        if(-not $record.nativeModelLodResetOwnerTested){throw 'Actual model-lod Runtime restoration scope incomplete'}
     } elseif($Scope -eq 'NestedPoolReadersOwner'){
         $completed=$text.Contains('Production nested pool reader SDK methods completed') -and
             $text.Contains('Production nested pool readers owner completed') -and $text.Contains('Nested pool reader owner case completed')

@@ -21,6 +21,7 @@
 #include <game/CModelObjectGroupPolicy.h>
 #include <game/CModelVehicleDummyPolicy.h>
 #include <game/CModelTimePolicy.h>
+#include <game/CModelLodDistancePolicy.h>
 #include "CPedModelInfoSA.h"
 #include "CPedSA.h"
 #include "CPoolsSA.h"
@@ -939,11 +940,14 @@ void CModelInfoSA::StaticResetModelTimes()
 
 float CModelInfoSA::GetOriginalLODDistance()
 {
-    // Return default LOD distance value (if doesn't exist, LOD distance hasn't been changed)
-    if (MapContains(ms_ModelDefaultLodDistanceMap, m_dwModelID))
-        return MapGet(ms_ModelDefaultLodDistanceMap, m_dwModelID);
-
-    return 0.0f;
+    return MtaGame::CModelLodDistancePolicy::GetOriginal(
+        [&](float& original)
+        {
+            if (!MapContains(ms_ModelDefaultLodDistanceMap, m_dwModelID))
+                return false;
+            original = MapGet(ms_ModelDefaultLodDistanceMap, m_dwModelID);
+            return true;
+        });
 }
 
 void CModelInfoSA::SetLODDistance(float fDistance, bool bOverrideMaxDistance)
@@ -975,33 +979,44 @@ void CModelInfoSA::SetLODDistance(float fDistance, bool bOverrideMaxDistance)
         fDistance = std::min(fDistance, fMaximumValue);
     }
 #endif
-    if (!bOverrideMaxDistance)
-    {
-        // Limit to 325.f as it goes horrible after that
-        fDistance = std::min(fDistance, 325.f);
-    }
-
-    m_pInterface = ppModelInfo[m_dwModelID];
-    if (m_pInterface)
-    {
-        // Save default value if not done yet
-        if (!MapContains(ms_ModelDefaultLodDistanceMap, m_dwModelID))
-            MapSet(ms_ModelDefaultLodDistanceMap, m_dwModelID, m_pInterface->fLodDistanceUnscaled);
-        m_pInterface->fLodDistanceUnscaled = fDistance;
-    }
+    fDistance = MtaGame::CModelLodDistancePolicy::Limit(fDistance, bOverrideMaxDistance);
+    MtaGame::CModelLodDistancePolicy::Set(
+        fDistance,
+        [&](float& current)
+        {
+            m_pInterface = ppModelInfo[m_dwModelID];
+            if (!m_pInterface)
+                return false;
+            current = m_pInterface->fLodDistanceUnscaled;
+            return true;
+        },
+        [&](const float& current)
+        {
+            // Preserve each SDK model ID's first default even if another ID
+            // selects the same native metadata row.
+            if (!MapContains(ms_ModelDefaultLodDistanceMap, m_dwModelID))
+                MapSet(ms_ModelDefaultLodDistanceMap, m_dwModelID, current);
+            return true;
+        },
+        [&](const float& requested)
+        {
+            m_pInterface->fLodDistanceUnscaled = requested;
+            return true;
+        });
 }
 
 void CModelInfoSA::StaticResetLodDistances()
 {
-    // Restore default values
-    for (std::map<DWORD, float>::const_iterator iter = ms_ModelDefaultLodDistanceMap.begin(); iter != ms_ModelDefaultLodDistanceMap.end(); ++iter)
-    {
-        CBaseModelInfoSAInterface* pInterface = ppModelInfo[iter->first];
-        if (pInterface)
-            pInterface->fLodDistanceUnscaled = iter->second;
-    }
-
-    ms_ModelDefaultLodDistanceMap.clear();
+    MtaGame::CModelLodDistancePolicy::ResetAll(ms_ModelDefaultLodDistanceMap,
+                                               [](DWORD modelID, float original)
+                                               {
+                                                   CBaseModelInfoSAInterface* pInterface = ppModelInfo[modelID];
+                                                   if (pInterface)
+                                                       pInterface->fLodDistanceUnscaled = original;
+                                                   // A missing current row is skipped, then its saved ID is retired
+                                                   // with the complete ascending traversal just as in classic MTA.
+                                                   return true;
+                                               });
 }
 
 void CModelInfoSA::RestreamIPL()

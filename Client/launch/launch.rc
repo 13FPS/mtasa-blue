@@ -7,7 +7,9 @@
 //
 // Generated from the TEXTINCLUDE 2 resource.
 //
-#include "afxres.h"
+// The launcher uses standard Win32 resources; SDK definitions avoid requiring
+// the optional MFC component for its icons and version information.
+#include <winres.h>
 
 /////////////////////////////////////////////////////////////////////////////
 #undef APSTUDIO_READONLY_SYMBOLS
@@ -32,7 +34,7 @@ END
 
 2 TEXTINCLUDE 
 BEGIN
-    "#include ""afxres.h""\r\n"
+    "#include <winres.h>\r\n"
     "\0"
 END
 

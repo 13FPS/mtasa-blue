@@ -15,7 +15,9 @@
 
 #define APSTUDIO_READONLY_SYMBOLS
 
-#include <afxres.h>
+// These Win32 resources need only SDK definitions, so building the launcher
+// should not require the optional MFC headers.
+#include <winres.h>
 
 #undef APSTUDIO_READONLY_SYMBOLS
 

@@ -344,8 +344,10 @@ namespace mta::launcher
         if (DirectoryExists(mta_path))
             return mta_path;
 
-        SString parent = PathJoin(launch_path, "..");
-        if (!ValidatePathSafety(parent)) [[unlikely]]
+        // The executable directory is trusted, but an explicit ".." component
+        // would fail the same traversal check used above and disable fallback.
+        SString parent = ExtractPath(launch_path);
+        if (parent.empty() || !ValidatePathSafety(parent)) [[unlikely]]
             return std::unexpected(LoadResult::PathError);
 
         SString alt = PathJoin(parent, "mta");

@@ -154,6 +154,7 @@
 #include "NativeStreamingRemoveCalls.h"
 #include "NativeModelClassificationCalls.h"
 #include "NativeModelWheelDomain.h"
+#include "NativeModelTimeDomain.h"
 #include "NativeModelObjectGroupDomain.h"
 #include "NativeModelDummiesDomain.h"
 #include "NativeObjectGroupPropertiesDomain.h"
@@ -405,6 +406,8 @@ namespace mta::game_de
             ClockResult SetModelWheelSize(std::uint32_t, NativeModelWheelGroup, float) noexcept override;
             ClockResult ResetModelWheelSizes(std::uint32_t, const NativeModelWheelSizes*) noexcept override;
             ClockResult ResetAllModelWheelSizes() noexcept override;
+            ClockResult SetModelTime(std::uint32_t, std::uint8_t, std::uint8_t, bool&) noexcept override;
+            ClockResult ResetAllModelTimes() noexcept override;
             ClockResult ReadModelObjectPropertiesGroup(std::uint32_t, std::uint16_t&) noexcept override;
             ClockResult SetModelObjectPropertiesGroup(std::uint32_t, std::uint16_t) noexcept override;
             ClockResult RestoreModelObjectPropertiesGroup(std::uint32_t) noexcept override;
@@ -760,6 +763,7 @@ namespace mta::game_de
             // The same native owner retains first defaults across model facades.
             // Neither facade drop nor a new timing generation may erase them.
             NativeModelWheelDomain       modelWheels;
+            NativeModelTimeDomain        modelTimes;
             NativeModelObjectGroupDomain modelObjectGroups;
             // These are separate MTA default registries on the same owner.
             // Dummy holds cannot borrow a facade family's reference cycle.
@@ -1070,7 +1074,7 @@ namespace mta::game_de
                    runtime.presentationRecovery.Held() || runtime.weatherOverridePeers.PresentationHeld() || runtime.startupMenuBusy.load() ||
                    runtime.startupMenuRetained.load() || runtime.startupCollisionBusy.load() || runtime.startupCollisionRetained.load() ||
                    runtime.pedModelCreationBusy.load() || runtime.pedModelCreationRetained.load() || runtime.modelBackingReferences.IsRetained() ||
-                   runtime.modelWheels.Pending() || runtime.modelObjectGroups.Pending() || runtime.modelDummies.Pending() ||
+                   runtime.modelTimes.Pending() || runtime.modelWheels.Pending() || runtime.modelObjectGroups.Pending() || runtime.modelDummies.Pending() ||
                    runtime.objectGroupProperties.Pending() || runtime.worldPoolMatrices.Pending() || runtime.worldCovers.Pending() ||
                    runtime.worldRemovals.Pending() || runtime.worldAdds.Pending() || runtime.worldIpl.Retained() || runtime.pedReferences.IsRetained() ||
                    WorldIgnoreRetained() || runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() ||
@@ -5927,6 +5931,32 @@ namespace mta::game_de
                 output = next;
             return result;
         }
+        ClockResult NativeAccess::SetModelTime(std::uint32_t model, std::uint8_t on, std::uint8_t off, bool& applied) noexcept
+        {
+            const auto hours = static_cast<std::uint16_t>(static_cast<std::uint16_t>(on) | (static_cast<std::uint16_t>(off) << 8));
+            const auto result =
+                runtime.modelTimes.Set(runtime.image, runtime.generation.load(), model, hours, &CheckTimingOwner, &CheckApplicationTimingOwner, applied);
+            if (runtime.modelTimes.Pending())
+                runtime.restored.store(false);
+            // A partially entered store keeps its first defaults in this
+            // Runtime. Stopping cannot grant permission to replay or forget it.
+            if (result != ClockResult::Ok && runtime.modelTimes.Uncertain())
+                Stop(result);
+            return result;
+        }
+
+        ClockResult NativeAccess::ResetAllModelTimes() noexcept
+        {
+            // Only MTA's explicit ResetModelTimes itinerary may restore these
+            // defaults. End observes debt and never substitutes a bulk reset.
+            const auto result = runtime.modelTimes.ResetAll(runtime.image, runtime.generation.load(), &CheckTimingOwner, &CheckApplicationTimingOwner);
+            if (runtime.modelTimes.Pending())
+                runtime.restored.store(false);
+            if (result != ClockResult::Ok && runtime.modelTimes.Uncertain())
+                Stop(result);
+            return result;
+        }
+
         ClockResult NativeAccess::ReadModelWheelSizes(std::uint32_t model, NativeModelWheelSizes& output) noexcept
         {
             return runtime.modelWheels.Read(runtime.image, runtime.generation.load(), model, &CheckTimingOwner, &CheckApplicationTimingOwner, output);
@@ -9554,9 +9584,9 @@ namespace mta::game_de
                     const bool metadataRetained =
                         runtime.pedModelCreationBusy.load() || runtime.pedModelCreationRetained.load() || runtime.startupCollisionBusy.load() ||
                         runtime.startupCollisionRetained.load() || runtime.startupMenuBusy.load() || runtime.startupMenuRetained.load() ||
-                        runtime.modelWheels.Pending() || runtime.modelObjectGroups.Pending() || runtime.modelDummies.Pending() ||
-                        runtime.objectGroupProperties.Pending() || runtime.worldPoolMatrices.Pending() || runtime.worldCovers.Pending() ||
-                        runtime.worldRemovals.Pending() || runtime.worldAdds.Pending() || runtime.worldIpl.Retained();
+                        runtime.modelTimes.Pending() || runtime.modelWheels.Pending() || runtime.modelObjectGroups.Pending() ||
+                        runtime.modelDummies.Pending() || runtime.objectGroupProperties.Pending() || runtime.worldPoolMatrices.Pending() ||
+                        runtime.worldCovers.Pending() || runtime.worldRemovals.Pending() || runtime.worldAdds.Pending() || runtime.worldIpl.Retained();
                     runtime.restored.store(!metadataRetained);
                     runtime.ready.store(false);
                     runtime.timerReady.store(false);
@@ -9626,8 +9656,8 @@ namespace mta::game_de
                 runtime.timingGeneration.store(0);
                 const bool metadataRetained = runtime.pedModelCreationBusy.load() || runtime.pedModelCreationRetained.load() ||
                                               runtime.startupCollisionBusy.load() || runtime.startupCollisionRetained.load() ||
-                                              runtime.startupMenuBusy.load() || runtime.startupMenuRetained.load() || runtime.modelWheels.Pending() ||
-                                              runtime.modelObjectGroups.Pending() || runtime.modelDummies.Pending() ||
+                                              runtime.startupMenuBusy.load() || runtime.startupMenuRetained.load() || runtime.modelTimes.Pending() ||
+                                              runtime.modelWheels.Pending() || runtime.modelObjectGroups.Pending() || runtime.modelDummies.Pending() ||
                                               runtime.objectGroupProperties.Pending() || runtime.worldPoolMatrices.Pending() || runtime.worldCovers.Pending() ||
                                               runtime.worldRemovals.Pending() || runtime.worldAdds.Pending() || runtime.worldIpl.Retained();
                 // Clock/timing restoration has its own completed acknowledgement.

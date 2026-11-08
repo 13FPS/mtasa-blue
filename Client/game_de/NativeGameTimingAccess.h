@@ -55,6 +55,7 @@
 #include "NativeCameraSphereVisibleAccess.h"
 #include "NativeModelClassificationAccess.h"
 #include "NativeModelWheelAccess.h"
+#include "NativeModelTimeAccess.h"
 #include "NativeModelObjectGroupAccess.h"
 #include "NativeModelDummiesAccess.h"
 #include "NativeObjectGroupPropertiesAccess.h"
@@ -155,6 +156,7 @@ namespace mta::game_de
                                    public NativeCameraSphereVisibleAccess,
                                    public NativeModelClassificationAccess,
                                    public NativeModelWheelAccess,
+                                   public NativeModelTimeAccess,
                                    public NativeModelObjectGroupAccess,
                                    public NativeModelDummiesAccess,
                                    public NativeObjectGroupPropertiesAccess,

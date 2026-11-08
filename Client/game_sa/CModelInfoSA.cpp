@@ -20,6 +20,7 @@
 #include <game/CModelWheelSizePolicy.h>
 #include <game/CModelObjectGroupPolicy.h>
 #include <game/CModelVehicleDummyPolicy.h>
+#include <game/CModelTimePolicy.h>
 #include "CPedModelInfoSA.h"
 #include "CPedSA.h"
 #include "CPoolsSA.h"
@@ -881,21 +882,32 @@ float CModelInfoSA::GetLODDistance()
 
 bool CModelInfoSA::SetTime(char cHourOn, char cHourOff)
 {
-    m_pInterface = ppModelInfo[m_dwModelID];
-    if (!m_pInterface)
-        return false;
-
-    if (GetModelType() != eModelInfoType::TIME)
-        return false;
-
-    CTimeInfoSAInterface* pTime = &static_cast<CTimeModelInfoSAInterface*>(m_pInterface)->timeInfo;
-
-    if (!MapContains(ms_ModelDefaultModelTimeInfo, pTime))
-        MapSet(ms_ModelDefaultModelTimeInfo, pTime, new CTimeInfoSAInterface(pTime->m_nTimeOn, pTime->m_nTimeOff, pTime->m_wOtherTimeModel));
-
-    pTime->m_nTimeOn = cHourOn;
-    pTime->m_nTimeOff = cHourOff;
-    return true;
+    CTimeInfoSAInterface* pTime = nullptr;
+    return MtaGame::CModelTimePolicy::Set(
+        MtaGame::CModelTimePolicy::Hours{cHourOn, cHourOff},
+        [&](MtaGame::CModelTimePolicy::Hours& current)
+        {
+            m_pInterface = ppModelInfo[m_dwModelID];
+            if (!m_pInterface || GetModelType() != eModelInfoType::TIME)
+                return false;
+            pTime = &static_cast<CTimeModelInfoSAInterface*>(m_pInterface)->timeInfo;
+            current = {pTime->m_nTimeOn, pTime->m_nTimeOff};
+            return true;
+        },
+        [&](const MtaGame::CModelTimePolicy::Hours& current)
+        {
+            // Native time-info identity, rather than a facade/model ID,
+            // retains the first hours when multiple model keys alias it.
+            if (!MapContains(ms_ModelDefaultModelTimeInfo, pTime))
+                MapSet(ms_ModelDefaultModelTimeInfo, pTime, new CTimeInfoSAInterface(current.on, current.off, pTime->m_wOtherTimeModel));
+            return true;
+        },
+        [&](const MtaGame::CModelTimePolicy::Hours& requested)
+        {
+            pTime->m_nTimeOn = requested.on;
+            pTime->m_nTimeOff = requested.off;
+            return true;
+        });
 }
 
 bool CModelInfoSA::GetTime(char& cHourOn, char& cHourOff)
@@ -916,12 +928,13 @@ bool CModelInfoSA::GetTime(char& cHourOn, char& cHourOff)
 
 void CModelInfoSA::StaticResetModelTimes()
 {
-    for (auto const& x : ms_ModelDefaultModelTimeInfo)
-    {
-        x.first->m_nTimeOn = x.second->m_nTimeOn;
-        x.first->m_nTimeOff = x.second->m_nTimeOff;
-    }
-    ms_ModelDefaultModelTimeInfo.clear();
+    MtaGame::CModelTimePolicy::ResetAll(ms_ModelDefaultModelTimeInfo,
+                                        [](CTimeInfoSAInterface* pTime, CTimeInfoSAInterface* original)
+                                        {
+                                            pTime->m_nTimeOn = original->m_nTimeOn;
+                                            pTime->m_nTimeOff = original->m_nTimeOff;
+                                            return true;
+                                        });
 }
 
 float CModelInfoSA::GetOriginalLODDistance()

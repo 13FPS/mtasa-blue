@@ -165,7 +165,10 @@ LRESULT CALLBACK CMessageLoopHook::ProcessMessage(HWND hwnd, UINT uMsg, WPARAM w
                     PostMessage(hwnd, WM_CUSTOMFOCUS_FIX, 0, 0);
                 }
 
-                pModManager->GetClient()->OnWindowFocusChange(bFocus);
+                // DLL ownership may survive client retirement. Focus messages
+                // require the currently published client interface itself.
+                if (auto* client = pModManager->GetClient())
+                    client->OnWindowFocusChange(bFocus);
             }
 
             switch (wState)
@@ -196,7 +199,10 @@ LRESULT CALLBACK CMessageLoopHook::ProcessMessage(HWND hwnd, UINT uMsg, WPARAM w
                 {
                     CModManager* pModManager = CModManager::GetSingletonPtr();
                     if (pModManager && pModManager->IsLoaded())
-                        pModManager->GetClient()->OnWindowFocusChange(true);
+                    {
+                        if (auto* client = pModManager->GetClient())
+                            client->OnWindowFocusChange(true);
+                    }
                 }
             }
         }

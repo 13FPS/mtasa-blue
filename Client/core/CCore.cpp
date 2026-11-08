@@ -6540,8 +6540,10 @@ void CCore::HandleIdlePulse()
         DoPostFramePulse();
     }
 
-    if (m_pModManager->IsLoaded())
-        m_pModManager->GetClient()->IdleHandler();
+    // A retained DLL can outlive ClientShutdown. Pulse work above can retire
+    // or replace its client, so use the current published interface only now.
+    if (auto* client = m_pModManager->GetClient())
+        client->IdleHandler();
 }
 
 namespace

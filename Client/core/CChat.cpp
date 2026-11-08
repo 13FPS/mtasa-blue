@@ -704,7 +704,10 @@ bool CChat::CharacterKeyHandler(CGUIKeyEventArgs KeyboardArgs)
                 {
                     // Create vector and get playernames from deathmatch module
                     std::vector<SString> vPlayerNames;
-                    pModManager->GetClient()->GetPlayerNames(vPlayerNames);
+                    // A retained DLL may have no current client. Keep the
+                    // existing empty-name completion fallback in that case.
+                    if (auto* client = pModManager->GetClient())
+                        client->GetPlayerNames(vPlayerNames);
 
                     for (std::vector<SString>::iterator iter = vPlayerNames.begin(); iter != vPlayerNames.end(); ++iter)
                     {

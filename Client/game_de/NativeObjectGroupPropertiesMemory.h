@@ -1,17 +1,19 @@
 /****************************************************************************
  * PROJECT: Multi Theft Auto
  * LICENSE: See LICENSE in the repository root
- * PURPOSE: Fresh world/image admission for the supported builtin scalar rows
+ * PURPOSE: Fresh world/image admission for the supported builtin scalar and vector rows
  ****************************************************************************/
 #pragma once
 #include "NativeObjectGroupPropertiesAccess.h"
+#include "NativeObjectGroupPropertiesProfile.h"
 #include "NativeStreamingCompletionContext.h"
 #include <array>
 
 namespace mta::game_de::NativeObjectGroupPropertiesMemory
 {
     using CheckOwner = NativeStreamingCompletionContext::CheckOwner;
-    using Bits = std::array<std::uint32_t, 5>;
+    using Bits = std::array<std::uint32_t, NativeObjectGroupPropertiesProfile::PropertyCount>;
+    using Raw = std::array<unsigned char, NativeObjectGroupPropertiesProfile::RowBytes>;
     struct Value
     {
         std::uintptr_t                          image = 0;
@@ -19,6 +21,9 @@ namespace mta::game_de::NativeObjectGroupPropertiesMemory
         std::uint8_t                            group = 0;
         NativeStreamingCompletionContext::Value world;
         Bits                                    bits{};
+        // Equality only: includes the opaque FX pointer representation and
+        // padding, but grants no pointer lifetime or whole-row write.
+        Raw raw{};
     };
     struct Member
     {
@@ -40,11 +45,17 @@ namespace mta::game_de::NativeObjectGroupPropertiesMemory
         // captured membership-reader tokens become a cross-callback GC lease.
         Origin                    before;
         NativeObjectGroupProperty field = NativeObjectGroupProperty::Count;
-        std::uint32_t             desired = 0, observed = 0, exceptionCode = 0;
-        ClockResult               result = ClockResult::NotInitialized;
-        bool                      entered = false, accepted = false, uncertain = false;
+        // Logical values stay unshifted; the containing DWORDs also survive
+        // for diagnosing a competing change in a neighbouring BYTE.
+        std::uint32_t desired = 0, observed = 0, exceptionCode = 0;
+        std::uint32_t wordBefore = 0, wordDesired = 0, wordObserved = 0;
+        ClockResult   result = ClockResult::NotInitialized;
+        bool          entered = false, accepted = false, uncertain = false;
     };
     using Exchange = bool (*)(std::uintptr_t, std::uint32_t, std::uint32_t, std::uint32_t&, std::uint32_t&) noexcept;
+    // Pure CPU row patch for the journal's acknowledged preimage. Invalid
+    // fields or byte values leave the raw equality seal unchanged.
+    bool        Patch(Raw&, NativeObjectGroupProperty, std::uint32_t desired) noexcept;
     Origin      Identity(const Value&) noexcept;
     bool        SameIdentity(const Origin&, const Value&) noexcept;
     bool        SameIdentity(const Value&, const Value&) noexcept;

@@ -16,6 +16,13 @@ namespace MtaGame
             // become a new bitwise no-op rule and no value clamp is introduced.
             return std::fabs(current - desired) < 0.0001f;
         }
+        template <class Value>
+        static bool UnchangedValue(const Value& current, const Value& desired) noexcept
+        {
+            // Preserve the caller's typed comparison: full SDK enums before
+            // byte conversion, logical booleans and CVector's own epsilon.
+            return current == desired;
+        }
         template <class Capture>
         static void ChangeSafeguard(bool& modified, Capture&& capture)
         {

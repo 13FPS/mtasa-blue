@@ -1,7 +1,7 @@
 /****************************************************************************
  * PROJECT: Multi Theft Auto
  * LICENSE: See LICENSE in the repository root
- * PURPOSE: Guard builtin scalar reads and one real native32-bit property CAS
+ * PURPOSE: Guard sparse builtin row fields and one masked native32-bit property CAS
  ****************************************************************************/
 #include "NativeObjectGroupPropertiesMemory.h"
 #include "NativeObjectGroupPropertiesProfile.h"
@@ -10,6 +10,7 @@
 #include "NativeStartGameCalls.h"
 #include <windows.h>
 #include <cstring>
+#include <limits>
 
 namespace mta::game_de::NativeObjectGroupPropertiesMemory
 {
@@ -18,11 +19,14 @@ namespace mta::game_de::NativeObjectGroupPropertiesMemory
         namespace P = NativeObjectGroupPropertiesProfile;
         namespace D = NativeStreamingCompletionContext;
         namespace I = NativeImageAccess;
+        static_assert(P::PropertyCount == static_cast<std::size_t>(NativeObjectGroupProperty::Count));
+        static_assert(sizeof(Raw) == P::RowBytes && P::RowBytes % sizeof(std::uint32_t) == 0);
         bool Profile(std::uintptr_t image) noexcept
         {
             IMAGE_DOS_HEADER   dos{};
             IMAGE_NT_HEADERS64 nt{};
-            if (!I::ReadImage(image, image, &dos, sizeof(dos)) || dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew <= 0 ||
+            if (!image || image > (std::numeric_limits<std::uintptr_t>::max)() - NativePedPoolProfile::ImageSize ||
+                !I::ReadImage(image, image, &dos, sizeof(dos)) || dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew <= 0 ||
                 static_cast<std::size_t>(dos.e_lfanew) > NativePedPoolProfile::ImageSize - sizeof(nt) ||
                 !I::ReadImage(image, image + static_cast<std::uintptr_t>(dos.e_lfanew), &nt, sizeof(nt)) || nt.Signature != IMAGE_NT_SIGNATURE ||
                 nt.FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 || nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
@@ -58,7 +62,7 @@ namespace mta::game_de::NativeObjectGroupPropertiesMemory
             }
             return true;
         }
-        bool Fields(std::uintptr_t image, std::uint8_t group, Bits& output) noexcept
+        bool Fields(std::uintptr_t image, std::uint8_t group, Bits& output, Raw& rawOutput) noexcept
         {
             if (group >= P::BuiltinRows)
                 return false;
@@ -66,24 +70,40 @@ namespace mta::game_de::NativeObjectGroupPropertiesMemory
             MEMORY_BASIC_INFORMATION page{};
             if (address % alignof(std::uint32_t) || VirtualQuery(reinterpret_cast<void*>(address), &page, sizeof(page)) != sizeof(page) ||
                 page.State != MEM_COMMIT || page.Type != MEM_IMAGE || page.Protect != PAGE_READWRITE ||
-                reinterpret_cast<std::uintptr_t>(page.AllocationBase) != image || !I::ImagePages(image, address, P::OwnedBytes, true))
+                reinterpret_cast<std::uintptr_t>(page.AllocationBase) != image || !I::ImagePages(image, address, P::RowBytes, true))
                 return false;
-            Bits   next{};
+            Raw    raw{};
             SIZE_T copied = 0;
-            if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(address), next.data(), sizeof(next), &copied) || copied != sizeof(next))
+            if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(address), raw.data(), raw.size(), &copied) || copied != raw.size())
                 return false;
+            Bits next{};
+            for (std::size_t index = 0; index != P::PropertyCount; ++index)
+            {
+                const auto& field = P::Descriptors[index];
+                if (field.bytes == 1)
+                    next[index] = raw[field.offset];
+                else
+                    std::memcpy(&next[index], raw.data() + field.offset, sizeof(next[index]));
+            }
+            // The full row is only a raw equality fence. The FX pointer bytes
+            // are never interpreted, dereferenced, transferred, or restored;
+            // neither their width nor the unowned padding becomes an API field.
             output = next;
+            rawOutput = raw;
             return true;
         }
-        bool Seal(const Value& value, const Bits& expected) noexcept
+        bool Seal(const Value& value, const Raw& expected) noexcept
         {
             D::Value      current;
             Bits          bits{};
+            Raw           raw{};
             std::uint32_t state = 0;
             // All supplied callbacks already finished. These are fresh raw
-            // world/member/field bookends under the same borrowed engine scope.
+            // world/member/full-row bookends under this borrowed engine scope.
+            // Any sibling/padding/FX representation drift refuses the CAS or
+            // makes an already accepted write's acknowledgement uncertain.
             return Profile(value.image) && D::Capture(value.image, current) == ClockResult::Ok && D::Same(value.world, current, true) &&
-                   D::Fence(value.image, value.world) && Fields(value.image, value.group, bits) && bits == expected &&
+                   D::Fence(value.image, value.world) && Fields(value.image, value.group, bits, raw) && raw == expected &&
                    NativeGameStateMemory::Read(value.image, state) && state == 9 && NativeStartGameCalls::CheckThread(value.image) == ClockResult::Ok;
         }
         ClockResult Sample(std::uintptr_t image, std::uint64_t generation, std::uint8_t group, CheckOwner owner, CheckOwner afterApplication,
@@ -100,11 +120,11 @@ namespace mta::game_de::NativeObjectGroupPropertiesMemory
             next.group = group;
             if ((result = D::Capture(image, next.world)) != ClockResult::Ok)
                 return result;
-            if (!Fields(image, group, next.bits))
+            if (!Fields(image, group, next.bits, next.raw))
                 return ClockResult::ReadFailure;
             if ((result = afterApplication()) != ClockResult::Ok || (result = D::Owner(image, owner)) != ClockResult::Ok)
                 return result;
-            if (!Seal(next, next.bits))
+            if (!Seal(next, next.raw))
                 return ClockResult::BindingChanged;
             output = next;
             return ClockResult::Ok;
@@ -126,6 +146,22 @@ namespace mta::game_de::NativeObjectGroupPropertiesMemory
                 return false;
             }
         }
+    }
+    bool Patch(Raw& raw, NativeObjectGroupProperty field, std::uint32_t desired) noexcept
+    {
+        const auto index = static_cast<std::size_t>(field);
+        if (index >= NativeObjectGroupPropertiesProfile::PropertyCount)
+            return false;
+        const auto& descriptor = NativeObjectGroupPropertiesProfile::Descriptors[index];
+        if (descriptor.bytes == 1)
+        {
+            if (desired > 0xffu)
+                return false;
+            raw[descriptor.offset] = static_cast<unsigned char>(desired);
+        }
+        else
+            std::memcpy(raw.data() + descriptor.offset, &desired, sizeof(desired));
+        return true;
     }
     Origin Identity(const Value& value) noexcept
     {
@@ -182,7 +218,7 @@ namespace mta::game_de::NativeObjectGroupPropertiesMemory
         auto                                    result = Detail::Sample(image, generation, group, owner, afterApplication, first);
         if (result != ClockResult::Ok || (result = Detail::Sample(image, generation, group, owner, afterApplication, current)) != ClockResult::Ok)
             return result;
-        if (!SameIdentity(first, current) || first.bits != current.bits)
+        if (!SameIdentity(first, current) || first.bits != current.bits || first.raw != current.raw)
             return ClockResult::BindingChanged;
         output = current;
         return ClockResult::Ok;
@@ -202,7 +238,8 @@ namespace mta::game_de::NativeObjectGroupPropertiesMemory
         };
         const auto index = static_cast<std::size_t>(field);
         if (!image || image != before.image || !before.generation || !owner || !afterApplication ||
-            before.group >= NativeObjectGroupPropertiesProfile::BuiltinRows || index >= NativeObjectGroupPropertiesProfile::Fields)
+            before.group >= NativeObjectGroupPropertiesProfile::BuiltinRows || index >= NativeObjectGroupPropertiesProfile::PropertyCount ||
+            (NativeObjectGroupPropertiesProfile::Descriptors[index].bytes == 1 && desired > 0xffu))
             return finish(ClockResult::InvalidArgument);
         if (!NativeStreamingCompletionContext::TryEnter())
             return finish(ClockResult::Busy);
@@ -211,25 +248,40 @@ namespace mta::game_de::NativeObjectGroupPropertiesMemory
         auto                                    result = Detail::Sample(image, before.generation, before.group, owner, afterApplication, current);
         if (result != ClockResult::Ok)
             return finish(result);
-        if (!SameIdentity(before, current) || before.bits != current.bits)
+        if (!SameIdentity(before, current) || before.bits != current.bits || before.raw != current.raw)
             return finish(ClockResult::BindingChanged);
         auto expectedAfter = current.bits;
+        auto expectedRaw = current.raw;
+        if (!Patch(expectedRaw, field, desired))
+            return finish(ClockResult::InvalidArgument);
         expectedAfter[index] = desired;
+        const auto&         descriptor = NativeObjectGroupPropertiesProfile::Descriptors[index];
+        const auto          wordOffset = descriptor.offset & ~std::size_t{3};
+        const auto          shift = static_cast<unsigned>((descriptor.offset - wordOffset) * 8);
+        const std::uint32_t mask = descriptor.bytes == 1 ? 0xffu << shift : (std::numeric_limits<std::uint32_t>::max)();
+        std::memcpy(&receipt.wordBefore, current.raw.data() + wordOffset, sizeof(receipt.wordBefore));
+        std::memcpy(&receipt.wordDesired, expectedRaw.data() + wordOffset, sizeof(receipt.wordDesired));
         const auto address = image + NativeObjectGroupPropertiesProfile::TableRva +
-                             static_cast<std::uintptr_t>(before.group) * NativeObjectGroupPropertiesProfile::RowBytes + index * sizeof(std::uint32_t);
+                             static_cast<std::uintptr_t>(before.group) * NativeObjectGroupPropertiesProfile::RowBytes + wordOffset;
+        // The native parser narrows six fields to BYTEs, including sparks+50.
+        // A masked aligned DWORD CAS preserves all neighbouring fields and
+        // padding and also refuses a competing sibling-byte change. No full
+        // row memcpy or store across the FX pointer can enter this path.
         receipt.entered = true;
-        const bool returned = (exchange ? exchange : Detail::ExchangeField)(address, current.bits[index], desired, receipt.observed, receipt.exceptionCode);
+        const bool returned =
+            (exchange ? exchange : Detail::ExchangeField)(address, receipt.wordBefore, receipt.wordDesired, receipt.wordObserved, receipt.exceptionCode);
+        receipt.observed = (receipt.wordObserved & mask) >> shift;
         if (!returned)
         {
             receipt.uncertain = true;
             return finish(ClockResult::OriginalException);
         }
-        receipt.accepted = receipt.observed == current.bits[index];
+        receipt.accepted = receipt.wordObserved == receipt.wordBefore;
         if (!receipt.accepted)
             return finish(ClockResult::OwnerConflict);
         Value after;
         result = Detail::Sample(image, before.generation, before.group, owner, afterApplication, after);
-        if (result == ClockResult::Ok && (!SameIdentity(current, after) || after.bits != expectedAfter))
+        if (result == ClockResult::Ok && (!SameIdentity(current, after) || after.bits != expectedAfter || after.raw != expectedRaw))
             result = ClockResult::BindingChanged;
         if (result != ClockResult::Ok)
             receipt.uncertain = true;

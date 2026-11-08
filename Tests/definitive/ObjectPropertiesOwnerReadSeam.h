@@ -17,7 +17,7 @@ namespace ClockObjectPropertiesOwnerTest
     BOOL WINAPI    Read(HANDLE process, LPCVOID address, LPVOID output, SIZE_T bytes, SIZE_T* copied) noexcept
     {
         const auto result = MTA_DE_OBJECT_PROPERTIES_FIXTURE_PARENT_READ(process, address, output, bytes, copied);
-        if (!result || reinterpret_cast<std::uintptr_t>(address) != row || bytes != 5 * sizeof(std::uint32_t) || !copied || *copied != bytes)
+        if (!result || reinterpret_cast<std::uintptr_t>(address) != row || bytes != 0x58 || !copied || *copied != bytes)
             return result;
         std::array<std::uint32_t, 5> observed{};
         std::memcpy(observed.data(), output, sizeof(observed));

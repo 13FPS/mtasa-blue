@@ -423,6 +423,10 @@ namespace mta::game_de
             ClockResult ResetModelVehicleDummies(std::uint32_t, bool) noexcept override;
             ClockResult ResetAllModelVehicleDummies() noexcept override;
             ClockResult ReadObjectGroupProperty(std::uint8_t, NativeObjectGroupProperty, float&) noexcept override;
+            ClockResult ReadObjectGroupPropertyRaw(std::uint8_t, NativeObjectGroupProperty, std::uint32_t&) noexcept override;
+            ClockResult SetObjectGroupPropertyRaw(std::uint8_t, NativeObjectGroupProperty, std::uint32_t, bool&) noexcept override;
+            ClockResult ReadObjectGroupVector(std::uint8_t, NativeObjectGroupProperty, NativeObjectGroupVectorBits&) noexcept override;
+            ClockResult SetObjectGroupVector(std::uint8_t, NativeObjectGroupProperty, const NativeObjectGroupVectorBits&, bool&) noexcept override;
             ClockResult HasOriginalObjectGroupProperties(std::uint8_t, bool&) noexcept override;
             ClockResult SetObjectGroupProperty(std::uint8_t, NativeObjectGroupProperty, float, bool&) noexcept override;
             ClockResult RestoreObjectGroupProperties(std::uint8_t, bool&) noexcept override;
@@ -6088,6 +6092,45 @@ namespace mta::game_de
         {
             return runtime.modelDummies.ReadCachedDefault(runtime.image, runtime.generation.load(), model, dummy, &CheckTimingOwner,
                                                           &CheckApplicationTimingOwner, output, found);
+        }
+
+        ClockResult NativeAccess::ReadObjectGroupPropertyRaw(std::uint8_t group, NativeObjectGroupProperty field, std::uint32_t& value) noexcept
+        {
+            return runtime.objectGroupProperties.ReadRaw(runtime.image, runtime.generation.load(), group, field, &CheckTimingOwner,
+                                                         &CheckApplicationTimingOwner, value);
+        }
+
+        ClockResult NativeAccess::SetObjectGroupPropertyRaw(std::uint8_t group, NativeObjectGroupProperty field, std::uint32_t value, bool& modified) noexcept
+        {
+            const auto result = runtime.objectGroupProperties.SetRaw(runtime.image, runtime.generation.load(), group, field, value, modified, &CheckTimingOwner,
+                                                                     &CheckApplicationTimingOwner);
+            if (runtime.objectGroupProperties.Pending())
+                runtime.restored.store(false);
+            // Enum narrowing and masked byte stores belong to this same
+            // registry. An entered uncertainty cannot create a second owner.
+            if (result != ClockResult::Ok && runtime.objectGroupProperties.Uncertain())
+                Stop(result);
+            return result;
+        }
+
+        ClockResult NativeAccess::ReadObjectGroupVector(std::uint8_t group, NativeObjectGroupProperty first, NativeObjectGroupVectorBits& value) noexcept
+        {
+            return runtime.objectGroupProperties.ReadVector(runtime.image, runtime.generation.load(), group, first, &CheckTimingOwner,
+                                                            &CheckApplicationTimingOwner, value);
+        }
+
+        ClockResult NativeAccess::SetObjectGroupVector(std::uint8_t group, NativeObjectGroupProperty first, const NativeObjectGroupVectorBits& value,
+                                                       bool& modified) noexcept
+        {
+            const auto result = runtime.objectGroupProperties.SetVector(runtime.image, runtime.generation.load(), group, first, value, modified,
+                                                                        &CheckTimingOwner, &CheckApplicationTimingOwner);
+            if (runtime.objectGroupProperties.Pending())
+                runtime.restored.store(false);
+            // A vector can retain an acknowledged component prefix. All
+            // existing End/Begin gates already observe this registry's debt.
+            if (result != ClockResult::Ok && runtime.objectGroupProperties.Uncertain())
+                Stop(result);
+            return result;
         }
 
         ClockResult NativeAccess::ReadObjectGroupProperty(std::uint8_t group, NativeObjectGroupProperty field, float& output) noexcept

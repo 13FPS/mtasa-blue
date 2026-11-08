@@ -196,7 +196,10 @@ float CObjectGroupPhysicalPropertiesSA::GetCollisionDamageMultiplier() const
 
 void CObjectGroupPhysicalPropertiesSA::SetCollisionDamageEffect(ObjectGroupPhysicalProperties::DamageEffect eDamageEffect)
 {
-    if (static_cast<ObjectGroupPhysicalProperties::DamageEffect>(m_pInterface->eColDamageEffect) == eDamageEffect)
+    // Compare the full SDK enum before its byte store so an out-of-range
+    // request keeps the actual first-change/default-capture behavior.
+    if (MtaGame::CObjectGroupPropertiesPolicy::UnchangedValue(static_cast<ObjectGroupPhysicalProperties::DamageEffect>(m_pInterface->eColDamageEffect),
+                                                              eDamageEffect))
         return;
 
     ChangeSafeguard();
@@ -210,7 +213,8 @@ ObjectGroupPhysicalProperties::DamageEffect CObjectGroupPhysicalPropertiesSA::Ge
 
 void CObjectGroupPhysicalPropertiesSA::SetCollisionSpecialResponseCase(ObjectGroupPhysicalProperties::CollisionResponse eResponseCase)
 {
-    if (static_cast<ObjectGroupPhysicalProperties::CollisionResponse>(m_pInterface->eSpecialColResponse) == eResponseCase)
+    if (MtaGame::CObjectGroupPropertiesPolicy::UnchangedValue(static_cast<ObjectGroupPhysicalProperties::CollisionResponse>(m_pInterface->eSpecialColResponse),
+                                                              eResponseCase))
         return;
 
     ChangeSafeguard();
@@ -224,7 +228,7 @@ ObjectGroupPhysicalProperties::CollisionResponse CObjectGroupPhysicalPropertiesS
 
 void CObjectGroupPhysicalPropertiesSA::SetCameraAvoidObject(bool bAvoid)
 {
-    if (m_pInterface->bCameraAvoidObject == bAvoid)
+    if (MtaGame::CObjectGroupPropertiesPolicy::UnchangedValue(m_pInterface->bCameraAvoidObject, bAvoid))
         return;
 
     ChangeSafeguard();
@@ -238,7 +242,7 @@ bool CObjectGroupPhysicalPropertiesSA::GetCameraAvoidObject() const
 
 void CObjectGroupPhysicalPropertiesSA::SetCausesExplosion(bool bExplodes)
 {
-    if (m_pInterface->bCausesExplosion == bExplodes)
+    if (MtaGame::CObjectGroupPropertiesPolicy::UnchangedValue(m_pInterface->bCausesExplosion, bExplodes))
         return;
 
     ChangeSafeguard();
@@ -252,7 +256,7 @@ bool CObjectGroupPhysicalPropertiesSA::GetCausesExplosion() const
 
 void CObjectGroupPhysicalPropertiesSA::SetFxType(ObjectGroupPhysicalProperties::FxType eFxType)
 {
-    if (static_cast<ObjectGroupPhysicalProperties::FxType>(m_pInterface->eFxType) == eFxType)
+    if (MtaGame::CObjectGroupPropertiesPolicy::UnchangedValue(static_cast<ObjectGroupPhysicalProperties::FxType>(m_pInterface->eFxType), eFxType))
         return;
 
     ChangeSafeguard();
@@ -266,7 +270,7 @@ ObjectGroupPhysicalProperties::FxType CObjectGroupPhysicalPropertiesSA::GetFxTyp
 
 void CObjectGroupPhysicalPropertiesSA::SetFxOffset(CVector vecOffset)
 {
-    if (m_pInterface->vecFxOffset == vecOffset)
+    if (MtaGame::CObjectGroupPropertiesPolicy::UnchangedValue(m_pInterface->vecFxOffset, vecOffset))
         return;
 
     ChangeSafeguard();
@@ -319,7 +323,7 @@ float CObjectGroupPhysicalPropertiesSA::GetSmashMultiplier() const
 
 void CObjectGroupPhysicalPropertiesSA::SetBreakVelocity(CVector vecVelocity)
 {
-    if (m_pInterface->vecBreakVelocity == vecVelocity)
+    if (MtaGame::CObjectGroupPropertiesPolicy::UnchangedValue(m_pInterface->vecBreakVelocity, vecVelocity))
         return;
 
     ChangeSafeguard();
@@ -347,7 +351,7 @@ float CObjectGroupPhysicalPropertiesSA::GetBreakVelocityRandomness() const
 
 void CObjectGroupPhysicalPropertiesSA::SetBreakMode(ObjectGroupPhysicalProperties::BreakMode eBreakMode)
 {
-    if (static_cast<ObjectGroupPhysicalProperties::BreakMode>(m_pInterface->eBreakMode) == eBreakMode)
+    if (MtaGame::CObjectGroupPropertiesPolicy::UnchangedValue(static_cast<ObjectGroupPhysicalProperties::BreakMode>(m_pInterface->eBreakMode), eBreakMode))
         return;
 
     ChangeSafeguard();
@@ -361,7 +365,7 @@ ObjectGroupPhysicalProperties::BreakMode CObjectGroupPhysicalPropertiesSA::GetBr
 
 void CObjectGroupPhysicalPropertiesSA::SetSparksOnImpact(bool bSparks)
 {
-    if (static_cast<bool>(m_pInterface->dwSparksOnImpact) == bSparks)
+    if (MtaGame::CObjectGroupPropertiesPolicy::UnchangedValue(static_cast<bool>(m_pInterface->dwSparksOnImpact), bSparks))
         return;
 
     ChangeSafeguard();

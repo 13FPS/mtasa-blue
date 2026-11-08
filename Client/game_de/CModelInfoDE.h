@@ -41,6 +41,11 @@ namespace mta::game_de
         bool                       GetTime(char& hourOn, char& hourOff) override;
 
     protected:
+        // The SDK's public GetModel is nonconst and may be overridden. Const
+        // native reads need the same constructor key without casting away
+        // constness or trusting a derived facade's public model identity.
+        std::uint32_t NativeModelIndex() const noexcept { return model; }
+
         // Request dependencies consume the native getter's EAX result. Keep
         // that observation in this same owner rather than dereferencing an
         // opaque interface as a classic model or caching the animation value.

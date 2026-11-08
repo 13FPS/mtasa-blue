@@ -8,6 +8,7 @@
 #include "NativeWorldIplPlan.h"
 #include "NativeStreamingCompletionContext.h"
 #include "NativeModelReferenceHeap.h"
+#include "NativeWorldIplLoadedMemory.h"
 #include <array>
 #include <vector>
 
@@ -51,6 +52,7 @@ namespace mta::game_de::NativeWorldIplMemory
         std::vector<Row>                               rows;
         std::vector<Node>                              nodes;
         std::vector<Link>                              list;
+        NativeWorldIplLoadedMemory::Snapshot           loaded;
     };
     bool        Profile(std::uintptr_t image) noexcept;
     ClockResult Capture(std::uintptr_t image, NativeWorldIplCalls::CheckOwner, NativeWorldIplCalls::CheckOwner afterApplicationOwner, Snapshot&,

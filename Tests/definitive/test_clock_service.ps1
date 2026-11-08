@@ -2,7 +2,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('ModelObjectGroupOwner','ModelWheelResetOwner','PlayerMoveAnimWorkloadReader','PlayerMoveAnimSetterOwner','PlayerMoveAnimHookOwner','PlayerMoveAnimReapply','PreparedGameBorrow','BuildingPoolDefault','StartupLifecycle','CameraMainTarget','CameraWidescreen','CameraGetCam','CameraTargetSetter','CameraTarget','CameraHistory','CameraRowBorrow','CameraDirection','CameraFovWrite','CameraJumpCut','CameraBasics','ModelTimeGetter','VehiclePredicates','EmptyBlockRemoval','BlockRegistration','BankPostprocess','BankEviction','BankDecompression','ApplicationTiming','AnimationHierarchyUncompress','NumericAssociationOwner','DynamicClumpOwner','AnimationAssociationGroupFactories','GroupSourceCreationOwner','JointTemporaryStaticInitializerOwner','GroupReplacementOwner','GroupCopyAnimationOwner','GroupEmptyInitialization','AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','PresentTransitionClock','StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
+    [ValidateSet('NativeStartupEffectsOwner','ModelObjectGroupOwner','ModelWheelResetOwner','PlayerMoveAnimWorkloadReader','PlayerMoveAnimSetterOwner','PlayerMoveAnimHookOwner','PlayerMoveAnimReapply','PreparedGameBorrow','BuildingPoolDefault','StartupLifecycle','CameraMainTarget','CameraWidescreen','CameraGetCam','CameraTargetSetter','CameraTarget','CameraHistory','CameraRowBorrow','CameraDirection','CameraFovWrite','CameraJumpCut','CameraBasics','ModelTimeGetter','VehiclePredicates','EmptyBlockRemoval','BlockRegistration','BankPostprocess','BankEviction','BankDecompression','ApplicationTiming','AnimationHierarchyUncompress','NumericAssociationOwner','DynamicClumpOwner','AnimationAssociationGroupFactories','GroupSourceCreationOwner','JointTemporaryStaticInitializerOwner','GroupReplacementOwner','GroupCopyAnimationOwner','GroupEmptyInitialization','AnimationAssociationGroupChildProducts','AnimationAssociationGroupOffset','StaticAssociationInitialization','PresentTransitionClock','StartupInitializationReadiness','StartupStreamingReceiver','StartupNumericGarages','StartupPreparationReadiness','StartupNativeMenuLifecycle','StartupModelCollisionLifecycle','PedModelCreationLifecycle','Full','PedOwner','PedCurrentWeapon','GarageNamed','GaragePools','PedPoolRegistry','ConstructorWeapons','PedPose','PedWater','PedWaterOrientation','AnimationBlock','AnimationBlockName','AnimationManager','AnimationServices','AreaSpecialModel','PedArea','SpecialModel','FireCollision','PedFire','PedCollision','DuckingSetter','PedGoggles','PedVisibility','ConstructorServices','WorldGround','WorldLine','WorldArea','WorldQueries','WorldJetpack','PedOnScreen','PedWeaponGrant','WorldIgnoreEntity','CameraSphereVisible','PedWeaponClear','PedClothes','PedRebuild','PedMoveAnim','PlayerNativePrerequisites','AnimationBlockRefs','AnimationBlockFactory','CustomSequenceStorage','CustomAnimationResources','AnimationManagerRefs','AnimationGateway','CustomAnimationSequence','CustomAnimationSequenceCopyFrame','AnimationHierarchyBank','CustomAnimationSequenceName','FreshCompressedSequence','PrivateHierarchy','PrivateHierarchyScalars','PrivateHierarchyName','PrivateHierarchyParent','PrivateHierarchyEmptyOperations','FreshUncompressedSequence','PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','PrivateAnimationFactories','CustomAnimationCleanup','StandaloneSequenceOperations','AnimationBankFactories','SequenceInterfaceCompatibility','AnimationManagerCache','AnimationBlockHashFactory','AnimationDefinitions','AnimationDefinitionBlockNames','AnimationGroupValidity','AnimationIdValidity','AnimationAssociationGroupReads','AnimationStaticAssociationReads','AnimationStaticAssociationWrites','PedRender','PrivateAnimationAssociations','AnimationAssociationBones','AnimationAssociationFloat','AnimationAssociationProgress','AnimationAssociationNodeArray')]
     [string]$Scope = 'Full'
 )
 $ErrorActionPreference = 'Stop'
@@ -23,6 +23,16 @@ $record = [ordered]@{schema='mta_clock_service_tests_v1';directory=$outputRoot;a
 # Historical markers start false and are set only by the branch that actually
 # executed. Focus mode must never inherit the cumulative suite's claims.
 $record['runScope'] = $Scope
+$record['nativeStartupEffectsOwnerTested']=$false
+$record['nativeDummyOwnerActualMemoryTested']=$false
+$record['nativeDummyOwnerHealthyResetTested']=$false
+$record['nativeDummyOwnerKnownRetentionTested']=$false
+$record['nativeDummyOwnerUnknownRetentionTested']=$false
+$record['nativeBuiltinPropertiesActualMemoryTested']=$false
+$record['nativeBuiltinPropertiesFacadeFlagsTested']=$false
+$record['nativeBuiltinPropertiesKnownRetentionTested']=$false
+$record['nativeBuiltinPropertiesUnknownRetentionTested']=$false
+$record['nativeBuiltinPropertiesPrefixNoReplayTested']=$false
 $record['nativeModelObjectGroupOwnerTested']=$false
 $record['nativeModelObjectGroupActualMemoryTested']=$false
 $record['nativeModelObjectGroupSameValueNoDebtTested']=$false
@@ -923,9 +933,26 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         'Client/game_de/NativeModelObjectGroupDomain.h','Client/game_de/NativeModelObjectGroupDomain.cpp','Client/game_de/NativeModelObjectGroupProfile.h',
         'Client/game_de/CGameObjectGroupResetDE.h','Client/game_de/CGameObjectGroupResetDE.cpp',
         'Tests/definitive/NativeModelObjectGroupFixture.h','Tests/definitive/NativeModelObjectGroupOwnerTests.inl')
+    $sourceNames += @('Client/sdk/game/CModelVehicleDummyPolicy.h','Client/sdk/game/CObjectGroupPropertiesPolicy.h',
+        'Client/game_de/CModelInfoObjectGroupDE.h','Client/game_de/CModelInfoObjectGroupDE.cpp',
+        'Client/game_de/CModelInfoDummiesDE.h','Client/game_de/CModelInfoDummiesDE.cpp',
+        'Client/game_de/NativeModelDummiesAccess.h','Client/game_de/NativeModelDummiesProfile.h',
+        'Client/game_de/NativeModelDummiesMemory.h','Client/game_de/NativeModelDummiesMemory.cpp',
+        'Client/game_de/NativeModelDummiesDomain.h','Client/game_de/NativeModelDummiesDomain.cpp',
+        'Client/game_de/CGameModelDummiesResetDE.h','Client/game_de/CGameModelDummiesResetDE.cpp',
+        'Client/game_de/NativeObjectGroupPropertiesAccess.h','Client/game_de/NativeObjectGroupPropertiesProfile.h',
+        'Client/game_de/NativeObjectGroupPropertiesMemory.h','Client/game_de/NativeObjectGroupPropertiesMemory.cpp',
+        'Client/game_de/NativeObjectGroupPropertiesDomain.h','Client/game_de/NativeObjectGroupPropertiesDomain.cpp',
+        'Client/game_de/CObjectGroupPhysicalPropertiesDE.h','Client/game_de/CObjectGroupPhysicalPropertiesDE.cpp')
+    if($Scope -eq 'NativeStartupEffectsOwner'){
+        $sourceNames += @('Tests/definitive/NativeModelDummiesFixture.h','Tests/definitive/NativeModelDummiesReadFixture.h',
+            'Tests/definitive/NativeModelDummiesOwnerTests.inl','Tests/definitive/ObjectPropertiesOwnerReadSeam.h',
+            'Tests/definitive/ObjectPropertiesSdkFixture.h','Tests/definitive/ObjectPropertiesOwnerTests.inl')
+    }
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
+    $sourceNames += @('Client/game_de/NativeWorldIplLoadedProfile.h','Client/game_de/NativeWorldIplLoadedMemory.h','Client/game_de/NativeWorldIplLoadedMemory.cpp')
     $record.sourceSnapshotScope = 'Declared clock runtime, SDK and Detours inputs; not an independently recovered compiler-read trace.'
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
     $visualStudio = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
@@ -1397,6 +1424,8 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         # the actual base implementation, even in a focused runtime scope.
         (Join-Path $taskRoot 'Client/game_de/CModelInfoDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CModelInfoWheelDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CModelInfoObjectGroupDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CModelInfoDummiesDE.cpp'),
+        (Join-Path $taskRoot 'Client/game_de/CObjectGroupPhysicalPropertiesDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CGameModelDummiesResetDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CGameModelWheelResetDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CGameWorldIplDE.cpp'),(Join-Path $taskRoot 'Client/game_de/CGameObjectGroupResetDE.cpp'),
         (Join-Path $taskRoot 'Client/game_de/CModelInfoRequestDE.cpp'),
 
@@ -1409,6 +1438,14 @@ $sourceNames += @('Client/game_de/NativeCameraSphereVisibleAccess.h','Client/gam
         (Join-Path $taskRoot 'Client/game_de/NativePresentTransitionGate.cpp'),
         (Join-Path $taskRoot 'Client/game_de/NativeImageAccess.cpp')) +
         $runtimeDependencies + @(('/Fo'+$scratchRoot+[IO.Path]::DirectorySeparatorChar),('/Fd'+(Join-Path $scratchRoot 'fixture.pdb')),('/Fe'+$executable),'/link','bcrypt.lib','user32.lib') + $objects
+    if($Scope -eq 'NativeStartupEffectsOwner'){
+        # The unchanged shared image reader is included in the owner TU under
+        # the same owned read timing seam as the inline reference-map reader.
+        # Remove its standalone source only here to avoid duplicate definitions.
+        $arguments=@('/DMTA_TEST_NATIVE_STARTUP_EFFECTS')+@($arguments | Where-Object { $_ -cne (Join-Path $taskRoot 'Client/game_de/NativeImageAccess.cpp') })
+        $record['nativeImageAccessIncludedInOwnerTranslationUnit']=$true
+        $record['nativeReferenceMapInlineReadUsesOwnerSeam']=$true
+    }
     if($Scope -in @('PrivateHierarchyPostprocess','FramesAndHierarchyPostprocess','BankPostprocess','BlockRegistration','EmptyBlockRemoval')){
         # All selected positive calls execute the real admitted saved body;
         # the same delegate schedules intentional post-return failures only.
@@ -1498,7 +1535,7 @@ namespace ClockPrivateHierarchyParentWriteFixture {
     # This owner scope compiles the actual Runtime and both new memory domains.
     # Its larger translation-unit set needs a bounded compile window on slower
     # hosts; a compiler timeout must not be confused with a native-owner failure.
-    $compileDeadlineMs = if ($Scope -in @('ModelWheelResetOwner','ModelObjectGroupOwner')) { 600000 } else { 120000 }
+    $compileDeadlineMs = if ($Scope -in @('ModelWheelResetOwner','ModelObjectGroupOwner','NativeStartupEffectsOwner')) { 600000 } else { 120000 }
     $record['compileDeadlineMs']=$compileDeadlineMs
     $record.compileRuns += RunBounded $compiler $arguments 'compile' $compileDeadlineMs
     if ($record.compileRuns[-1].exitCode -ne 0 -or $record.compileRuns[-1].timedOut) { throw 'Clock SDK/runtime fixture compilation failed.' }
@@ -1579,7 +1616,47 @@ namespace ClockPrivateHierarchyParentWriteFixture {
     if ($Scope -eq 'GarageNamed') { $fixtureArguments += '--garage-named' }
     if ($Scope -eq 'GaragePools') { $fixtureArguments += '--garage-pools' }
     if ($Scope -eq 'PedPoolRegistry') { $fixtureArguments += '--ped-pool-registry' }
-    if($Scope -eq 'ModelObjectGroupOwner'){
+    if($Scope -eq 'NativeStartupEffectsOwner'){
+        # One compile, six pristine actual Runtime lifetimes. No historical
+        # main or scope executes; production native CAS and reference counting
+        # remain genuine while owned-buffer reads schedule known failures.
+        $record['testRuns']=@();$texts=@();$compiledHash=Sha $executable
+        $copy=Join-Path $scratchRoot ([IO.Path]::GetFileName($executable))
+        if(Test-Path -LiteralPath $copy){throw 'Fresh startup-effects execution copy already exists'}
+        Copy-Item -LiteralPath $executable -Destination $copy
+        if((Sha $copy) -cne $compiledHash){throw 'Startup-effects copy differs from the once-compiled executable'}
+        $record['startupEffectsExecutionCopy']=@{path=$copy;sha256=$compiledHash;removedWithOwnedScratch=$true}
+        $cases=@(
+            @{name='dummy-healthy';marker='Production dummy owner healthy completed'},
+            @{name='dummy-retained';marker='Production dummy owner retained completed'},
+            @{name='dummy-unknown';marker='Production dummy owner unknown completed'},
+            @{name='properties-healthy';marker='Production builtin object properties healthy completed'},
+            @{name='properties-retained';marker='Production builtin object properties retained completed'},
+            @{name='properties-unknown';marker='Production builtin object properties unknown completed'})
+        $caseIndex=0
+        foreach($case in $cases){
+            $run=RunBounded $copy @($scratchRoot,('--native-startup-effects-'+$case.name)) ('test-native-startup-effects-'+$case.name) 60000
+            $run['case']=$case.name;$run['caseIndex']=$caseIndex;$run['expectedRunMarker']=$case.marker
+            $record.testRuns+=$run
+            $part=[IO.File]::ReadAllText($run.stdout)+[IO.File]::ReadAllText($run.stderr)
+            $summary=[regex]::Match($part,'Passed (\d+) production clock service checks')
+            $returned=$part.Contains(('Native startup effects case '+$caseIndex+' completed')) -and $part.Contains($case.marker)
+            $run['selectedRunReturned']=$returned
+            $run['checks']=$(if($summary.Success){[int]$summary.Groups[1].Value}else{0})
+            if($run.exitCode -ne 0 -or $run.timedOut -or -not $returned -or $run.checks -le 0){throw ('Startup-effects case '+$case.name+' failed or did not finish its selected Run')}
+            $record.checks+=$run.checks;$texts+=$part
+            if((Sha $copy) -cne $compiledHash){throw 'Startup-effects executable changed between lifetimes'}
+            $ownedImage=Join-Path $scratchRoot 'owned-clock-image.bin'
+            if(-not(Test-Path -LiteralPath $ownedImage) -or ((Get-Item -LiteralPath $ownedImage -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)){
+                throw 'Expected owned startup-effects image missing or linked'
+            }
+            Remove-Item -LiteralPath $ownedImage -Force
+            $run['ownedImageRemoved']=$true
+            ++$caseIndex
+        }
+        if($record.testRuns.Count -ne 6){throw 'Startup-effects scope requires exactly six new processes'}
+        $record.testRun=$record.testRuns[-1];$text=$texts -join [Environment]::NewLine
+    } elseif($Scope -eq 'ModelObjectGroupOwner'){
         # One compile, three genuinely new Runtime lifetimes. Native memory,
         # default-domain logic and unsigned16 CAS are production code on owned
         # allocated Atomic rows; no historical scope or original game executes.
@@ -2762,7 +2839,30 @@ namespace ClockPrivateHierarchyParentWriteFixture {
         if ($text -match 'Passed (\d+) production clock service checks') { $record.checks = [int]$Matches[1] }
         if ($record.testRun.exitCode -ne 0 -or $record.testRun.timedOut -or $record.checks -eq 0) { throw 'Clock service fixture failed.' }
     }
-    if($Scope -eq 'ModelObjectGroupOwner'){
+    if($Scope -eq 'NativeStartupEffectsOwner'){
+        $record.nativeDummyOwnerHealthyResetTested=$text.Contains('Production dummy owner healthy completed')
+        $record.nativeDummyOwnerKnownRetentionTested=$text.Contains('Production dummy owner retained completed')
+        $record.nativeDummyOwnerUnknownRetentionTested=$text.Contains('Production dummy owner unknown completed')
+        $record.nativeDummyOwnerActualMemoryTested=$record.nativeDummyOwnerHealthyResetTested -and $record.nativeDummyOwnerKnownRetentionTested -and $record.nativeDummyOwnerUnknownRetentionTested
+        $healthyProperties=$text.Contains('Production builtin object properties healthy completed')
+        $record.nativeBuiltinPropertiesFacadeFlagsTested=$healthyProperties
+        $record.nativeBuiltinPropertiesPrefixNoReplayTested=$healthyProperties
+        $record.nativeBuiltinPropertiesKnownRetentionTested=$text.Contains('Production builtin object properties retained completed')
+        $record.nativeBuiltinPropertiesUnknownRetentionTested=$text.Contains('Production builtin object properties unknown completed')
+        $record.nativeBuiltinPropertiesActualMemoryTested=$healthyProperties -and $record.nativeBuiltinPropertiesKnownRetentionTested -and $record.nativeBuiltinPropertiesUnknownRetentionTested
+        $record.nativeStartupEffectsOwnerTested=$record.nativeDummyOwnerActualMemoryTested -and $record.nativeBuiltinPropertiesActualMemoryTested -and $record.testRuns.Count -eq 6
+        $record['nativeOriginalGameCodeExecuted']=$false
+        $record['nativeCasExchangeDoubled']=$false
+        $record['nativeReferenceCounterExchangeDoubled']=$false
+        $record['objectPropertiesQualifiedBuiltinRows']=5
+        $record['objectPropertiesQualifiedScalarFields']=5
+        $record['objectPropertiesFxOrWholeRowRestoreTested']=$false
+        $record['objectPropertiesCGameBulkHookAdmitted']=$false
+        $record['existingScopesExecuted']=$false
+        $record['freshOwnerProcesses']=6
+        $record.productionNativeCallbackTested=$true
+        if(-not $record.nativeStartupEffectsOwnerTested){throw 'Actual combined startup-effects Runtime scope incomplete'}
+    } elseif($Scope -eq 'ModelObjectGroupOwner'){
         $healthy=$text.Contains('Production object-group owner healthy completed')
         $known=$text.Contains('Production object-group owner retained completed')
         $unknown=$text.Contains('Production object-group owner unknown completed')

@@ -120,9 +120,9 @@ namespace mta::game_de::NativeWorldIplMemory
                 std::uintptr_t address;
                 std::size_t    bytes;
             };
-            std::array<Span, 9> spans{};
-            std::size_t         count = 0;
-            const auto          append = [&](const Pool& pool, std::size_t stride)
+            std::array<Span, 18> spans{};
+            std::size_t          count = 0;
+            const auto           append = [&](const Pool& pool, std::size_t stride)
             {
                 if (!pool.address)
                     return;
@@ -133,6 +133,12 @@ namespace mta::game_de::NativeWorldIplMemory
             append(snapshot.ipl, P::IplBytes);
             append(snapshot.quad, P::QuadBytes);
             append(snapshot.links, P::LinkBytes);
+            for (const auto& pool : snapshot.loaded.pools)
+            {
+                spans[count++] = {pool.address, 32};
+                spans[count++] = {pool.objects, static_cast<std::size_t>(pool.capacity) * pool.stride};
+                spans[count++] = {pool.flags, static_cast<std::size_t>(pool.capacity)};
+            }
             for (std::size_t a = 0; a != count; ++a)
                 for (std::size_t b = a + 1; b != count; ++b)
                     if (spans[a].address < spans[b].address + spans[b].bytes && spans[b].address < spans[a].address + spans[a].bytes)
@@ -252,17 +258,28 @@ namespace mta::game_de::NativeWorldIplMemory
                 row.streamState = snapshot.stream[index][13];
                 if (!NativeWorldIplPlan::Valid(row.bounds) || row.bytes[P::DisabledOffset] > 1)
                     return ClockResult::BindingChanged;
-                // The loaded IPL branch enters native entity destructors and
-                // UE actor/component cleanup not yet qualified by this service.
-                // Refuse the whole bank before its first effect; a typed pool
-                // header or a readable entity vtable cannot substitute for it.
-                if (forRemoval && index && row.streamState != 0)
+                // Pending/native transition states have no complete removal
+                // contract. State1 requires its selected live entity/UE graph
+                // to be captured for the whole bank before the first effect.
+                if (forRemoval && index && row.streamState > 1)
                     return ClockResult::UnsupportedBuild;
                 snapshot.rows.push_back(row);
             }
             // These are separate allocations in the pinned initializer. A
             // forged alias must not turn an IPL flag store into tree metadata.
-            if (!Tree(image, snapshot) || !DisjointPools(snapshot))
+            if (!Tree(image, snapshot))
+                return ClockResult::BindingChanged;
+            if (forRemoval)
+            {
+                std::vector<NativeWorldIplLoadedMemory::Ipl> loaded;
+                for (const auto& row : snapshot.rows)
+                    if (row.index && row.streamState == 1)
+                        loaded.push_back({row.index, row.bytes});
+                const auto result = NativeWorldIplLoadedMemory::Capture(image, snapshot.world, loaded, snapshot.loaded);
+                if (result != ClockResult::Ok)
+                    return result;
+            }
+            if (!DisjointPools(snapshot))
                 return ClockResult::BindingChanged;
             return ClockResult::Ok;
         }
@@ -324,7 +341,8 @@ namespace mta::game_de::NativeWorldIplMemory
             // graph before accepting this exact copied bank/tree observation.
             if (!Profile(image) || C::Capture(image, world) != ClockResult::Ok || !C::Same(before.world, world, true) ||
                 H::Recheck(image, before.heap) != ClockResult::Ok || !SealPool(image, P::IplPoolRva, before.ipl) ||
-                !SealPool(image, P::QuadPoolRva, before.quad) || !SealPool(image, P::LinkPoolRva, before.links))
+                !SealPool(image, P::QuadPoolRva, before.quad) || !SealPool(image, P::LinkPoolRva, before.links) ||
+                !NativeWorldIplLoadedMemory::Seal(image, before.loaded))
                 return false;
             std::uintptr_t                                 tree = 0;
             std::array<std::array<unsigned char, 16>, 256> stream{};

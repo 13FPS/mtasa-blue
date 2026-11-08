@@ -3,6 +3,20 @@
  * LICENSE: See LICENSE in the repository root
  * PURPOSE: Exercise the actual MTA clock interface and checked service boundary
  *****************************************************************************/
+#if defined(MTA_TEST_NATIVE_STARTUP_EFFECTS)
+    #include <windows.h>
+namespace ClockObjectPropertiesOwnerTest
+{
+    BOOL WINAPI Read(HANDLE, LPCVOID, LPVOID, SIZE_T, SIZE_T*) noexcept;
+}
+    // This inline map reader is transitively included before the later fixture
+    // definitions. Select its first definition here so actual post-CAS map reads
+    // can observe the owned failure seam without modifying any production source.
+    #pragma push_macro("ReadProcessMemory")
+    #define ReadProcessMemory ::ClockObjectPropertiesOwnerTest::Read
+    #include "../../Client/game_de/NativeModelReferenceMap.h"
+    #pragma pop_macro("ReadProcessMemory")
+#endif
 #include "../../Client/game_de/CClockDE.h"
 #include "../../Client/game_de/NativeCameraFovWrite.h"
 #include "../../Client/game_de/NativeCameraDirection.h"
@@ -3959,6 +3973,26 @@ namespace ClockObjectGroupOwnerTest
 #include "../../Client/game_de/NativeModelObjectGroupMemory.cpp"
 #pragma pop_macro("ReadProcessMemory")
 #include "../../Client/game_de/NativeModelObjectGroupDomain.cpp"
+#if defined(MTA_TEST_NATIVE_STARTUP_EFFECTS)
+    #include "NativeModelDummiesReadFixture.h"
+    #define MTA_DE_OBJECT_PROPERTIES_FIXTURE_PARENT_READ ::ClockModelDummiesOwnerTest::Read
+    #include "ObjectPropertiesOwnerReadSeam.h"
+    #undef MTA_DE_OBJECT_PROPERTIES_FIXTURE_PARENT_READ
+    #pragma push_macro("ReadProcessMemory")
+    #define ReadProcessMemory ::ClockObjectPropertiesOwnerTest::Read
+    // The new scope compiles this unchanged implementation here instead of as a
+    // standalone TU, so its real ReadImage boundary observes the same fault timing.
+    #include "../../Client/game_de/NativeImageAccess.cpp"
+    #include "../../Client/game_de/NativeModelDummiesMemory.cpp"
+    #include "../../Client/game_de/NativeObjectGroupPropertiesMemory.cpp"
+    #pragma pop_macro("ReadProcessMemory")
+#else
+    #include "../../Client/game_de/NativeModelDummiesMemory.cpp"
+    #include "../../Client/game_de/NativeObjectGroupPropertiesMemory.cpp"
+#endif
+#include "../../Client/game_de/NativeModelDummiesDomain.cpp"
+#include "../../Client/game_de/NativeObjectGroupPropertiesDomain.cpp"
+#include "../../Client/game_de/NativeWorldIplLoadedMemory.cpp"
 #include "../../Client/game_de/NativeWorldIplMemory.cpp"
 namespace NativeWorldIplFixture
 {
@@ -9288,6 +9322,13 @@ namespace
 #include "../../Client/game_de/CGameObjectGroupResetDE.h"
 #include "NativeModelObjectGroupFixture.h"
 #include "NativeModelObjectGroupOwnerTests.inl"
+#if defined(MTA_TEST_NATIVE_STARTUP_EFFECTS)
+    #include "../../Client/game_de/CGameModelDummiesResetDE.h"
+    #include "NativeModelDummiesFixture.h"
+    #include "NativeModelDummiesOwnerTests.inl"
+    #include "ObjectPropertiesSdkFixture.h"
+    #include "ObjectPropertiesOwnerTests.inl"
+#endif
 
 // The strict receiver must execute production typed tickets and the distinct
 // metadata-only delete route. Deleting an interface acknowledges only its own
@@ -9412,7 +9453,22 @@ int main(int argc, char** argv)
                                                    : argc == 3 && std::strcmp(argv[2], "--model-object-group-owner-unknown") == 0  ? 2u
                                                                                                                                    : 3u;
     const bool     modelObjectGroupOwnerOnly = modelObjectGroupOwnerScenario < 3;
-    unsigned       playerMoveAnimSetterOwnerScenario = 4;
+#if defined(MTA_TEST_NATIVE_STARTUP_EFFECTS)
+    unsigned nativeStartupEffectsScenario = 6;
+    if (argc == 3)
+    {
+        constexpr std::array<const char*, 6> flags{"--native-startup-effects-dummy-healthy",       "--native-startup-effects-dummy-retained",
+                                                   "--native-startup-effects-dummy-unknown",       "--native-startup-effects-properties-healthy",
+                                                   "--native-startup-effects-properties-retained", "--native-startup-effects-properties-unknown"};
+        for (unsigned index = 0; index < flags.size(); ++index)
+            if (std::strcmp(argv[2], flags[index]) == 0)
+                nativeStartupEffectsScenario = index;
+    }
+    const bool nativeStartupEffectsOnly = nativeStartupEffectsScenario < 6;
+#else
+    const bool nativeStartupEffectsOnly = false;
+#endif
+    unsigned playerMoveAnimSetterOwnerScenario = 4;
     if (argc == 3)
     {
         constexpr std::array<const char*, 4> flags{"--player-moveanim-setter-owner-success", "--player-moveanim-setter-owner-invoke-unknown",
@@ -9843,19 +9899,19 @@ int main(int argc, char** argv)
          animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly || fireCollisionOnly || fireOnly ||
          collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly || worldLineOnly || worldAreaOnly ||
          worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly || cameraSphereOnly || pedWeaponClearOnly ||
-         pedClothesOnly || pedRebuildOnly || modelWheelResetOwnerOnly || modelObjectGroupOwnerOnly || playerMoveAnimWorkloadReaderOnly ||
-         playerMoveAnimSetterOwnerOnly || playerMoveAnimHookOwnerOnly || playerMoveAnimReapplyOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly ||
-         animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly ||
-         animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly ||
-         customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly ||
-         privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly ||
-         privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly ||
-         sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly ||
-         animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly || cameraBasicsOnly || cameraJumpCutOnly ||
-         cameraFovWriteOnly || cameraDirectionOnly || cameraRowBorrowOnly || cameraHistoryOnly || cameraTargetOnly || cameraTargetSetterOnly ||
-         cameraGetCamOnly || cameraWidescreenOnly || cameraMainTargetOnly || applicationTimingOnly || emptyBlockRemovalOnly || blockRegistrationOnly ||
-         bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly || dynamicClumpOnly ||
-         groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
+         pedClothesOnly || pedRebuildOnly || modelWheelResetOwnerOnly || modelObjectGroupOwnerOnly || nativeStartupEffectsOnly ||
+         playerMoveAnimWorkloadReaderOnly || playerMoveAnimSetterOwnerOnly || playerMoveAnimHookOwnerOnly || playerMoveAnimReapplyOnly || pedMoveAnimOnly ||
+         playerNativePrerequisitesOnly || animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly ||
+         animationManagerRefsOnly || animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly ||
+         animationHierarchyBankOnly || customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly ||
+         privateHierarchyNameOnly || privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly ||
+         privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly ||
+         animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly ||
+         animationDefinitionBlockNamesOnly || animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly || cameraBasicsOnly ||
+         cameraJumpCutOnly || cameraFovWriteOnly || cameraDirectionOnly || cameraRowBorrowOnly || cameraHistoryOnly || cameraTargetOnly ||
+         cameraTargetSetterOnly || cameraGetCamOnly || cameraWidescreenOnly || cameraMainTargetOnly || applicationTimingOnly || emptyBlockRemovalOnly ||
+         blockRegistrationOnly || bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly ||
+         dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
          groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
          animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
          privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
@@ -9885,6 +9941,21 @@ int main(int argc, char** argv)
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }
+#if defined(MTA_TEST_NATIVE_STARTUP_EFFECTS)
+    if (nativeStartupEffectsOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        if (nativeStartupEffectsScenario < 3)
+            ModelDummiesOwnerFixture::Run(fixture, nativeStartupEffectsScenario);
+        else
+            ObjectPropertiesOwnerFixture::Run(fixture, nativeStartupEffectsScenario - 3);
+        // Emit the process marker only after the complete selected Run returned.
+        std::printf("Native startup effects case %u completed\n", nativeStartupEffectsScenario);
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+#endif
     if (playerMoveAnimWorkloadReaderOnly)
     {
         ClockImageFixture fixture;

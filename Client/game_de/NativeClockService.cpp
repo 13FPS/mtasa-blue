@@ -155,6 +155,8 @@
 #include "NativeModelClassificationCalls.h"
 #include "NativeModelWheelDomain.h"
 #include "NativeModelObjectGroupDomain.h"
+#include "NativeModelDummiesDomain.h"
+#include "NativeObjectGroupPropertiesDomain.h"
 #include "NativeWorldIplCalls.h"
 #include "NativeModelArchiveReader.h"
 #include "NativeModelObjectReader.h"
@@ -402,6 +404,16 @@ namespace mta::game_de
             ClockResult SetModelObjectPropertiesGroup(std::uint32_t, std::uint16_t) noexcept override;
             ClockResult RestoreModelObjectPropertiesGroup(std::uint32_t) noexcept override;
             ClockResult RestoreAllModelObjectPropertiesGroups() noexcept override;
+            ClockResult ReadModelVehicleDummyPositions(std::uint32_t, NativeModelDummyPositions&) noexcept override;
+            ClockResult ReadCachedModelVehicleDummyDefault(std::uint32_t, std::uint32_t, NativeModelDummyVector&, bool&) noexcept override;
+            ClockResult SetModelVehicleDummyPosition(std::uint32_t, std::uint32_t, const NativeModelDummyVector&) noexcept override;
+            ClockResult ResetModelVehicleDummies(std::uint32_t, bool) noexcept override;
+            ClockResult ResetAllModelVehicleDummies() noexcept override;
+            ClockResult ReadObjectGroupProperty(std::uint8_t, NativeObjectGroupProperty, float&) noexcept override;
+            ClockResult HasOriginalObjectGroupProperties(std::uint8_t, bool&) noexcept override;
+            ClockResult SetObjectGroupProperty(std::uint8_t, NativeObjectGroupProperty, float, bool&) noexcept override;
+            ClockResult RestoreObjectGroupProperties(std::uint8_t, bool&) noexcept override;
+            ClockResult RestoreAllObjectGroupProperties() noexcept override;
             ClockResult CheckWorldIplStreamingReady() noexcept override;
             ClockResult DisableWorldIplStreaming() noexcept override;
             ClockResult EnableWorldIplStreaming(MtaGame::CGameWorldPolicy::IplFilter) noexcept override;
@@ -733,6 +745,10 @@ namespace mta::game_de
             // Neither facade drop nor a new timing generation may erase them.
             NativeModelWheelDomain       modelWheels;
             NativeModelObjectGroupDomain modelObjectGroups;
+            // These are separate MTA default registries on the same owner.
+            // Dummy holds cannot borrow a facade family's reference cycle.
+            NativeModelDummiesDomain          modelDummies;
+            NativeObjectGroupPropertiesDomain objectGroupProperties;
             // World removal and restoration share this generation. End cannot
             // replace the SDK's pool-restoration-before-IPL-enable itinerary.
             NativeWorldIplCalls::Controller worldIpl;
@@ -1026,14 +1042,15 @@ namespace mta::game_de
                    runtime.presentationRecovery.Held() || runtime.weatherOverridePeers.PresentationHeld() || runtime.startupMenuBusy.load() ||
                    runtime.startupMenuRetained.load() || runtime.startupCollisionBusy.load() || runtime.startupCollisionRetained.load() ||
                    runtime.pedModelCreationBusy.load() || runtime.pedModelCreationRetained.load() || runtime.modelBackingReferences.IsRetained() ||
-                   runtime.modelWheels.Pending() || runtime.modelObjectGroups.Pending() || runtime.worldIpl.Retained() || runtime.pedReferences.IsRetained() ||
-                   WorldIgnoreRetained() || runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() ||
-                   runtime.privateAssociations.IsRetained() || runtime.groupCreations.IsRetained() || runtime.hierarchyUncompress.IsRetained() ||
-                   runtime.cameraRestore.IsRetained() || runtime.cameraTargetSetter.IsRetained() || runtime.cameraFovWrite.IsRetained() ||
-                   runtime.cameraDirection.IsRetained() || runtime.cameraWidescreen.IsRetained() || runtime.playerMoveAnimReapply.IsRetained() ||
-                   runtime.playerMoveAnimGroupWrite.IsRetained() || runtime.playerMoveAnimHooks.IsRetained() || runtime.playerMoveAnimHookPeers.Held() ||
-                   runtime.playerMoveAnimHookPeers.PresentationHeld() || runtime.hierarchyCacheRemove.IsRetained() || runtime.blockRegistration.IsRetained() ||
-                   runtime.blockRemoval.IsRetained() || runtime.customSequences.HasPendingCleanup();
+                   runtime.modelWheels.Pending() || runtime.modelObjectGroups.Pending() || runtime.modelDummies.Pending() ||
+                   runtime.objectGroupProperties.Pending() || runtime.worldIpl.Retained() || runtime.pedReferences.IsRetained() || WorldIgnoreRetained() ||
+                   runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained() ||
+                   runtime.groupCreations.IsRetained() || runtime.hierarchyUncompress.IsRetained() || runtime.cameraRestore.IsRetained() ||
+                   runtime.cameraTargetSetter.IsRetained() || runtime.cameraFovWrite.IsRetained() || runtime.cameraDirection.IsRetained() ||
+                   runtime.cameraWidescreen.IsRetained() || runtime.playerMoveAnimReapply.IsRetained() || runtime.playerMoveAnimGroupWrite.IsRetained() ||
+                   runtime.playerMoveAnimHooks.IsRetained() || runtime.playerMoveAnimHookPeers.Held() || runtime.playerMoveAnimHookPeers.PresentationHeld() ||
+                   runtime.hierarchyCacheRemove.IsRetained() || runtime.blockRegistration.IsRetained() || runtime.blockRemoval.IsRetained() ||
+                   runtime.customSequences.HasPendingCleanup();
         }
 
         bool WeatherOverrideRetained() noexcept
@@ -5962,6 +5979,107 @@ namespace mta::game_de
             return result;
         }
 
+        ClockResult NativeAccess::ReadModelVehicleDummyPositions(std::uint32_t model, NativeModelDummyPositions& output) noexcept
+        {
+            return runtime.modelDummies.Read(runtime.image, runtime.generation.load(), model, &CheckTimingOwner, &CheckApplicationTimingOwner, output);
+        }
+
+        ClockResult NativeAccess::ReadCachedModelVehicleDummyDefault(std::uint32_t model, std::uint32_t dummy, NativeModelDummyVector& output,
+                                                                     bool& found) noexcept
+        {
+            return runtime.modelDummies.ReadCachedDefault(runtime.image, runtime.generation.load(), model, dummy, &CheckTimingOwner,
+                                                          &CheckApplicationTimingOwner, output, found);
+        }
+
+        ClockResult NativeAccess::ReadObjectGroupProperty(std::uint8_t group, NativeObjectGroupProperty field, float& output) noexcept
+        {
+            return runtime.objectGroupProperties.Read(runtime.image, runtime.generation.load(), group, field, &CheckTimingOwner, &CheckApplicationTimingOwner,
+                                                      output);
+        }
+
+        ClockResult NativeAccess::HasOriginalObjectGroupProperties(std::uint8_t group, bool& output) noexcept
+        {
+            return runtime.objectGroupProperties.HasOriginal(runtime.image, runtime.generation.load(), group, &CheckTimingOwner, &CheckApplicationTimingOwner,
+                                                             output);
+        }
+
+        ClockResult NativeAccess::SetModelVehicleDummyPosition(std::uint32_t model, std::uint32_t dummy, const NativeModelDummyVector& value) noexcept
+        {
+            const auto result =
+                runtime.modelDummies.Set(runtime.image, runtime.generation.load(), model, dummy, value, &CheckTimingOwner, &CheckApplicationTimingOwner);
+            // Only the explicit SDK effect may mutate or restore this domain.
+            // End observes its summary and cannot replay an entered prefix.
+            if (runtime.modelDummies.Pending())
+                runtime.restored.store(false);
+            if (result != ClockResult::Ok && runtime.modelDummies.Uncertain())
+                Stop(result);
+            return result;
+        }
+
+        ClockResult NativeAccess::ResetModelVehicleDummies(std::uint32_t model, bool remove) noexcept
+        {
+            const auto result =
+                runtime.modelDummies.ResetOne(runtime.image, runtime.generation.load(), model, remove, &CheckTimingOwner, &CheckApplicationTimingOwner);
+            // Only the explicit SDK effect may mutate or restore this domain.
+            // End observes its summary and cannot replay an entered prefix.
+            if (runtime.modelDummies.Pending())
+                runtime.restored.store(false);
+            if (result != ClockResult::Ok && runtime.modelDummies.Uncertain())
+                Stop(result);
+            return result;
+        }
+
+        ClockResult NativeAccess::ResetAllModelVehicleDummies() noexcept
+        {
+            const auto result = runtime.modelDummies.ResetAll(runtime.image, runtime.generation.load(), &CheckTimingOwner, &CheckApplicationTimingOwner);
+            // Only the explicit SDK effect may mutate or restore this domain.
+            // End observes its summary and cannot replay an entered prefix.
+            if (runtime.modelDummies.Pending())
+                runtime.restored.store(false);
+            if (result != ClockResult::Ok && runtime.modelDummies.Uncertain())
+                Stop(result);
+            return result;
+        }
+
+        ClockResult NativeAccess::SetObjectGroupProperty(std::uint8_t group, NativeObjectGroupProperty field, float value, bool& modified) noexcept
+        {
+            const auto result = runtime.objectGroupProperties.Set(runtime.image, runtime.generation.load(), group, field, value, modified, &CheckTimingOwner,
+                                                                  &CheckApplicationTimingOwner);
+            // Only the explicit SDK effect may mutate or restore this domain.
+            // End observes its summary and cannot replay an entered prefix.
+            if (runtime.objectGroupProperties.Pending())
+                runtime.restored.store(false);
+            if (result != ClockResult::Ok && runtime.objectGroupProperties.Uncertain())
+                Stop(result);
+            return result;
+        }
+
+        ClockResult NativeAccess::RestoreObjectGroupProperties(std::uint8_t group, bool& modified) noexcept
+        {
+            const auto result = runtime.objectGroupProperties.RestoreOne(runtime.image, runtime.generation.load(), group, modified, &CheckTimingOwner,
+                                                                         &CheckApplicationTimingOwner);
+            // Only the explicit SDK effect may mutate or restore this domain.
+            // End observes its summary and cannot replay an entered prefix.
+            if (runtime.objectGroupProperties.Pending())
+                runtime.restored.store(false);
+            if (result != ClockResult::Ok && runtime.objectGroupProperties.Uncertain())
+                Stop(result);
+            return result;
+        }
+
+        ClockResult NativeAccess::RestoreAllObjectGroupProperties() noexcept
+        {
+            const auto result =
+                runtime.objectGroupProperties.RestoreAll(runtime.image, runtime.generation.load(), &CheckTimingOwner, &CheckApplicationTimingOwner);
+            // Only the explicit SDK effect may mutate or restore this domain.
+            // End observes its summary and cannot replay an entered prefix.
+            if (runtime.objectGroupProperties.Pending())
+                runtime.restored.store(false);
+            if (result != ClockResult::Ok && runtime.objectGroupProperties.Uncertain())
+                Stop(result);
+            return result;
+        }
+
         ClockResult NativeAccess::CheckWorldIplStreamingReady() noexcept
         {
             return runtime.worldIpl.Ready(runtime.image, runtime.generation.load(), &CheckTimingOwner, &CheckApplicationTimingOwner);
@@ -9307,7 +9425,8 @@ namespace mta::game_de
                     const bool metadataRetained = runtime.pedModelCreationBusy.load() || runtime.pedModelCreationRetained.load() ||
                                                   runtime.startupCollisionBusy.load() || runtime.startupCollisionRetained.load() ||
                                                   runtime.startupMenuBusy.load() || runtime.startupMenuRetained.load() || runtime.modelWheels.Pending() ||
-                                                  runtime.modelObjectGroups.Pending() || runtime.worldIpl.Retained();
+                                                  runtime.modelObjectGroups.Pending() || runtime.modelDummies.Pending() ||
+                                                  runtime.objectGroupProperties.Pending() || runtime.worldIpl.Retained();
                     runtime.restored.store(!metadataRetained);
                     runtime.ready.store(false);
                     runtime.timerReady.store(false);
@@ -9378,7 +9497,8 @@ namespace mta::game_de
                 const bool metadataRetained = runtime.pedModelCreationBusy.load() || runtime.pedModelCreationRetained.load() ||
                                               runtime.startupCollisionBusy.load() || runtime.startupCollisionRetained.load() ||
                                               runtime.startupMenuBusy.load() || runtime.startupMenuRetained.load() || runtime.modelWheels.Pending() ||
-                                              runtime.modelObjectGroups.Pending() || runtime.worldIpl.Retained();
+                                              runtime.modelObjectGroups.Pending() || runtime.modelDummies.Pending() ||
+                                              runtime.objectGroupProperties.Pending() || runtime.worldIpl.Retained();
                 // Clock/timing restoration has its own completed acknowledgement.
                 // A retained model must not make later callbacks rewind it again,
                 // while overall restoration/module release still remain blocked.
@@ -11479,6 +11599,11 @@ namespace mta::game_de
         // Stop has revoked SDK entry and no callback remains in flight.
         // Only no-effect CPU records may disappear; serials never reset.
         if (runtime.modelBackingReferences.RevokeUnacquired(generation) != ClockResult::Ok)
+            return false;
+        // SDK admission is revoked and no engine callback remains. Discard only
+        // no-effect private reservations; acquired dummy holds or unresolved
+        // vector writes require the explicit engine-thread reset operation.
+        if (runtime.modelDummies.RetireUnacquired(generation) != ClockResult::Ok)
             return false;
         AcquireSRWLockExclusive(&runtime.mailboxLock);
         runtime.hasPending = false;

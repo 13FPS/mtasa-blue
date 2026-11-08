@@ -12,6 +12,7 @@
 #include "NativeWorldIplFixture.h"
 #define GetModuleHandleW  PoolTestHost::Module
 #define ReadProcessMemory PoolTestHost::Read
+#include "../../Client/game_de/NativeWorldIplLoadedMemory.cpp"
 #include "../../Client/game_de/NativeWorldIplMemory.cpp"
 #include "../../Client/game_de/NativeWorldIplCalls.cpp"
 #undef ReadProcessMemory

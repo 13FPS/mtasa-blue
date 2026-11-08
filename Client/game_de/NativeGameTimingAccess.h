@@ -56,6 +56,8 @@
 #include "NativeModelClassificationAccess.h"
 #include "NativeModelWheelAccess.h"
 #include "NativeModelObjectGroupAccess.h"
+#include "NativeModelDummiesAccess.h"
+#include "NativeObjectGroupPropertiesAccess.h"
 #include "NativeWorldIplAccess.h"
 #include "NativePedPhysicalScalarsAccess.h"
 #include "NativePedRotationAccess.h"
@@ -149,6 +151,8 @@ namespace mta::game_de
                                    public NativeModelClassificationAccess,
                                    public NativeModelWheelAccess,
                                    public NativeModelObjectGroupAccess,
+                                   public NativeModelDummiesAccess,
+                                   public NativeObjectGroupPropertiesAccess,
                                    public NativeWorldIplAccess,
                                    public NativeModelBackingReferenceAccess,
                                    public NativeNamedGarageAccess,

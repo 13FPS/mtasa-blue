@@ -19,6 +19,7 @@
 #include <game/CModelPedCreationPolicy.h>
 #include <game/CModelWheelSizePolicy.h>
 #include <game/CModelObjectGroupPolicy.h>
+#include <game/CModelVehicleDummyPolicy.h>
 #include "CPedModelInfoSA.h"
 #include "CPedSA.h"
 #include "CPoolsSA.h"
@@ -1337,63 +1338,74 @@ void CModelInfoSA::SetVehicleDummyPosition(VehicleDummies::Enum eDummy, const CV
 {
     if (!IsVehicle())
         return;
-
-    // Request model load right now if not loaded yet (#9897)
     if (!IsLoaded())
         Request(BLOCKING, "SetVehicleDummyPosition");
 
-    // Store default position in map
-    auto iter = ms_ModelDefaultDummiesPosition.find(m_dwModelID);
-    if (iter == ms_ModelDefaultDummiesPosition.end())
-    {
-        ms_ModelDefaultDummiesPosition.insert({m_dwModelID, std::map<VehicleDummies::Enum, CVector>()});
-        // Increment this model references count, so we don't unload it before we have a chance to reset the positions
-        m_pInterface->usNumberOfRefs++;
-    }
-
-    auto pVehicleModel = reinterpret_cast<CVehicleModelInfoSAInterface*>(m_pInterface);
-    if (ms_ModelDefaultDummiesPosition[m_dwModelID].find(eDummy) == ms_ModelDefaultDummiesPosition[m_dwModelID].end())
-    {
-        ms_ModelDefaultDummiesPosition[m_dwModelID][eDummy] = pVehicleModel->pVisualInfo->vecDummies[(std::size_t)eDummy];
-    }
-
-    // Set dummy position
-    pVehicleModel->pVisualInfo->vecDummies[static_cast<std::size_t>(eDummy)] = vecPosition;
+    CVehicleModelInfoSAInterface* pVehicleModel = nullptr;
+    // Share the real cache-before-hold/default-before-store itinerary with DE.
+    // The backing reference is per first modified model, not per dummy edit.
+    MtaGame::CModelVehicleDummyPolicy::Mutate(
+        [&](bool& first)
+        {
+            first = ms_ModelDefaultDummiesPosition.find(m_dwModelID) == ms_ModelDefaultDummiesPosition.end();
+            if (first)
+                ms_ModelDefaultDummiesPosition.insert({m_dwModelID, std::map<VehicleDummies::Enum, CVector>()});
+            return true;
+        },
+        [&]
+        {
+            m_pInterface->usNumberOfRefs++;
+            return true;
+        },
+        [&]
+        {
+            pVehicleModel = reinterpret_cast<CVehicleModelInfoSAInterface*>(m_pInterface);
+            if (ms_ModelDefaultDummiesPosition[m_dwModelID].find(eDummy) == ms_ModelDefaultDummiesPosition[m_dwModelID].end())
+                ms_ModelDefaultDummiesPosition[m_dwModelID][eDummy] = pVehicleModel->pVisualInfo->vecDummies[static_cast<std::size_t>(eDummy)];
+            return true;
+        },
+        [&]
+        {
+            pVehicleModel->pVisualInfo->vecDummies[static_cast<std::size_t>(eDummy)] = vecPosition;
+            return true;
+        });
 }
 
 void CModelInfoSA::ResetVehicleDummies(bool bRemoveFromDummiesMap)
 {
     if (!IsVehicle())
         return;
-
     auto iter = ms_ModelDefaultDummiesPosition.find(m_dwModelID);
     if (iter == ms_ModelDefaultDummiesPosition.end())
-        return;  // Early out in case the model doesn't have any dummies modified
-
+        return;
     auto pVehicleModel = reinterpret_cast<CVehicleModelInfoSAInterface*>(m_pInterface);
-    for (const auto& dummy : ms_ModelDefaultDummiesPosition[m_dwModelID])
-    {
-        if (pVehicleModel->pVisualInfo != nullptr)
-            pVehicleModel->pVisualInfo->vecDummies[static_cast<std::size_t>(dummy.first)] = dummy.second;
-    }
-    // Decrement reference counter, since we reverted all position changes, the model can be safely unloaded
-    pVehicleModel->usNumberOfRefs--;
-
-    if (bRemoveFromDummiesMap)
-        ms_ModelDefaultDummiesPosition.erase(m_dwModelID);
+    MtaGame::CModelVehicleDummyPolicy::RestoreOne(
+        iter->second,
+        [&](VehicleDummies::Enum dummy, const CVector& original)
+        {
+            if (pVehicleModel->pVisualInfo != nullptr)
+                pVehicleModel->pVisualInfo->vecDummies[static_cast<std::size_t>(dummy)] = original;
+            return true;
+        },
+        [&]
+        {
+            pVehicleModel->usNumberOfRefs--;
+            return true;
+        },
+        bRemoveFromDummiesMap, [&] { ms_ModelDefaultDummiesPosition.erase(m_dwModelID); });
 }
 
 void CModelInfoSA::ResetAllVehicleDummies()
 {
     CGame* game = g_pCore->GetGame();
-    for (auto& info : ms_ModelDefaultDummiesPosition)
-    {
-        CModelInfo* modelInfo = game->GetModelInfo(info.first);
-        if (modelInfo)
-            modelInfo->ResetVehicleDummies(false);
-    }
-
-    ms_ModelDefaultDummiesPosition.clear();
+    MtaGame::CModelVehicleDummyPolicy::RestoreAll(ms_ModelDefaultDummiesPosition,
+                                                  [&](std::uint32_t model, const auto&)
+                                                  {
+                                                      CModelInfo* modelInfo = game->GetModelInfo(model);
+                                                      if (modelInfo)
+                                                          modelInfo->ResetVehicleDummies(false);
+                                                      return true;
+                                                  });
 }
 
 float CModelInfoSA::GetVehicleWheelSize(ResizableVehicleWheelGroup::Enum eWheelGroup)

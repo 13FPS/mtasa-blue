@@ -171,8 +171,9 @@ namespace mta::game_de::NativeWorldIplCalls
         {
             M::Snapshot snapshot;
             // This is profile/current-bank readiness only. Disable separately
-            // refuses every loaded/pending IPL before its first effect, while
-            // Enable never enters the unqualified entity-destruction branch.
+            // qualifies every selected loaded entity/UE graph before its first
+            // effect; pending states still refuse the whole bank. Enable does
+            // not enter the native entity-destruction branch.
             return M::Capture(image, owner, afterApplicationOwner, snapshot, false);
         }
         catch (...)
@@ -291,7 +292,9 @@ namespace mta::game_de::NativeWorldIplCalls
                         return finish(result);
                     const M::Row* changed = nullptr;
                     if (!M::SameIdentity(before, after) || !Shape(before, after) || !M::ReadRow(after, row->index, changed) ||
-                        changed->bytes[P::DisabledOffset] != 1 || changed->bytes[P::DisabledOffset + 1] != 0)
+                        changed->bytes[P::DisabledOffset] != 1 || changed->bytes[P::DisabledOffset + 1] != 0 ||
+                        (row->streamState == 1 &&
+                         (changed->streamState != 0 || changed->bytes[0x2d] != 0 || !NativeWorldIplLoadedMemory::Removed(image, current.loaded, row->index))))
                         return finish(ClockResult::BindingChanged);
                     ++receipt.removeAcks;
                     continue;

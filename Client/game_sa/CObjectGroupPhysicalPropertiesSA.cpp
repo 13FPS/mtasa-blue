@@ -13,6 +13,7 @@
 #include "CFxSystemBPSA.h"
 #include "CGameSA.h"
 #include "CObjectGroupPhysicalPropertiesSA.h"
+#include <game/CObjectGroupPropertiesPolicy.h>
 
 extern CGameSA* pGame;
 
@@ -53,51 +54,51 @@ bool CObjectGroupPhysicalPropertiesSA::IsValid() const
 
 void CObjectGroupPhysicalPropertiesSA::ChangeSafeguard()
 {
-    if (m_bModified)
-        return;
-
-    m_bModified = true;
-    // Make copy of original
-    if (!MapFind(ms_OriginalGroupProperties, m_ucObjectGroup))
-    {
-        auto pOriginalCopy = std::make_unique<CObjectGroupPhysicalPropertiesSAInterface>();
-        memcpy(pOriginalCopy.get(), m_pInterface, sizeof(CObjectGroupPhysicalPropertiesSAInterface));
-        ms_OriginalGroupProperties[m_ucObjectGroup] = std::move(pOriginalCopy);
-    }
+    MtaGame::CObjectGroupPropertiesPolicy::ChangeSafeguard(m_bModified,
+                                                           [&]
+                                                           {
+                                                               // The modified flag belongs to this wrapper; the first original remains
+                                                               // shared even after another wrapper restores the same native group.
+                                                               if (!MapFind(ms_OriginalGroupProperties, m_ucObjectGroup))
+                                                               {
+                                                                   auto pOriginalCopy = std::make_unique<CObjectGroupPhysicalPropertiesSAInterface>();
+                                                                   memcpy(pOriginalCopy.get(), m_pInterface, sizeof(CObjectGroupPhysicalPropertiesSAInterface));
+                                                                   ms_OriginalGroupProperties[m_ucObjectGroup] = std::move(pOriginalCopy);
+                                                               }
+                                                           });
 }
 
 void CObjectGroupPhysicalPropertiesSA::RestoreDefault()
 {
-    if (!m_bModified)
-        return;
-
-    auto ppOriginalCopy = MapFind(ms_OriginalGroupProperties, m_ucObjectGroup);
-    dassert(ppOriginalCopy);
-    if (!ppOriginalCopy)
-        return;
-
-    dassert(ppOriginalCopy->get());
-    if (!ppOriginalCopy->get())
-        return;
-
-    memcpy(m_pInterface, ppOriginalCopy->get(), sizeof(CObjectGroupPhysicalPropertiesSAInterface));
-    m_bModified = false;
+    MtaGame::CObjectGroupPropertiesPolicy::RestoreDefault(m_bModified,
+                                                          [&]
+                                                          {
+                                                              auto ppOriginalCopy = MapFind(ms_OriginalGroupProperties, m_ucObjectGroup);
+                                                              dassert(ppOriginalCopy);
+                                                              if (!ppOriginalCopy)
+                                                                  return false;
+                                                              dassert(ppOriginalCopy->get());
+                                                              if (!ppOriginalCopy->get())
+                                                                  return false;
+                                                              memcpy(m_pInterface, ppOriginalCopy->get(), sizeof(CObjectGroupPhysicalPropertiesSAInterface));
+                                                              return true;
+                                                          });
 }
 
 void CObjectGroupPhysicalPropertiesSA::RestoreDefaultValues()
 {
-    for (auto& entry : ms_OriginalGroupProperties)
-    {
-        pGame->GetObjectGroupPhysicalProperties(entry.first)->RestoreDefault();
-        entry.second.reset();
-    }
-
-    ms_OriginalGroupProperties.clear();
+    MtaGame::CObjectGroupPropertiesPolicy::RestoreAll(ms_OriginalGroupProperties,
+                                                      [](unsigned char group, auto& original)
+                                                      {
+                                                          pGame->GetObjectGroupPhysicalProperties(group)->RestoreDefault();
+                                                          original.reset();
+                                                          return true;
+                                                      });
 }
 
 void CObjectGroupPhysicalPropertiesSA::SetMass(float fMass)
 {
-    if (fabs(m_pInterface->fMass - fMass) < FLOAT_EPSILON)
+    if (MtaGame::CObjectGroupPropertiesPolicy::UnchangedFloat(m_pInterface->fMass, fMass))
         return;
 
     ChangeSafeguard();
@@ -111,7 +112,7 @@ float CObjectGroupPhysicalPropertiesSA::GetMass() const
 
 void CObjectGroupPhysicalPropertiesSA::SetTurnMass(float fTurnMass)
 {
-    if (fabs(m_pInterface->fTurnMass - fTurnMass) < FLOAT_EPSILON)
+    if (MtaGame::CObjectGroupPropertiesPolicy::UnchangedFloat(m_pInterface->fTurnMass, fTurnMass))
         return;
 
     ChangeSafeguard();
@@ -125,7 +126,7 @@ float CObjectGroupPhysicalPropertiesSA::GetTurnMass() const
 
 void CObjectGroupPhysicalPropertiesSA::SetAirResistance(float fAirResistance)
 {
-    if (fabs(m_pInterface->fAirResistance - fAirResistance) < FLOAT_EPSILON)
+    if (MtaGame::CObjectGroupPropertiesPolicy::UnchangedFloat(m_pInterface->fAirResistance, fAirResistance))
         return;
 
     ChangeSafeguard();
@@ -139,7 +140,7 @@ float CObjectGroupPhysicalPropertiesSA::GetAirResistance() const
 
 void CObjectGroupPhysicalPropertiesSA::SetElasticity(float fElasticity)
 {
-    if (fabs(m_pInterface->fElasticity - fElasticity) < FLOAT_EPSILON)
+    if (MtaGame::CObjectGroupPropertiesPolicy::UnchangedFloat(m_pInterface->fElasticity, fElasticity))
         return;
 
     ChangeSafeguard();
@@ -153,7 +154,7 @@ float CObjectGroupPhysicalPropertiesSA::GetElasticity() const
 
 void CObjectGroupPhysicalPropertiesSA::SetBuoyancy(float fBuoyancy)
 {
-    if (fabs(m_pInterface->fBuoyancy - fBuoyancy) < FLOAT_EPSILON)
+    if (MtaGame::CObjectGroupPropertiesPolicy::UnchangedFloat(m_pInterface->fBuoyancy, fBuoyancy))
         return;
 
     ChangeSafeguard();
@@ -167,7 +168,7 @@ float CObjectGroupPhysicalPropertiesSA::GetBuoyancy() const
 
 void CObjectGroupPhysicalPropertiesSA::SetUprootLimit(float fUprootLimit)
 {
-    if (fabs(m_pInterface->fUprootLimit - fUprootLimit) < FLOAT_EPSILON)
+    if (MtaGame::CObjectGroupPropertiesPolicy::UnchangedFloat(m_pInterface->fUprootLimit, fUprootLimit))
         return;
 
     ChangeSafeguard();
@@ -181,7 +182,7 @@ float CObjectGroupPhysicalPropertiesSA::GetUprootLimit() const
 
 void CObjectGroupPhysicalPropertiesSA::SetCollisionDamageMultiplier(float fColMult)
 {
-    if (fabs(m_pInterface->fColDamageMultiplier - fColMult) < FLOAT_EPSILON)
+    if (MtaGame::CObjectGroupPropertiesPolicy::UnchangedFloat(m_pInterface->fColDamageMultiplier, fColMult))
         return;
 
     ChangeSafeguard();
@@ -304,7 +305,7 @@ void CObjectGroupPhysicalPropertiesSA::RemoveFxParticleSystem()
 
 void CObjectGroupPhysicalPropertiesSA::SetSmashMultiplier(float fMult)
 {
-    if (fabs(m_pInterface->fSmashMultiplier - fMult) < FLOAT_EPSILON)
+    if (MtaGame::CObjectGroupPropertiesPolicy::UnchangedFloat(m_pInterface->fSmashMultiplier, fMult))
         return;
 
     ChangeSafeguard();
@@ -332,7 +333,7 @@ CVector CObjectGroupPhysicalPropertiesSA::GetBreakVelocity() const
 
 void CObjectGroupPhysicalPropertiesSA::SetBreakVelocityRandomness(float fRand)
 {
-    if (fabs(m_pInterface->fBreakVelocityRand - fRand) < FLOAT_EPSILON)
+    if (MtaGame::CObjectGroupPropertiesPolicy::UnchangedFloat(m_pInterface->fBreakVelocityRand, fRand))
         return;
 
     ChangeSafeguard();

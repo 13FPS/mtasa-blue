@@ -161,6 +161,7 @@
 #include "NativeWorldCoverDomain.h"
 #include "NativeWorldRemoveDomain.h"
 #include "NativeWorldAddDomain.h"
+#include "NativePoolUsageMemory.h"
 #include "NativeWorldIplCalls.h"
 #include "NativeModelArchiveReader.h"
 #include "NativeModelObjectReader.h"
@@ -441,6 +442,7 @@ namespace mta::game_de
             ClockResult ValidatePreparedGameBorrow(const NativePreparedGameBorrow::Token&) noexcept override;
             ClockResult CheckPreparedGameBorrowDrain(const NativePreparedGameBorrow::Token&) noexcept override;
             ClockResult ReleasePreparedGameBorrow(NativePreparedGameBorrow::Token&) noexcept override;
+            ClockResult ReadPoolUsage(NativePoolUsageAccess::Kind, NativePoolUsageAccess::Value&) noexcept override;
             ClockResult ReadDefaultBuildingPoolCapacity(std::uint32_t&) noexcept override;
             ClockResult RequireStartupInitializationReady() noexcept override;
             ClockResult RequireStartupPedModelCreationReady() noexcept override;
@@ -6226,6 +6228,13 @@ namespace mta::game_de
             if (result != ClockResult::Ok && (receipt.entered || receipt.unknown))
                 Stop(result);
             return result;
+        }
+
+        ClockResult NativeAccess::ReadPoolUsage(NativePoolUsageAccess::Kind kind, NativePoolUsageAccess::Value& output) noexcept
+        {
+            // Count actual native occupancy in this owner generation. The CPU
+            // wrapper registry and constructor defaults describe other things.
+            return NativePoolUsageMemory::Read(runtime.image, runtime.generation.load(), kind, &CheckTimingOwner, &CheckApplicationTimingOwner, output);
         }
 
         ClockResult NativeAccess::ReadDefaultBuildingPoolCapacity(std::uint32_t& output) noexcept

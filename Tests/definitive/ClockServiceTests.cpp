@@ -4041,6 +4041,9 @@ namespace ClockObjectGroupOwnerTest
 #include "../../Client/game_de/NativeWorldAddEntryCalls.cpp"
 #undef MTA_DE_WORLD_ADD_NATIVE_INVOKE
 #include "../../Client/game_de/NativeWorldAddDomain.cpp"
+// NativeAccess owns this virtual in every scope, so its complete read-only
+// implementation must link once even when the isolated census main is absent.
+#include "../../Client/game_de/NativePoolUsageMemory.cpp"
 #if defined(MTA_TEST_WORLD_MEMBERSHIP_OWNER)
     #include "../../Client/game_de/NativeWorldMembershipMemory.cpp"
 #endif
@@ -9389,6 +9392,9 @@ namespace
     #include "NativeWorldLodFixture.h"
     #include "NativeWorldLodOwnerTests.inl"
 #endif
+#if defined(MTA_TEST_POOL_USAGE_OWNER)
+    #include "NativePoolUsageOwnerTests.inl"
+#endif
 #if defined(MTA_TEST_WORLD_MEMBERSHIP_OWNER)
     #include "NativeWorldMembershipTests.inl"
 namespace WorldMembershipOwnerFixture
@@ -9615,6 +9621,11 @@ int main(int argc, char** argv)
                                                    : argc == 3 && std::strcmp(argv[2], "--model-object-group-owner-unknown") == 0  ? 2u
                                                                                                                                    : 3u;
     const bool     modelObjectGroupOwnerOnly = modelObjectGroupOwnerScenario < 3;
+#if defined(MTA_TEST_POOL_USAGE_OWNER)
+    const bool poolUsageOwnerOnly = argc == 3 && std::strcmp(argv[2], "--pool-usage-owner") == 0;
+#else
+    const bool poolUsageOwnerOnly = false;
+#endif
 #if defined(MTA_TEST_WORLD_MEMBERSHIP_OWNER)
     const bool worldMembershipOwnerOnly = argc == 3 && std::strcmp(argv[2], "--world-membership-owner") == 0;
 #else
@@ -10126,7 +10137,7 @@ int main(int argc, char** argv)
          collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly || worldLineOnly || worldAreaOnly ||
          worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly || cameraSphereOnly || pedWeaponClearOnly ||
          pedClothesOnly || pedRebuildOnly || modelWheelResetOwnerOnly || modelObjectGroupOwnerOnly || nativeStartupEffectsOnly || worldPoolMatrixOwnerOnly ||
-         worldCoverOwnerOnly || worldLodRebaseOwnerOnly || worldRemoveOwnerOnly || worldAddOwnerOnly || worldMembershipOwnerOnly ||
+         worldCoverOwnerOnly || worldLodRebaseOwnerOnly || worldRemoveOwnerOnly || worldAddOwnerOnly || worldMembershipOwnerOnly || poolUsageOwnerOnly ||
          playerMoveAnimWorkloadReaderOnly || playerMoveAnimSetterOwnerOnly || playerMoveAnimHookOwnerOnly || playerMoveAnimReapplyOnly || pedMoveAnimOnly ||
          playerNativePrerequisitesOnly || animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly ||
          animationManagerRefsOnly || animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly ||
@@ -10168,6 +10179,17 @@ int main(int argc, char** argv)
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }
+#if defined(MTA_TEST_POOL_USAGE_OWNER)
+    if (poolUsageOwnerOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NativePoolUsageOwnerFixture::Run(fixture);
+        std::puts("Native pool usage owner case completed");
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+#endif
 #if defined(MTA_TEST_WORLD_MEMBERSHIP_OWNER)
     if (worldMembershipOwnerOnly)
     {

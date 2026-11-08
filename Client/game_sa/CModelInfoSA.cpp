@@ -17,6 +17,7 @@
 #include "CModelInfoSA.h"
 #include <game/CModelRequestPolicy.h>
 #include <game/CModelPedCreationPolicy.h>
+#include <game/CModelWheelSizePolicy.h>
 #include "CPedModelInfoSA.h"
 #include "CPedSA.h"
 #include "CPoolsSA.h"
@@ -1400,15 +1401,8 @@ float CModelInfoSA::GetVehicleWheelSize(ResizableVehicleWheelGroup::Enum eWheelG
         return 0.0f;
 
     auto pVehicleModel = reinterpret_cast<CVehicleModelInfoSAInterface*>(GetInterface());
-    switch (eWheelGroup)
-    {
-        case ResizableVehicleWheelGroup::FRONT_AXLE:
-            return pVehicleModel->fWheelSizeFront;
-        case ResizableVehicleWheelGroup::REAR_AXLE:
-            return pVehicleModel->fWheelSizeRear;
-    }
-
-    return 0.0f;
+    return MtaGame::CModelWheelSizePolicy::Get(
+        static_cast<std::uint32_t>(eWheelGroup), [&] { return pVehicleModel->fWheelSizeFront; }, [&] { return pVehicleModel->fWheelSizeRear; });
 }
 
 void CModelInfoSA::SetVehicleWheelSize(ResizableVehicleWheelGroup::Enum eWheelGroup, float fWheelSize)
@@ -1417,24 +1411,11 @@ void CModelInfoSA::SetVehicleWheelSize(ResizableVehicleWheelGroup::Enum eWheelGr
         return;
 
     auto pVehicleModel = reinterpret_cast<CVehicleModelInfoSAInterface*>(GetInterface());
-
-    // Store default wheel sizes in map
-    if (!MapFind(ms_VehicleModelDefaultWheelSizes, m_dwModelID))
-        MapSet(ms_VehicleModelDefaultWheelSizes, m_dwModelID, std::make_pair(pVehicleModel->fWheelSizeFront, pVehicleModel->fWheelSizeRear));
-
-    switch (eWheelGroup)
-    {
-        case ResizableVehicleWheelGroup::FRONT_AXLE:
-            pVehicleModel->fWheelSizeFront = fWheelSize;
-            break;
-        case ResizableVehicleWheelGroup::REAR_AXLE:
-            pVehicleModel->fWheelSizeRear = fWheelSize;
-            break;
-        case ResizableVehicleWheelGroup::ALL_WHEELS:
-            pVehicleModel->fWheelSizeFront = fWheelSize;
-            pVehicleModel->fWheelSizeRear = fWheelSize;
-            break;
-    }
+    MtaGame::CModelWheelSizePolicy::Remember(ms_VehicleModelDefaultWheelSizes, m_dwModelID,
+                                             [&] { return std::make_pair(pVehicleModel->fWheelSizeFront, pVehicleModel->fWheelSizeRear); });
+    MtaGame::CModelWheelSizePolicy::Apply(
+        static_cast<std::uint32_t>(eWheelGroup), fWheelSize, [&](float value) { pVehicleModel->fWheelSizeFront = value; },
+        [&](float value) { pVehicleModel->fWheelSizeRear = value; });
 }
 
 void CModelInfoSA::ResetVehicleWheelSizes(std::pair<float, float>* defaultSizes)
@@ -1442,39 +1423,31 @@ void CModelInfoSA::ResetVehicleWheelSizes(std::pair<float, float>* defaultSizes)
     if (!IsVehicle())
         return;
 
-    std::pair<float, float>* sizesPair;
+    std::pair<float, float> captured;
     if (!defaultSizes)
     {
-        sizesPair = MapFind(ms_VehicleModelDefaultWheelSizes, m_dwModelID);
-        MapRemove(ms_VehicleModelDefaultWheelSizes, m_dwModelID);
+        // Keep the original erase-before-native-store order while copying the
+        // value before its map node dies. The old saved pointer dangled after
+        // MapRemove, so it could no longer supply a valid default pair.
+        if (!MtaGame::CModelWheelSizePolicy::Take(ms_VehicleModelDefaultWheelSizes, m_dwModelID, captured))
+            return;
+        defaultSizes = &captured;
     }
-    else
-    {
-        sizesPair = defaultSizes;
-    }
-
-    // Default values not found in map
-    if (!sizesPair)
-        return;
-
     auto pVehicleModel = reinterpret_cast<CVehicleModelInfoSAInterface*>(m_pInterface);
-    pVehicleModel->fWheelSizeFront = sizesPair->first;
-    pVehicleModel->fWheelSizeRear = sizesPair->second;
+    pVehicleModel->fWheelSizeFront = defaultSizes->first;
+    pVehicleModel->fWheelSizeRear = defaultSizes->second;
 }
 
 void CModelInfoSA::ResetAllVehiclesWheelSizes()
 {
     CGame* game = g_pCore->GetGame();
-    for (auto& info : ms_VehicleModelDefaultWheelSizes)
-    {
-        CModelInfo* modelInfo = game->GetModelInfo(info.first);
-        if (modelInfo)
-        {
-            modelInfo->ResetVehicleWheelSizes(&info.second);
-        }
-    }
-
-    ms_VehicleModelDefaultWheelSizes.clear();
+    MtaGame::CModelWheelSizePolicy::RestoreAll(ms_VehicleModelDefaultWheelSizes,
+                                               [&](DWORD model, std::pair<float, float>& sizes)
+                                               {
+                                                   if (CModelInfo* modelInfo = game->GetModelInfo(model))
+                                                       modelInfo->ResetVehicleWheelSizes(&sizes);
+                                                   return true;
+                                               });
 }
 
 bool CModelInfoSA::SetCustomModel(RpClump* pClump)

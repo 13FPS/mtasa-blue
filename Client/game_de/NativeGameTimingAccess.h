@@ -54,6 +54,8 @@
 #include "NativeWorldIgnoreEntityAccess.h"
 #include "NativeCameraSphereVisibleAccess.h"
 #include "NativeModelClassificationAccess.h"
+#include "NativeModelWheelAccess.h"
+#include "NativeWorldIplAccess.h"
 #include "NativePedPhysicalScalarsAccess.h"
 #include "NativePedRotationAccess.h"
 #include "NativePedOxygenAccess.h"
@@ -144,6 +146,8 @@ namespace mta::game_de
                                    public NativeWorldIgnoreEntityAccess,
                                    public NativeCameraSphereVisibleAccess,
                                    public NativeModelClassificationAccess,
+                                   public NativeModelWheelAccess,
+                                   public NativeWorldIplAccess,
                                    public NativeModelBackingReferenceAccess,
                                    public NativeNamedGarageAccess,
                                    public NativeAnimationBlockAccess,

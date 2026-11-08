@@ -153,6 +153,8 @@
 #include "NativeStreamingPriorityCalls.h"
 #include "NativeStreamingRemoveCalls.h"
 #include "NativeModelClassificationCalls.h"
+#include "NativeModelWheelDomain.h"
+#include "NativeWorldIplCalls.h"
 #include "NativeModelArchiveReader.h"
 #include "NativeModelObjectReader.h"
 #include "NativeModelAnimationReader.h"
@@ -391,6 +393,13 @@ namespace mta::game_de
             ClockResult ReadModelType(std::uint32_t, NativeModelTypeObservation&) noexcept override;
             ClockResult ReadModelTime(std::uint32_t, NativeModelTimeObservation&) noexcept override;
             ClockResult ReadModelVehicleSubtype(std::uint32_t, std::uint32_t&) noexcept override;
+            ClockResult ReadModelWheelSizes(std::uint32_t, NativeModelWheelSizes&) noexcept override;
+            ClockResult SetModelWheelSize(std::uint32_t, NativeModelWheelGroup, float) noexcept override;
+            ClockResult ResetModelWheelSizes(std::uint32_t, const NativeModelWheelSizes*) noexcept override;
+            ClockResult ResetAllModelWheelSizes() noexcept override;
+            ClockResult CheckWorldIplStreamingReady() noexcept override;
+            ClockResult DisableWorldIplStreaming() noexcept override;
+            ClockResult EnableWorldIplStreaming(MtaGame::CGameWorldPolicy::IplFilter) noexcept override;
             ClockResult ReadModelInterface(std::uint32_t, std::uintptr_t&) noexcept override;
             ClockResult ReadModelRender(std::uint32_t, std::uintptr_t&) noexcept override;
             ClockResult ReadModelPlayerPredicate(std::uint32_t, bool&) noexcept override;
@@ -715,6 +724,12 @@ namespace mta::game_de
             // counters cannot acknowledge it. No release/custom absence is
             // inferred by construction, destruction or another generation.
             NativeModelBackingReferenceController modelBackingReferences;
+            // The same native owner retains first defaults across model facades.
+            // Neither facade drop nor a new timing generation may erase them.
+            NativeModelWheelDomain modelWheels;
+            // World removal and restoration share this generation. End cannot
+            // replace the SDK's pool-restoration-before-IPL-enable itinerary.
+            NativeWorldIplCalls::Controller worldIpl;
             // Each explicit MakePedModel owns a fresh durable record before
             // malloc. Published/unknown objects outlive SDK facades; no
             // bank replacement, destructor or End may guess their release.
@@ -1005,13 +1020,14 @@ namespace mta::game_de
                    runtime.presentationRecovery.Held() || runtime.weatherOverridePeers.PresentationHeld() || runtime.startupMenuBusy.load() ||
                    runtime.startupMenuRetained.load() || runtime.startupCollisionBusy.load() || runtime.startupCollisionRetained.load() ||
                    runtime.pedModelCreationBusy.load() || runtime.pedModelCreationRetained.load() || runtime.modelBackingReferences.IsRetained() ||
-                   runtime.pedReferences.IsRetained() || WorldIgnoreRetained() || runtime.customSequences.IsRetained() ||
-                   runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained() || runtime.groupCreations.IsRetained() ||
-                   runtime.hierarchyUncompress.IsRetained() || runtime.cameraRestore.IsRetained() || runtime.cameraTargetSetter.IsRetained() ||
-                   runtime.cameraFovWrite.IsRetained() || runtime.cameraDirection.IsRetained() || runtime.cameraWidescreen.IsRetained() ||
-                   runtime.playerMoveAnimReapply.IsRetained() || runtime.playerMoveAnimGroupWrite.IsRetained() || runtime.playerMoveAnimHooks.IsRetained() ||
-                   runtime.playerMoveAnimHookPeers.Held() || runtime.playerMoveAnimHookPeers.PresentationHeld() || runtime.hierarchyCacheRemove.IsRetained() ||
-                   runtime.blockRegistration.IsRetained() || runtime.blockRemoval.IsRetained() || runtime.customSequences.HasPendingCleanup();
+                   runtime.modelWheels.Pending() || runtime.worldIpl.Retained() || runtime.pedReferences.IsRetained() || WorldIgnoreRetained() ||
+                   runtime.customSequences.IsRetained() || runtime.privateHierarchies.IsRetained() || runtime.privateAssociations.IsRetained() ||
+                   runtime.groupCreations.IsRetained() || runtime.hierarchyUncompress.IsRetained() || runtime.cameraRestore.IsRetained() ||
+                   runtime.cameraTargetSetter.IsRetained() || runtime.cameraFovWrite.IsRetained() || runtime.cameraDirection.IsRetained() ||
+                   runtime.cameraWidescreen.IsRetained() || runtime.playerMoveAnimReapply.IsRetained() || runtime.playerMoveAnimGroupWrite.IsRetained() ||
+                   runtime.playerMoveAnimHooks.IsRetained() || runtime.playerMoveAnimHookPeers.Held() || runtime.playerMoveAnimHookPeers.PresentationHeld() ||
+                   runtime.hierarchyCacheRemove.IsRetained() || runtime.blockRegistration.IsRetained() || runtime.blockRemoval.IsRetained() ||
+                   runtime.customSequences.HasPendingCleanup();
         }
 
         bool WeatherOverrideRetained() noexcept
@@ -5859,6 +5875,76 @@ namespace mta::game_de
                 output = next;
             return result;
         }
+        ClockResult NativeAccess::ReadModelWheelSizes(std::uint32_t model, NativeModelWheelSizes& output) noexcept
+        {
+            return runtime.modelWheels.Read(runtime.image, runtime.generation.load(), model, &CheckTimingOwner, &CheckApplicationTimingOwner, output);
+        }
+
+        ClockResult NativeAccess::SetModelWheelSize(std::uint32_t model, NativeModelWheelGroup group, float size) noexcept
+        {
+            const auto result =
+                runtime.modelWheels.Set(runtime.image, runtime.generation.load(), model, group, size, &CheckTimingOwner, &CheckApplicationTimingOwner);
+            if (runtime.modelWheels.Pending())
+                runtime.restored.store(false);
+            // An entered uncertain tuple stays in this domain. Stopping is a
+            // refusal to replay it, not permission to overwrite or discard it.
+            if (result != ClockResult::Ok && runtime.modelWheels.Uncertain())
+                Stop(result);
+            return result;
+        }
+
+        ClockResult NativeAccess::ResetModelWheelSizes(std::uint32_t model, const NativeModelWheelSizes* defaults) noexcept
+        {
+            const auto result =
+                runtime.modelWheels.ResetOne(runtime.image, runtime.generation.load(), model, defaults, &CheckTimingOwner, &CheckApplicationTimingOwner);
+            if (runtime.modelWheels.Pending())
+                runtime.restored.store(false);
+            if (result != ClockResult::Ok && runtime.modelWheels.Uncertain())
+                Stop(result);
+            return result;
+        }
+
+        ClockResult NativeAccess::ResetAllModelWheelSizes() noexcept
+        {
+            // The explicit MTA Reset operation owns this traversal. End only
+            // observes Pending below; it never replays a bulk reset or silently
+            // clears defaults after a rejected or uncertain native prefix.
+            const auto result = runtime.modelWheels.ResetAll(runtime.image, runtime.generation.load(), &CheckTimingOwner, &CheckApplicationTimingOwner);
+            if (runtime.modelWheels.Pending())
+                runtime.restored.store(false);
+            if (result != ClockResult::Ok && runtime.modelWheels.Uncertain())
+                Stop(result);
+            return result;
+        }
+
+        ClockResult NativeAccess::CheckWorldIplStreamingReady() noexcept
+        {
+            return runtime.worldIpl.Ready(runtime.image, runtime.generation.load(), &CheckTimingOwner, &CheckApplicationTimingOwner);
+        }
+
+        ClockResult NativeAccess::DisableWorldIplStreaming() noexcept
+        {
+            NativeWorldIplCalls::Receipt receipt;
+            const auto result = runtime.worldIpl.Disable(runtime.image, runtime.generation.load(), &CheckTimingOwner, &CheckApplicationTimingOwner, &receipt);
+            if (runtime.worldIpl.Retained())
+                runtime.restored.store(false);
+            if (result != ClockResult::Ok && (receipt.entered || receipt.unknown))
+                Stop(result);
+            return result;
+        }
+
+        ClockResult NativeAccess::EnableWorldIplStreaming(MtaGame::CGameWorldPolicy::IplFilter filter) noexcept
+        {
+            NativeWorldIplCalls::Receipt receipt;
+            const auto                   result =
+                runtime.worldIpl.Enable(runtime.image, runtime.generation.load(), &CheckTimingOwner, &CheckApplicationTimingOwner, filter, &receipt);
+            if (runtime.worldIpl.Retained())
+                runtime.restored.store(false);
+            if (result != ClockResult::Ok && (receipt.entered || receipt.unknown))
+                Stop(result);
+            return result;
+        }
+
         ClockResult NativeAccess::ReadDefaultBuildingPoolCapacity(std::uint32_t& output) noexcept
         {
             // The const SDK hook borrows this exact current owner. Neither a
@@ -9175,7 +9261,8 @@ namespace mta::game_de
                         runtime.observed = current;
                     const bool metadataRetained = runtime.pedModelCreationBusy.load() || runtime.pedModelCreationRetained.load() ||
                                                   runtime.startupCollisionBusy.load() || runtime.startupCollisionRetained.load() ||
-                                                  runtime.startupMenuBusy.load() || runtime.startupMenuRetained.load();
+                                                  runtime.startupMenuBusy.load() || runtime.startupMenuRetained.load() || runtime.modelWheels.Pending() ||
+                                                  runtime.worldIpl.Retained();
                     runtime.restored.store(!metadataRetained);
                     runtime.ready.store(false);
                     runtime.timerReady.store(false);
@@ -9245,7 +9332,8 @@ namespace mta::game_de
                 runtime.timingGeneration.store(0);
                 const bool metadataRetained = runtime.pedModelCreationBusy.load() || runtime.pedModelCreationRetained.load() ||
                                               runtime.startupCollisionBusy.load() || runtime.startupCollisionRetained.load() ||
-                                              runtime.startupMenuBusy.load() || runtime.startupMenuRetained.load();
+                                              runtime.startupMenuBusy.load() || runtime.startupMenuRetained.load() || runtime.modelWheels.Pending() ||
+                                              runtime.worldIpl.Retained();
                 // Clock/timing restoration has its own completed acknowledgement.
                 // A retained model must not make later callbacks rewind it again,
                 // while overall restoration/module release still remain blocked.
@@ -11357,6 +11445,11 @@ namespace mta::game_de
             runtime.dataRecovery.load() || runtime.timingDirty.load() || runtime.timingRecovery.load() || runtime.weatherRecovery.load() ||
             runtime.weatherGeneration.load() || runtime.weaponVectorRecovery.load() || runtime.weaponVectorGeneration.load() || WeatherOverrideRetained() ||
             NativeLifetimeRetained() || runtime.inFlight.load() || runtime.peersRetained.load() || runtime.protectionPending.load())
+            return false;
+        // Only a clean enabled/no-effect controller can retire its CPU identity.
+        // A disabled or uncertain prefix was already retained above. This is
+        // not an automatic native Enable or world/pool restoration attempt.
+        if (runtime.worldIpl.End(generation) != ClockResult::Ok)
             return false;
         const bool clean = (!runtime.hooked.load() && !runtime.timerHooked.load() && !runtime.frameHooked.load()) || ChangeHooks(false);
         if (clean)

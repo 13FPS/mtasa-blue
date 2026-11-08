@@ -62,8 +62,12 @@ project "Client Core"
 	filter {}
 
 	if _OPTIONS["with-definitive-adapter"] then
-		defines { "MTA_WITH_DEFINITIVE_ADAPTER" }
-		dependson { "Game DE" }
+		-- This define selects the actual Core startup backend, so enabling the
+		-- DE target must not route ordinary Win32 Core through the x64 adapter.
+		filter { "architecture:x86_64", "configurations:Release" }
+			defines { "MTA_WITH_DEFINITIVE_ADAPTER" }
+			dependson { "Game DE" }
+		filter {}
 	end
 
 	filter { "files:FastFailCrashHandler/WerCrashHandler.cpp" }

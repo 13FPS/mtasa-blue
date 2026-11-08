@@ -9392,6 +9392,9 @@ namespace
     #include "NativeWorldLodFixture.h"
     #include "NativeWorldLodOwnerTests.inl"
 #endif
+#if defined(MTA_TEST_NESTED_POOL_READERS_OWNER)
+    #include "NativeNestedPoolReadersOwnerTests.inl"
+#endif
 #if defined(MTA_TEST_POOL_USAGE_OWNER)
     #include "NativePoolUsageOwnerTests.inl"
 #endif
@@ -9621,6 +9624,11 @@ int main(int argc, char** argv)
                                                    : argc == 3 && std::strcmp(argv[2], "--model-object-group-owner-unknown") == 0  ? 2u
                                                                                                                                    : 3u;
     const bool     modelObjectGroupOwnerOnly = modelObjectGroupOwnerScenario < 3;
+#if defined(MTA_TEST_NESTED_POOL_READERS_OWNER)
+    const bool nestedPoolReadersOwnerOnly = argc == 3 && std::strcmp(argv[2], "--nested-pool-readers-owner") == 0;
+#else
+    const bool nestedPoolReadersOwnerOnly = false;
+#endif
 #if defined(MTA_TEST_POOL_USAGE_OWNER)
     const bool poolUsageOwnerOnly = argc == 3 && std::strcmp(argv[2], "--pool-usage-owner") == 0;
 #else
@@ -10128,33 +10136,33 @@ int main(int argc, char** argv)
     const bool waterOnly = orientationWithWater || (argc == 3 && std::strcmp(argv[2], "--ped-water") == 0);
     const bool poseOnly = argc == 3 && std::strcmp(argv[2], "--ped-pose") == 0;
     const bool poolRegistryOnly = argc == 3 && std::strcmp(argv[2], "--ped-pool-registry") == 0;
-    Check(
-        (argc == 2 || presentTransitionClockOnly || preparedGameBorrowOnly || buildingPoolDefaultOnly || startupLifecycleOnly ||
-         startupInitializationReadinessOnly || startupStreamingReceiverOnly || startupNumericGaragesOnly || startupPreparationReadinessOnly ||
-         startupMenuOnly || startupCollisionOnly || pedCreationLifecycleOnly || constructorOnly || vehiclePredicatesOnly || modelTimeGetterOnly ||
-         pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly || waterOnly || animationOnly ||
-         animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly || fireCollisionOnly || fireOnly ||
-         collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly || worldLineOnly || worldAreaOnly ||
-         worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly || cameraSphereOnly || pedWeaponClearOnly ||
-         pedClothesOnly || pedRebuildOnly || modelWheelResetOwnerOnly || modelObjectGroupOwnerOnly || nativeStartupEffectsOnly || worldPoolMatrixOwnerOnly ||
-         worldCoverOwnerOnly || worldLodRebaseOwnerOnly || worldRemoveOwnerOnly || worldAddOwnerOnly || worldMembershipOwnerOnly || poolUsageOwnerOnly ||
-         playerMoveAnimWorkloadReaderOnly || playerMoveAnimSetterOwnerOnly || playerMoveAnimHookOwnerOnly || playerMoveAnimReapplyOnly || pedMoveAnimOnly ||
-         playerNativePrerequisitesOnly || animationBlockRefsOnly || animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly ||
-         animationManagerRefsOnly || animationGatewayOnly || customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly ||
-         animationHierarchyBankOnly || customAnimationSequenceNameOnly || freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly ||
-         privateHierarchyNameOnly || privateHierarchyParentOnly || privateHierarchyEmptyOnly || freshUncompressedSequenceOnly ||
-         privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly || customAnimationCleanupOnly || standaloneSequenceOperationsOnly ||
-         animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly || animationBlockHashFactoryOnly || animationDefinitionsOnly ||
-         animationDefinitionBlockNamesOnly || animationGroupValidityOnly || animationIdValidityOnly || animationAssociationGroupReadsOnly || cameraBasicsOnly ||
-         cameraJumpCutOnly || cameraFovWriteOnly || cameraDirectionOnly || cameraRowBorrowOnly || cameraHistoryOnly || cameraTargetOnly ||
-         cameraTargetSetterOnly || cameraGetCamOnly || cameraWidescreenOnly || cameraMainTargetOnly || applicationTimingOnly || emptyBlockRemovalOnly ||
-         blockRegistrationOnly || bankPostprocessOnly || bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly ||
-         dynamicClumpOnly || groupFactoriesOnly || groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly ||
-         groupEmptyInitializationOnly || animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly ||
-         animationStaticAssociationReadsOnly || staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly ||
-         privateAssociationsOnly || associationBonesOnly || associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
-            std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
-        "durable fixture evidence is restricted to the explicit owned executable output directory");
+    Check((argc == 2 || presentTransitionClockOnly || preparedGameBorrowOnly || buildingPoolDefaultOnly || startupLifecycleOnly ||
+           startupInitializationReadinessOnly || startupStreamingReceiverOnly || startupNumericGaragesOnly || startupPreparationReadinessOnly ||
+           startupMenuOnly || startupCollisionOnly || pedCreationLifecycleOnly || constructorOnly || vehiclePredicatesOnly || modelTimeGetterOnly ||
+           pedOwnerOnly || currentWeaponOnly || garageNamedOnly || garagePoolsOnly || poolRegistryOnly || poseOnly || waterOnly || animationOnly ||
+           animationNameOnly || animationManagerOnly || animationServicesOnly || areaSpecialOnly || areaOnly || specialOnly || fireCollisionOnly || fireOnly ||
+           collisionOnly || duckingSetterOnly || gogglesOnly || visibilityOnly || constructorServicesOnly || worldGroundOnly || worldLineOnly ||
+           worldAreaOnly || worldQueriesOnly || worldJetpackOnly || pedOnScreenOnly || pedWeaponGrantOnly || worldIgnoreOnly || cameraSphereOnly ||
+           pedWeaponClearOnly || pedClothesOnly || pedRebuildOnly || modelWheelResetOwnerOnly || modelObjectGroupOwnerOnly || nativeStartupEffectsOnly ||
+           worldPoolMatrixOwnerOnly || worldCoverOwnerOnly || worldLodRebaseOwnerOnly || worldRemoveOwnerOnly || worldAddOwnerOnly ||
+           worldMembershipOwnerOnly || poolUsageOwnerOnly || nestedPoolReadersOwnerOnly || playerMoveAnimWorkloadReaderOnly || playerMoveAnimSetterOwnerOnly ||
+           playerMoveAnimHookOwnerOnly || playerMoveAnimReapplyOnly || pedMoveAnimOnly || playerNativePrerequisitesOnly || animationBlockRefsOnly ||
+           animationBlockFactoryOnly || customSequenceStorageOnly || customAnimationResourcesOnly || animationManagerRefsOnly || animationGatewayOnly ||
+           customAnimationSequenceOnly || customAnimationSequenceCopyFrameOnly || animationHierarchyBankOnly || customAnimationSequenceNameOnly ||
+           freshCompressedSequenceOnly || privateHierarchyOnly || privateHierarchyScalarsOnly || privateHierarchyNameOnly || privateHierarchyParentOnly ||
+           privateHierarchyEmptyOnly || freshUncompressedSequenceOnly || privateHierarchyPostprocessOnly || privateAnimationFactoriesOnly ||
+           customAnimationCleanupOnly || standaloneSequenceOperationsOnly || animationBankFactoriesOnly || sequenceInterfaceOnly || animationManagerCacheOnly ||
+           animationBlockHashFactoryOnly || animationDefinitionsOnly || animationDefinitionBlockNamesOnly || animationGroupValidityOnly ||
+           animationIdValidityOnly || animationAssociationGroupReadsOnly || cameraBasicsOnly || cameraJumpCutOnly || cameraFovWriteOnly ||
+           cameraDirectionOnly || cameraRowBorrowOnly || cameraHistoryOnly || cameraTargetOnly || cameraTargetSetterOnly || cameraGetCamOnly ||
+           cameraWidescreenOnly || cameraMainTargetOnly || applicationTimingOnly || emptyBlockRemovalOnly || blockRegistrationOnly || bankPostprocessOnly ||
+           bankEvictionOnly || bankDecompressionOnly || hierarchyUncompressOnly || numericAssociationOnly || dynamicClumpOnly || groupFactoriesOnly ||
+           groupSourceCreationOnly || jointTemporaryStaticOnly || groupReplacementOnly || groupCopyAnimationOnly || groupEmptyInitializationOnly ||
+           animationAssociationGroupChildProductsOnly || animationAssociationGroupOffsetOnly || animationStaticAssociationReadsOnly ||
+           staticAssociationWritesOnly || staticAssociationInitializationOnly || pedRenderOnly || privateAssociationsOnly || associationBonesOnly ||
+           associationFloatOnly || associationProgressOnly || associationNodeArrayOnly) &&
+              std::filesystem::path(argv[1]).is_absolute() && std::filesystem::equivalent(std::filesystem::path(argv[0]).parent_path(), argv[1]),
+          "durable fixture evidence is restricted to the explicit owned executable output directory");
     if (presentTransitionClockOnly)
     {
         ClockImageFixture fixture;
@@ -10179,6 +10187,17 @@ int main(int argc, char** argv)
         std::printf("Passed %u production clock service checks\n", checks.load());
         return 0;
     }
+#if defined(MTA_TEST_NESTED_POOL_READERS_OWNER)
+    if (nestedPoolReadersOwnerOnly)
+    {
+        ClockImageFixture fixture;
+        fixture.Create(argv[1]);
+        NativeNestedPoolReadersOwnerFixture::Run(fixture);
+        std::puts("Nested pool reader owner case completed");
+        std::printf("Passed %u production clock service checks\n", checks.load());
+        return 0;
+    }
+#endif
 #if defined(MTA_TEST_POOL_USAGE_OWNER)
     if (poolUsageOwnerOnly)
     {

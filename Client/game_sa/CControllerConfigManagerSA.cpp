@@ -19,10 +19,6 @@
 #define VAR_VerticalAimSensitivity     ((float*)(0xB6EC18))
 #define VAR_HorizontalMouseSensitivity 0xB6EC1C
 
-static const float VERTICAL_AIM_SENSITIVITY_MIN = 0.000312f;
-static const float VERTICAL_AIM_SENSITIVITY_DEFAULT = 0.0015f;
-static const float VERTICAL_AIM_SENSITIVITY_MAX = VERTICAL_AIM_SENSITIVITY_DEFAULT * 2 - VERTICAL_AIM_SENSITIVITY_MIN;
-
 CControllerConfigManagerSA::CControllerConfigManagerSA()
 {
     m_bSuspendSteerAndFlyWithMouse = false;
@@ -134,18 +130,6 @@ void CControllerConfigManagerSA::ApplySteerAndFlyWithMouseSettings()
         *VAR_FlyWithMouse = m_bFlyWithMouse;
         *VAR_SteerWithMouse = m_bSteerWithMouse;
     }
-}
-
-float CControllerConfigManagerSA::GetVerticalAimSensitivity()
-{
-    float fRawValue = GetVerticalAimSensitivityRawValue();
-    return UnlerpClamped(VERTICAL_AIM_SENSITIVITY_MIN, fRawValue, VERTICAL_AIM_SENSITIVITY_MAX);  // Remap to 0-1
-}
-
-void CControllerConfigManagerSA::SetVerticalAimSensitivity(float fSensitivity)
-{
-    float fRawValue = Lerp(VERTICAL_AIM_SENSITIVITY_MIN, fSensitivity, VERTICAL_AIM_SENSITIVITY_MAX);
-    SetVerticalAimSensitivityRawValue(fRawValue);
 }
 
 // Raw value used for saving so range can be changed without affecting user setting

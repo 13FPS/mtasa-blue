@@ -10,6 +10,11 @@ client networking. In particular, Core's first settings pass needs DE's
 controller configuration and game settings services to apply mouse controls,
 shadows and aspect ratio. The current binaries were built and tested locally.
 
+MTA's Settings slider now uses the same SDK conversion between normalized
+vertical aim sensitivity and the raw value saved in the player's settings.
+DE still needs a runtime provider that reads and writes that raw value.
+Classic now restores mouse steering and flight independently after suspension.
+
 Stock models now finish all four Deathmatch streaming request paths. The
 client reapplies saved render and collision replacements when a model loads.
 DE used to throw at that step even when the model had neither replacement.

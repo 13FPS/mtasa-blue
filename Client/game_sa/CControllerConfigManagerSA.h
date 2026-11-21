@@ -33,8 +33,6 @@ public:
     void  SetFlyWithMouse(bool bFlyWithMouse);
     void  SetSteerWithMouse(bool bSteerWithMouse);
     void  SuspendSteerAndFlyWithMouse(bool bSuspend);
-    float GetVerticalAimSensitivity();
-    void  SetVerticalAimSensitivity(float fSensitivity);
     float GetVerticalAimSensitivityRawValue();
     void  SetVerticalAimSensitivityRawValue(float fRawValue);
     void  SetVerticalAimSensitivitySameAsHorizontal(bool enabled) override;

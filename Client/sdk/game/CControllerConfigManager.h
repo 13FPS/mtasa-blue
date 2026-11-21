@@ -12,6 +12,7 @@
 #pragma once
 
 #include <CControllerActions.h>
+#include <algorithm>
 
 // FROM VC, unlikely that they were changed though
 #define GTA_KEY_NO_MOUSE_BUTTON 0
@@ -152,9 +153,22 @@ public:
     virtual void  SetFlyWithMouse(bool bFlyWithMouse) = 0;
     virtual void  SetSteerWithMouse(bool bSteerWithMouse) = 0;
     virtual void  SuspendSteerAndFlyWithMouse(bool bSuspend) = 0;
-    virtual float GetVerticalAimSensitivity() = 0;
-    virtual void  SetVerticalAimSensitivity(float fSensitivity) = 0;
+    virtual float GetVerticalAimSensitivity()
+    {
+        const double raw = GetVerticalAimSensitivityRawValue();
+        const double range = static_cast<double>(MaxVerticalAimSensitivity) - MinVerticalAimSensitivity;
+        return std::clamp(static_cast<float>((raw - MinVerticalAimSensitivity) / range), 0.0f, 1.0f);
+    }
+    virtual void SetVerticalAimSensitivity(float sensitivity)
+    {
+        SetVerticalAimSensitivityRawValue((MaxVerticalAimSensitivity - MinVerticalAimSensitivity) * sensitivity + MinVerticalAimSensitivity);
+    }
     virtual float GetVerticalAimSensitivityRawValue() = 0;
     virtual void  SetVerticalAimSensitivityRawValue(float fRawValue) = 0;
     virtual void  SetVerticalAimSensitivitySameAsHorizontal(bool enable) = 0;
+
+private:
+    // Raw settings preserve the sensitivity saved by MTA. Only the slider read clamps to [0, 1].
+    static constexpr float MinVerticalAimSensitivity = 0.000312f;
+    static constexpr float MaxVerticalAimSensitivity = 0.0015f * 2.0f - MinVerticalAimSensitivity;
 };

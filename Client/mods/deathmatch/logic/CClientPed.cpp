@@ -9,6 +9,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <utility>
 #include "CPedTargetClientLookup.h"
 #include <CPedPositionInterpolation.h>
 #include <game/CAEVehicleAudioEntity.h>
@@ -110,6 +111,7 @@ void CClientPed::Init(CClientManager* pManager, unsigned long ulModelID, bool bI
 
     // Store the model we're going to use
     m_ulModel = ulModelID;
+    m_clientModel = pManager->GetModelManager()->FindModelByID(ulModelID);
     m_pModelInfo = g_pGame->GetModelInfo(ulModelID);
 
     m_bIsLocalPlayer = bIsLocalPlayer;
@@ -293,7 +295,6 @@ void CClientPed::Init(CClientManager* pManager, unsigned long ulModelID, bool bI
     }
 
     g_pClientGame->InsertPedPointerToSet(this);
-    m_clientModel = pManager->GetModelManager()->FindModelByID(m_ulModel);
 }
 
 CClientPed::~CClientPed()
@@ -1085,6 +1086,11 @@ bool CClientPed::SetModel(unsigned long ulModel, bool bTemp)
     // Valid model?
     if (CClientPlayerManager::IsValidModel(ulModel))
     {
+        if (!bTemp)
+        {
+            m_ulStoredModel = 0;
+            m_storedClientModel.reset();
+        }
         // Different model from what we have now?
         if (m_ulModel != ulModel)
         {
@@ -1094,10 +1100,14 @@ bool CClientPed::SetModel(unsigned long ulModel, bool bTemp)
             }
 
             if (bTemp)
+            {
                 m_ulStoredModel = m_ulModel;
+                m_storedClientModel = m_clientModel;
+            }
 
             // Set the model we're changing to
             m_ulModel = ulModel;
+            m_clientModel = m_pManager->GetModelManager()->FindModelByID(ulModel);
             m_pModelInfo = g_pGame->GetModelInfo(ulModel);
             UpdateSpatialData();
 
@@ -1118,6 +1128,16 @@ bool CClientPed::SetModel(unsigned long ulModel, bool bTemp)
     }
 
     return false;
+}
+
+void CClientPed::RestoreTemporaryModel()
+{
+    if (!m_ulStoredModel || m_ulModel != 0)
+        return;
+    const auto model = std::exchange(m_ulStoredModel, 0UL);
+    auto       registration = std::move(m_storedClientModel);
+    if (m_pManager->GetModelManager()->FindModelByID(model) == registration)
+        SetModel(model);
 }
 
 bool CClientPed::GetCanBeKnockedOffBike()
@@ -3011,17 +3031,7 @@ void CClientPed::StreamedInPulse(bool bDoStandardPulses)
             UpdateStreamPosition(vecPosition);
         }
         // Fix for unloading ped models which are currently streamed in (DO NOT REMOVE or players will not reset to the default models!)
-        if (m_ulStoredModel > 0 && m_ulModel == 0)
-        {
-            // Make sure the scripter hasn't fixed this himself as well by changing from CJ back. (unlikely but who knows).
-            if (m_ulModel == 0)
-            {
-                // Give him back his previous model
-                SetModel(m_ulStoredModel);
-            }
-            // Reset the stored model
-            m_ulStoredModel = 0;
-        }
+        RestoreTemporaryModel();
         // Fix for unloading weapon models which are currently streamed in (DO NOT REMOVE or weapons will not reset to the default models!)
         while (!m_RestoreWeaponList.empty())
         {
@@ -3707,22 +3717,37 @@ void CClientPed::UpdateKeysync(bool bCleanup)
     }
 }
 
-void CClientPed::_CreateModel()
+bool CClientPed::AcquireRequestedModel(const char* tag)
 {
-    // Replace the loaded model info with the model we're going to load and
-    // add a reference to it.
-    m_pLoadedModelInfo = m_pModelInfo;
-    if (!m_pLoadedModelInfo)
+    auto* requested = m_pModelInfo;
+    auto  registration = m_clientModel;
+    if (!requested)
+        return false;
+    requested->ModelAddRef(BLOCKING, tag);
+    if (!requested->GetRwObject() || m_pModelInfo != requested || m_clientModel != registration)
     {
-        NotifyUnableToCreate();
-        return;
+        requested->RemoveRef();
+        return false;
     }
+    m_pLoadedModelInfo = requested;
+    m_loadedClientModel = std::move(registration);
+    return true;
+}
 
-    m_pLoadedModelInfo->ModelAddRef(BLOCKING, "CClientPed::_CreateModel");
-    if (!m_pLoadedModelInfo->GetRwObject())
+void CClientPed::ReleaseLoadedModel()
+{
+    if (m_pLoadedModelInfo)
     {
         m_pLoadedModelInfo->RemoveRef();
         m_pLoadedModelInfo = nullptr;
+    }
+    m_loadedClientModel.reset();
+}
+
+void CClientPed::_CreateModel()
+{
+    if (!AcquireRequestedModel("CClientPed::_CreateModel"))
+    {
         NotifyUnableToCreate();
         return;
     }
@@ -3838,8 +3863,7 @@ void CClientPed::_CreateModel()
     else
     {
         // Remove the reference again
-        m_pLoadedModelInfo->RemoveRef();
-        m_pLoadedModelInfo = NULL;
+        ReleaseLoadedModel();
 
         // Tell the streamed we were unable to create
         NotifyUnableToCreate();
@@ -3860,18 +3884,8 @@ void CClientPed::_CreateLocalModel()
         m_pPlayerPed->SetStoredPointer(this);
 
         // Add a reference to the model we're using
-        m_pLoadedModelInfo = m_pModelInfo;
-        if (!m_pLoadedModelInfo)
+        if (!AcquireRequestedModel("CClientPed::_CreateLocalModel"))
         {
-            NotifyUnableToCreate();
-            return;
-        }
-
-        m_pLoadedModelInfo->ModelAddRef(BLOCKING, "CClientPed::_CreateLocalModel");
-        if (!m_pLoadedModelInfo->GetRwObject())
-        {
-            m_pLoadedModelInfo->RemoveRef();
-            m_pLoadedModelInfo = nullptr;
             NotifyUnableToCreate();
             return;
         }
@@ -3967,8 +3981,7 @@ void CClientPed::_DestroyModel()
     m_pTaskManager = NULL;
 
     // Remove the reference to its model
-    m_pLoadedModelInfo->RemoveRef();
-    m_pLoadedModelInfo = NULL;
+    ReleaseLoadedModel();
 
     // Any pending rebuild will not be required now
     m_bPendingRebuildPlayer = false;
@@ -4020,11 +4033,7 @@ void CClientPed::_DestroyLocalModel()
     // Always release regardless of whether the default model was restored;
     // the ped is being abandoned by MTA here, and GTA's native ped ref still protects
     // the model from streaming eviction if SetModelIndex(0) was not possible.
-    if (m_pLoadedModelInfo)
-    {
-        m_pLoadedModelInfo->RemoveRef();
-        m_pLoadedModelInfo = nullptr;
-    }
+    ReleaseLoadedModel();
 
     // NULL our pointers, we don't destroy the local player
     m_pPlayerPed = NULL;
@@ -4037,29 +4046,15 @@ void CClientPed::_ChangeModel()
     if (m_pPlayerPed->GetModelIndex() != m_ulModel)
     {
         CModelInfo* pLoadedModel = nullptr;
+        // The current native ped keeps using its old model until SetModelIndex below.
+        std::shared_ptr<CClientModel> previousRegistration;
         if (m_bIsLocalPlayer)
         {
             // Remember the model we had loaded and store the new model we're going to load
             pLoadedModel = m_pLoadedModelInfo;
-            m_pLoadedModelInfo = m_pModelInfo;
-            if (!m_pLoadedModelInfo)
-            {
-                m_pLoadedModelInfo = pLoadedModel;
-                if (m_clientModel && m_clientModel->GetModelID() != m_ulModel)
-                    m_clientModel = nullptr;
+            previousRegistration = m_loadedClientModel;
+            if (!AcquireRequestedModel("CClientPed::_ChangeModel"))
                 return;
-            }
-
-            // Add reference to the model
-            m_pLoadedModelInfo->ModelAddRef(BLOCKING, "CClientPed::_ChangeModel");
-            if (!m_pLoadedModelInfo->GetRwObject())
-            {
-                m_pLoadedModelInfo->RemoveRef();
-                m_pLoadedModelInfo = pLoadedModel;
-                if (m_clientModel && m_clientModel->GetModelID() != m_ulModel)
-                    m_clientModel = nullptr;
-                return;
-            }
         }
 
         g_pMultiplayer->SetAutomaticVehicleStartupOnPedEnter(false);
@@ -4125,6 +4120,7 @@ void CClientPed::_ChangeModel()
             if (pLoadedModel)
                 pLoadedModel->RemoveRef();
             pLoadedModel = NULL;
+            previousRegistration.reset();
 
             // Warp into it again
             if (pVehicle)
@@ -4176,8 +4172,6 @@ void CClientPed::_ChangeModel()
 
         g_pMultiplayer->SetAutomaticVehicleStartupOnPedEnter(true);
     }
-    if (m_clientModel && m_clientModel->GetModelID() != m_ulModel)
-        m_clientModel = nullptr;
 }
 
 void CClientPed::ReCreateModel()
@@ -4218,6 +4212,8 @@ void CClientPed::ReCreateGameEntity()
 
 void CClientPed::ModelRequestCallback(CModelInfo* pModelInfo)
 {
+    if (pModelInfo != m_pModelInfo)
+        return;
     // The model loading may take a while and there's a chance of ped being moved to other dimension.
     if (!IsVisibleInAllDimensions() && GetDimension() != m_pStreamer->GetDimension())
     {

@@ -597,6 +597,9 @@ protected:
     void ReCreateGameEntity();
 
     void _CreateModel();
+    bool AcquireRequestedModel(const char* tag);
+    void ReleaseLoadedModel();
+    void RestoreTemporaryModel();
     void _CreateLocalModel();
     void _DestroyModel();
     void _DestroyLocalModel();
@@ -789,7 +792,8 @@ public:
     } m_interp;
 
     // Hacks for player model replacement and weapon model replacement respectively
-    unsigned long                 m_ulStoredModel;
+    unsigned long                 m_ulStoredModel = 0;
+    std::shared_ptr<CClientModel> m_storedClientModel;
     std::list<SRestoreWeaponItem> m_RestoreWeaponList;
 
     CVector m_vecPrevTargetPosition;
@@ -825,6 +829,7 @@ public:
     CClientPed*   m_pGettingJackedBy;          // The ped that is jacking us
 
     std::shared_ptr<CClientModel> m_clientModel;
+    std::shared_ptr<CClientModel> m_loadedClientModel;
 
     bool m_hasSyncedAnim{};
     bool m_animationOverridedByClient{};

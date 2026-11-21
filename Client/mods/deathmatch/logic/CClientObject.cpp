@@ -234,6 +234,9 @@ void CClientObject::SetOrientation(const CVector& vecPosition, const CVector& ve
 
 void CClientObject::ModelRequestCallback(CModelInfo* pModelInfo)
 {
+    if (pModelInfo != m_pModelInfo)
+        return;
+
     // The model loading may take a while and there's a chance of object being moved to other dimension.
     if (!IsVisibleInAllDimensions() && GetDimension() != m_pStreamer->GetDimension())
     {
@@ -277,13 +280,13 @@ void CClientObject::SetModel(unsigned short usModel)
     // Valid model ID?
     if (CClientObjectManager::IsValidModel(usModel))
     {
+        auto model = usModel == m_usModel && m_clientModel ? m_clientModel : m_pManager->GetModelManager()->FindModelByID(usModel);
         // Destroy current model
         Destroy();
 
         // Set the new model ID and recreate the model
         m_usModel = usModel;
-        if (m_clientModel && m_clientModel->GetModelID() != m_usModel)
-            m_clientModel = nullptr;
+        m_clientModel = std::move(model);
         m_pModelInfo = g_pGame->GetModelInfo(usModel);
         UpdateSpatialData();
 

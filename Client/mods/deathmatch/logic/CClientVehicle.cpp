@@ -1012,6 +1012,7 @@ void CClientVehicle::SetModelBlocking(unsigned short usModel, unsigned char ucVa
     // Different vehicle ID than we have now?
     if (m_usModel != usModel)
     {
+        auto model = m_pManager->GetModelManager()->FindModelByID(usModel);
         // Destroy the old vehicle if we have one
         if (m_pVehicle)
             Destroy();
@@ -1043,8 +1044,7 @@ void CClientVehicle::SetModelBlocking(unsigned short usModel, unsigned char ucVa
         // Set the new vehicle id and type
         eClientVehicleType eOldVehicleType = m_eVehicleType;
         m_usModel = usModel;
-        if (m_clientModel && m_clientModel->GetModelID() != m_usModel)
-            m_clientModel = nullptr;
+        m_clientModel = std::move(model);
         m_eVehicleType = CClientVehicleManager::GetVehicleType(usModel);
         m_bHasDamageModel = CClientVehicleManager::HasDamageModel(m_eVehicleType);
 
@@ -3180,6 +3180,9 @@ void CClientVehicle::ReCreate()
 
 void CClientVehicle::ModelRequestCallback(CModelInfo* pModelInfo)
 {
+    if (pModelInfo != m_pModelInfo)
+        return;
+
     // The model loading may take a while and there's a chance of vehicle being moved to other dimension.
     if (!IsVisibleInAllDimensions() && GetDimension() != m_pStreamer->GetDimension())
     {

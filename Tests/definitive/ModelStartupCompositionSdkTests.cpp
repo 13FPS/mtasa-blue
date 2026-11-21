@@ -658,14 +658,17 @@ namespace
         CModelInfo& sdk = s.model;
         const auto  reads = s.owner.reads;
         Check(Refuses([&] { static_cast<void>(sdk.SetCustomModel(reinterpret_cast<RpClump*>(&s))); }), "a custom render replacement is refused");
-        Check(Refuses([&] { sdk.RestoreOriginalModel(); }), "custom render restore stays final and refused");
+        s.streamingOwner.loaded = false;
+        sdk.RestoreOriginalModel();
+        Check(s.game.streamingReads == 1, "restoring an unloaded composed model checks its streaming service once");
         Check(Refuses([&] { sdk.SetColModel(reinterpret_cast<CColModel*>(&s)); }), "a custom collision replacement is refused");
-        Check(Refuses([&] { sdk.RestoreColModel(); }), "collision restore stays final and refused");
+        sdk.RestoreColModel();
+        Check(s.game.streamingReads == 1, "empty collision restore does not request a streaming operation");
         sdk.MakeCustomModel();
         sdk.SetColModel(nullptr);
         Check(!sdk.SetCustomModel(nullptr), "stock model reapplication finishes and an absent replacement clump returns false");
-        Check(s.owner.reads == reads && !s.owner.effects && !s.owner.acquires && !s.owner.releases && !sdk.GetRefCount(),
-              "replacement refusal cannot invalidate the single unmodified family's native-removal proof");
+        Check(s.owner.reads == reads + 1 && !s.owner.effects && !s.owner.acquires && !s.owner.releases && !sdk.GetRefCount(),
+              "stock restores and refused replacements preserve the model's reference family");
     }
 }
 int main()

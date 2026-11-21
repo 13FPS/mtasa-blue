@@ -176,7 +176,15 @@ namespace
             ++queries;
             output = {};
             output.streamedIn = loaded;
-            return ClockResult::Ok;
+            return queryStatus;
+        }
+        ClockResult RemoveStreamingModel(std::uint32_t modelID) noexcept override
+        {
+            ++removals;
+            removedID = modelID;
+            if (removeStatus == ClockResult::Ok)
+                loaded = false;
+            return removeStatus;
         }
         ClockResult RequestStreamingModel(std::uint32_t, std::uint32_t flags) noexcept override
         {
@@ -184,8 +192,10 @@ namespace
             Check(flags == 0x06, "pending test preserves the actual nonblocking request flags");
             return ClockResult::Ok;
         }
-        unsigned queries = 0, requests = 0;
-        bool     loaded = true;
+        unsigned      queries = 0, requests = 0, removals = 0;
+        std::uint32_t removedID = 0;
+        bool          loaded = true;
+        ClockResult   queryStatus = ClockResult::Ok, removeStatus = ClockResult::Ok;
     };
     class Streaming final : public fixture::StreamingFixtureBase
     {
@@ -271,13 +281,43 @@ namespace
         sdk.MakeCustomModel();
         Check(!sdk.SetCustomModel(nullptr), "an absent replacement clump returns the classic false result");
         Refuses([&] { static_cast<void>(sdk.SetCustomModel(reinterpret_cast<RpClump*>(&s))); });
-        Refuses([&] { sdk.RestoreOriginalModel(); });
         sdk.SetColModel(nullptr);
         Refuses([&] { sdk.SetColModel(reinterpret_cast<CColModel*>(&s)); });
-        Refuses([&] { sdk.RestoreColModel(); });
+        sdk.RestoreColModel();
+        sdk.RestoreColModel();
         sdk.MakeCustomModel();
-        Check(sdk.GetRefCount() == 0 && s.owner.reads == reads && s.owner.acquires == 0 && s.owner.releases == 0 && s.owner.renews == 0,
-              "reapplying a stock model after refused replacements leaves its reference family untouched");
+        Check(sdk.GetRefCount() == 0 && s.owner.reads == reads && s.owner.acquires == 0 && s.owner.releases == 0 && s.owner.renews == 0 &&
+                  s.owner.classificationReads == 0 && s.game.streamingReads == 0,
+              "stock collision restoration and reapplication leave the model, streaming and reference owners untouched");
+    }
+    void StockRestoreChecks()
+    {
+        Scenario    s(404);
+        CModelInfo& sdk = s.model;
+        s.streamingOwner.loaded = false;
+        sdk.RestoreOriginalModel();
+        Check(s.streamingOwner.queries == 1 && !s.streamingOwner.removals && !s.owner.classificationReads,
+              "restoring a never-loaded stock model checks residency without removing it");
+        s.streamingOwner.loaded = true;
+        s.streamingOwner.queryStatus = ClockResult::WrongThread;
+        Refuses([&] { sdk.RestoreOriginalModel(); });
+        Check(!s.streamingOwner.removals, "refused readiness ends the restore before removal");
+        s.streamingOwner.queryStatus = ClockResult::Ok;
+        s.streamingOwner.removeStatus = ClockResult::BindingChanged;
+        Refuses([&] { sdk.RestoreOriginalModel(); });
+        Check(s.streamingOwner.removals == 1 && s.streamingOwner.removedID == 404 && s.streamingOwner.loaded,
+              "loaded restore propagates the direct streaming removal refusal for the selected model");
+        s.streamingOwner.removeStatus = ClockResult::Ok;
+        sdk.RestoreOriginalModel();
+        Check(s.streamingOwner.removals == 2 && s.streamingOwner.removedID == 404 && !s.streamingOwner.loaded,
+              "a new restore of a resident model dispatches one direct removal");
+        sdk.RestoreOriginalModel();
+        Check(s.streamingOwner.queries == 5 && s.streamingOwner.removals == 2 && !sdk.GetRefCount() && !s.owner.unloads && !s.owner.releases,
+              "repeat restore rereads residency and never substitutes reference release or unused-model removal");
+        s.game.streaming = nullptr;
+        Refuses([&] { sdk.RestoreOriginalModel(); });
+        sdk.RestoreColModel();
+        Check(s.streamingOwner.queries == 5 && s.streamingOwner.removals == 2, "empty collision restore needs no streaming receiver");
     }
     void CycleChecks()
     {
@@ -461,8 +501,10 @@ namespace
     }
 }
 int main()
+try
 {
     ConstructorAndCustomizationChecks();
+    StockRestoreChecks();
     CycleChecks();
     PendingAndBoundedEdges();
     FailureChecks();
@@ -472,4 +514,9 @@ int main()
     std::puts("Actual MTA model unmodified reference SDK fixture completed");
     std::printf("Passed %u actual MTA model unmodified reference SDK checks (%zu-bit; unmodified cycles)\n", checks, sizeof(void*) * 8);
     return EXIT_SUCCESS;
+}
+catch (const std::exception& error)
+{
+    std::fprintf(stderr, "Unmodified model SDK fixture refused: %s\n", error.what());
+    return EXIT_FAILURE;
 }

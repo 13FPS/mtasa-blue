@@ -67,9 +67,9 @@ namespace mta::game_de
         // DoIsLoaded cannot admit replay of an unacknowledged native effect.
         virtual void IncrementNativeModelInterfaceReference() = 0;
         virtual void RemoveNativeModelInterfaceReference() = 0;
+        CStreaming&  RequireStreaming();
 
     private:
-        CStreaming&   RequireStreaming();
         CGame&        game;
         std::uint32_t references = 0;
         std::uint32_t pendingInterfaceReference = 0;

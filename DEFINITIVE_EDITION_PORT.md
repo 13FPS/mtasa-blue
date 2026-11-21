@@ -6,7 +6,26 @@
 client and DE backend all built in Release/x64. MTA's menu, Settings, console,
 key bindings, walking and sprinting have run inside DE. Remote gameplay still
 requires the complete `CGame` and multiplayer factories and compatible x64
-client networking. The current binaries were built and tested locally.
+client networking. In particular, Core's first settings pass needs DE's
+controller configuration and game settings services to apply mouse controls,
+shadows and aspect ratio. The current binaries were built and tested locally.
+
+Stock models now finish all four Deathmatch streaming request paths. The
+client reapplies saved render and collision replacements when a model loads.
+DE used to throw at that step even when the model had neither replacement.
+Restoring a stock render model now evicts it through DE streaming if it is
+loaded. Repeated restoration of its original collision leaves it in place.
+The vehicle-upgrade path now checks whether the requested upgrade actually
+loaded before changing the vehicle's slot or wheel scale.
+
+Objects, vehicles and pedestrians keep their custom model registrations while
+the game uses them. If a script changes the selected model during streaming,
+the old completion can no longer create an entity with the new model. A local
+ped keeps its current skin alive when a replacement fails to load.
+Queued requests hold the registration until they release the game reference.
+A stream-out cancels a pending completion, and a new request later in the same
+frame can still finish. The registration table uses its own allocated size for
+lookups and cleanup after the game stops reporting its streaming limits.
 
 During startup, DE can reuse the same service address across game sessions.
 Six MTA game lookups now recheck the session before returning a service to

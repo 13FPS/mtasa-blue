@@ -18,6 +18,10 @@ multiplayer factories still have missing engine methods. The startup gates stay
 closed until their required services exist; a successful build or a working menu
 does not bypass those gates.
 
+Restoring a stock DE model checks its current residency and asks the streaming
+service to remove it if loaded, as classic MTA does. Restoring stock collision
+data leaves the original collision in place.
+
 An SDK-compatible x64 client `netc.dll` is also required. The x64 server's
 `net.dll` cannot supply the client interface. Classic GTA SA keeps its separate
 x86 game and client modules. **EXPERIMENTAL** remains until the DE port is ready

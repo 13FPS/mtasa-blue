@@ -4,6 +4,7 @@
  * PURPOSE: Apply real reference release only from a positively owned empty domain
  *****************************************************************************/
 #include "CModelInfoUnmodifiedDE.h"
+#include <game/CStreaming.h>
 #include <stdexcept>
 #include <string>
 
@@ -48,7 +49,9 @@ namespace mta::game_de
     }
     void CModelInfoUnmodifiedDE::RestoreOriginalModel()
     {
-        ReplacementUnsupported("RestoreOriginalModel");
+        // Classic evicts a resident model even when its saved custom clump is empty.
+        if (IsLoaded())
+            RequireStreaming().RemoveModel(NativeModelIndex());
     }
     void CModelInfoUnmodifiedDE::SetColModel(CColModel* collision)
     {
@@ -58,7 +61,7 @@ namespace mta::game_de
     }
     void CModelInfoUnmodifiedDE::RestoreColModel()
     {
-        ReplacementUnsupported("RestoreColModel");
+        // This family cannot install a custom collision model. The stock collision is already in use.
     }
     void CModelInfoUnmodifiedDE::MakeCustomModel()
     {

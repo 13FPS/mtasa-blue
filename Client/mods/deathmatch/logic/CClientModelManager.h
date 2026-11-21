@@ -28,6 +28,8 @@ class CClientModelManager
 public:
     CClientModelManager();
     ~CClientModelManager(void);
+    CClientModelManager(const CClientModelManager&) = delete;
+    CClientModelManager& operator=(const CClientModelManager&) = delete;
 
     void RemoveAll(void);
 
@@ -45,6 +47,6 @@ public:
     void DeallocateModelsAllocatedByResource(CResource* pResource);
 
 private:
-    std::unique_ptr<std::shared_ptr<CClientModel>[]> m_Models;
-    unsigned int                                     m_modelCount = 0;
+    std::vector<std::shared_ptr<CClientModel>> m_Models;
+    unsigned int                               m_modelCount = 0;
 };

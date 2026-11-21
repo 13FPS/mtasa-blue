@@ -35,7 +35,7 @@ public:
 
     bool               AddUpgrade(unsigned short usUpgrade, bool bAddedLocally);
     void               AddAllUpgrades();
-    void               ForceAddUpgrade(unsigned short usUpgrade);
+    bool               ForceAddUpgrade(unsigned short usUpgrade);
     bool               HasUpgrade(unsigned short usUpgrade);
     bool               RemoveUpgrade(unsigned short usUpgrade);
     unsigned short     GetSlotState(unsigned char ucSlot);

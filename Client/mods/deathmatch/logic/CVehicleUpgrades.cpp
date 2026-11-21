@@ -66,8 +66,9 @@ bool CVehicleUpgrades::IsUpgradeCompatible(unsigned short usUpgrade)
     unsigned short usModel = m_pVehicle->GetModel();
     auto*          modelInfo = g_pGame->GetModelInfo(usModel);
 
-    if (modelInfo && modelInfo->GetParentID() != 0)
-        usModel = static_cast<unsigned short>(modelInfo->GetParentID());
+    const auto parentID = modelInfo ? modelInfo->GetParentID() : 0u;
+    if (parentID)
+        usModel = static_cast<unsigned short>(parentID);
 
     // Wheels should be compatible with any vehicle which have wheels, except
     // bike/bmx (they're buggy). Vortex is technically a car, but it has no
@@ -84,6 +85,8 @@ bool CVehicleUpgrades::IsUpgradeCompatible(unsigned short usUpgrade)
     if (us == VEHICLEUPGRADE_NITRO_5X || us == VEHICLEUPGRADE_NITRO_2X || us == VEHICLEUPGRADE_NITRO_10X || us == VEHICLEUPGRADE_HYDRAULICS)
         return true;
 
+    // MTA reports these spoilers as compatible on both client and server.
+    // Only a live application can require the particular vehicle's attachment frame.
     if (us == 1000 || us == 1001 || us == 1002 || us == 1003 || us == 1014 || /* spoiler */
         us == 1015 || us == 1016 || us == 1023 || us == 1049 || us == 1050 || us == 1058 || us == 1060 || us == 1138 || us == 1139 || us == 1146 ||
         us == 1147 || us == 1158 || us == 1162 || us == 1163 || us == 1164)
@@ -376,6 +379,8 @@ bool CVehicleUpgrades::IsUpgradeCompatible(unsigned short usUpgrade)
         // Get our model supported upgrades
         auto* info = g_pGame->GetModelInfo(usModel);
         modelInfo = info ? info : m_pVehicle->GetModelInfo();
+        if (!modelInfo)
+            return bReturn;
         SVehicleSupportedUpgrades supportedUpgrades = modelInfo->GetVehicleSupportedUpgrades();
 
         // Initialisation happens when we load the clump which is done when we require a specific model rather than in bulk
@@ -561,26 +566,18 @@ bool CVehicleUpgrades::AddUpgrade(unsigned short usUpgrade, bool bAddedLocally)
         // If its a compatible upgrade
         if (IsUpgradeCompatible(usUpgrade))
         {
-            // If upgrade is nitro, and the same one was added locally less than a 2 seconds ago, don't add
-            if (usUpgrade == VEHICLEUPGRADE_NITRO_5X || usUpgrade == VEHICLEUPGRADE_NITRO_2X || usUpgrade == VEHICLEUPGRADE_NITRO_10X)
+            const bool isNitro = usUpgrade == VEHICLEUPGRADE_NITRO_5X || usUpgrade == VEHICLEUPGRADE_NITRO_2X || usUpgrade == VEHICLEUPGRADE_NITRO_10X;
+            // The server can echo a locally applied nitro before the timer expires.
+            if (isNitro && !bAddedLocally && HasUpgrade(usUpgrade) && usUpgrade == m_usLastLocalAddNitroType && m_lastLocalAddNitroTimer.Get() < 2000)
+                return true;
+
+            if (!ForceAddUpgrade(usUpgrade))
+                return false;
+            if (isNitro && bAddedLocally)
             {
-                if (bAddedLocally)
-                {
-                    m_usLastLocalAddNitroType = usUpgrade;
-                    m_lastLocalAddNitroTimer.Reset();
-                }
-                else
-                {
-                    if (HasUpgrade(usUpgrade) && usUpgrade == m_usLastLocalAddNitroType)
-                    {
-                        if (m_lastLocalAddNitroTimer.Get() < 2000)
-                            return true;
-                    }
-                }
+                m_usLastLocalAddNitroType = usUpgrade;
+                m_lastLocalAddNitroTimer.Reset();
             }
-
-            ForceAddUpgrade(usUpgrade);
-
             return true;
         }
     }
@@ -602,55 +599,49 @@ void CVehicleUpgrades::AddAllUpgrades()
     }
 }
 
-void CVehicleUpgrades::ForceAddUpgrade(unsigned short usUpgrade)
+bool CVehicleUpgrades::ForceAddUpgrade(unsigned short usUpgrade)
 {
     unsigned char ucSlot;
-    if (GetSlotFromUpgrade(usUpgrade, ucSlot))
+    if (!GetSlotFromUpgrade(usUpgrade, ucSlot))
+        return false;
+
+    CVehicle* pVehicle = m_pVehicle->GetGameVehicle();
+    if (pVehicle)
     {
-        CVehicle* pVehicle = m_pVehicle->GetGameVehicle();
-        if (pVehicle)
+        // A live native vehicle needs the actual spoiler frame. A missing
+        // frame makes GTA attach the upgrade to an unrelated component.
+        if (ucSlot == 2)
         {
-            // Spoiler upgrades (slot 2) must not be applied if the vehicle model
-            // doesn't have the "ug_spoiler" frame. Otherwise, SA's AddUpgrade will
-            // call GetFrameFromId and get NULL, triggering the crash-fix fallback
-            // that attaches the spoiler to the wrong frame.
-            if (ucSlot == 2)
-            {
-                CModelInfo* pVehicleModelInfo = g_pGame->GetModelInfo(m_pVehicle->GetModel());
-                if (!pVehicleModelInfo)
-                    return;
+            CModelInfo* model = g_pGame->GetModelInfo(m_pVehicle->GetModel());
+            if (!model)
+                model = m_pVehicle->GetModelInfo();
+            if (!model)
+                return false;
 
-                if (pVehicleModelInfo->GetParentID() != 0)
-                    pVehicleModelInfo = g_pGame->GetModelInfo(pVehicleModelInfo->GetParentID());
-
-                if (!pVehicleModelInfo || !pVehicleModelInfo->GetVehicleSupportedUpgrades().m_bSpoiler)
-                {
-                    // Vehicle doesn't support this spoiler upgrade - skip it
-                    return;
-                }
-            }
-
-            // Grab the upgrade model
-            CModelInfo* pModelInfo = g_pGame->GetModelInfo(usUpgrade);
-            if (pModelInfo)
-            {
-                if (!g_pGame->IsASyncLoadingEnabled() || !pModelInfo->IsLoaded())
-                {
-                    // Request and load now
-                    pModelInfo->Request(BLOCKING, "CVehicleUpgrades::ForceAddUpgrade");
-                }
-                // Add the upgrade
-                pVehicle->AddVehicleUpgrade(usUpgrade);
-            }
+            const auto parentID = model->GetParentID();
+            if (parentID)
+                model = g_pGame->GetModelInfo(parentID);
+            if (!model)
+                return false;
+            const auto support = model->GetVehicleSupportedUpgrades();
+            if (!support.m_bInitialised || !support.m_bSpoiler)
+                return false;
         }
 
-        // Add it to the slot
-        m_SlotStates[ucSlot] = usUpgrade;
-
-        // Reset wheel scale if it is a wheel upgrade
-        if (ucSlot == 12)
-            m_pVehicle->ResetWheelScale();
+        CModelInfo* pModelInfo = g_pGame->GetModelInfo(usUpgrade);
+        if (!pModelInfo)
+            return false;
+        if (!g_pGame->IsASyncLoadingEnabled() || !pModelInfo->IsLoaded())
+            pModelInfo->Request(BLOCKING, "CVehicleUpgrades::ForceAddUpgrade");
+        pVehicle->AddVehicleUpgrade(usUpgrade);
     }
+
+    // Streamed-out vehicles retain the request for ReAddAll. For a live
+    // vehicle, publish the slot only after dispatching the upgrade.
+    m_SlotStates[ucSlot] = usUpgrade;
+    if (ucSlot == 12)
+        m_pVehicle->ResetWheelScale();
+    return true;
 }
 
 // Not really a restream.
@@ -667,43 +658,23 @@ void CVehicleUpgrades::RestreamVehicleUpgrades(unsigned short usUpgrade)
 
 bool CVehicleUpgrades::HasUpgrade(unsigned short usUpgrade)
 {
-    unsigned char ucSlot = 0;
-    for (; ucSlot < VEHICLE_UPGRADE_SLOTS; ucSlot++)
-    {
-        if (m_SlotStates[ucSlot] == usUpgrade)
-            return true;
-    }
-
-    return false;
+    unsigned char ucSlot;
+    return GetSlotFromUpgrade(usUpgrade, ucSlot) && m_SlotStates[ucSlot] == usUpgrade;
 }
 
 bool CVehicleUpgrades::RemoveUpgrade(unsigned short usUpgrade)
 {
-    if (HasUpgrade(usUpgrade))
-    {
-        if (m_pVehicle)
-        {
-            CVehicle* pVehicle = m_pVehicle->GetGameVehicle();
-            if (pVehicle)
-            {
-                pVehicle->RemoveVehicleUpgrade(usUpgrade);
-            }
+    unsigned char ucSlot;
+    if (!m_pVehicle || !GetSlotFromUpgrade(usUpgrade, ucSlot) || m_SlotStates[ucSlot] != usUpgrade)
+        return false;
 
-            unsigned char ucSlot;
-            if (GetSlotFromUpgrade(usUpgrade, ucSlot))
-            {
-                m_SlotStates[ucSlot] = 0;
-            }
+    if (auto* vehicle = m_pVehicle->GetGameVehicle())
+        vehicle->RemoveVehicleUpgrade(usUpgrade);
 
-            // Reset wheel scale if it is a wheel upgrade
-            if (ucSlot == 12)
-                m_pVehicle->ResetWheelScale();
-
-            return true;
-        }
-    }
-
-    return false;
+    m_SlotStates[ucSlot] = 0;
+    if (ucSlot == 12)
+        m_pVehicle->ResetWheelScale();
+    return true;
 }
 
 unsigned short CVehicleUpgrades::GetSlotState(unsigned char ucSlot)

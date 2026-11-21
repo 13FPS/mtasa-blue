@@ -3183,15 +3183,7 @@ bool CStaticFunctionDefinitions::AddVehicleUpgrade(CClientEntity& Entity, unsign
         CClientVehicle& Vehicle = static_cast<CClientVehicle&>(Entity);
 
         CVehicleUpgrades* pUpgrades = Vehicle.GetUpgrades();
-        if (pUpgrades)
-        {
-            if (pUpgrades->IsUpgradeCompatible(usUpgrade))
-            {
-                // Add to our upgrade list
-                pUpgrades->AddUpgrade(usUpgrade, true);
-                return true;
-            }
-        }
+        return pUpgrades && pUpgrades->AddUpgrade(usUpgrade, true);
     }
 
     return false;
@@ -3225,19 +3217,7 @@ bool CStaticFunctionDefinitions::RemoveVehicleUpgrade(CClientEntity& Entity, uns
         CClientVehicle& Vehicle = static_cast<CClientVehicle&>(Entity);
 
         CVehicleUpgrades* pUpgrades = Vehicle.GetUpgrades();
-        if (pUpgrades)
-        {
-            if (pUpgrades->HasUpgrade(usUpgrade))
-            {
-                unsigned char ucSlot;
-                if (pUpgrades->GetSlotFromUpgrade(usUpgrade, ucSlot))
-                {
-                    pUpgrades->RemoveUpgrade(usUpgrade);
-
-                    return true;
-                }
-            }
-        }
+        return pUpgrades && pUpgrades->RemoveUpgrade(usUpgrade);
     }
 
     return false;

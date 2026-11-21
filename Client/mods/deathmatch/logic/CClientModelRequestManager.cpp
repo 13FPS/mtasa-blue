@@ -23,6 +23,7 @@ CClientModelRequestManager::~CClientModelRequestManager()
     list<SClientModelRequest*>::iterator iter;
     for (iter = m_Requests.begin(); iter != m_Requests.end(); iter++)
     {
+        (*iter)->pModel->RemoveRef();
         delete *iter;
     }
 
@@ -126,6 +127,7 @@ bool CClientModelRequestManager::Request(unsigned short usModelID, CClientEntity
     if (pInfo)
     {
         // Has it already requested something?
+        auto                                 registration = g_pClientGame->GetManager()->GetModelManager()->FindModelByID(usModelID);
         list<SClientModelRequest*>::iterator iter;
         if (GetRequestEntry(pRequester, iter))
         {
@@ -158,6 +160,7 @@ bool CClientModelRequestManager::Request(unsigned short usModelID, CClientEntity
                     // If not loaded. Replace the model we're going to load.
                     // Also remember that we requested it now.
                     pEntry->pModel = pInfo;
+                    pEntry->registration = std::move(registration);
                     pEntry->requestTimer.Reset();
 
                     // Start loading the new model.
@@ -183,6 +186,7 @@ bool CClientModelRequestManager::Request(unsigned short usModelID, CClientEntity
 
             // Add him to the list over models we're waiting for.
             pEntry = new SClientModelRequest;
+            pEntry->registration = std::move(registration);
             pEntry->pModel = pInfo;
             pEntry->pEntity = pRequester;
             pEntry->requestTimer.SetMaxIncrement(500);
@@ -261,6 +265,13 @@ void CClientModelRequestManager::DoPulse()
         for (iter = m_Requests.begin(); iter != m_Requests.end();)
         {
             pEntry = *iter;
+            // A previous entity's callback can cancel this request during the
+            // same pulse. The cancel queue releases its reference after the loop.
+            if (ListContains(m_CancelQueue, pEntry->pEntity))
+            {
+                ++iter;
+                continue;
+            }
 
             // Is it loaded?
             if (pEntry->pModel->IsLoaded())

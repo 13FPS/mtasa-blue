@@ -15,9 +15,13 @@ class CClientModelRequestManager;
 #include "CClientCommon.h"
 #include "CClientEntity.h"
 #include <list>
+#include <memory>
+
+class CClientModel;
 
 struct SClientModelRequest
 {
+    std::shared_ptr<CClientModel> registration;
     CModelInfo*    pModel;
     CClientEntity* pEntity;
     CElapsedTime   requestTimer;

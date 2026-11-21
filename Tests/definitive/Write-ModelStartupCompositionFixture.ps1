@@ -19,14 +19,15 @@ function Write-ModelStartupCompositionFixture([string]$taskRoot,[string]$OutputP
         'SetCustomModel','RestoreOriginalModel','SetColModel','RestoreColModel','MakeCustomModel','UnloadUnused',
         'GetVehicleWheelSize','SetVehicleWheelSize','ResetVehicleWheelSizes','GetObjectPropertiesGroup','SetObjectPropertiesGroup','RestoreObjectPropertiesGroup',
         'GetVehicleExhaustFumesPosition','SetVehicleExhaustFumesPosition','GetVehicleDummyDefaultPosition','GetVehicleDummyPosition','GetVehicleDummyPositions',
-        'SetVehicleDummyPosition','ResetVehicleDummies','SetTime','GetLODDistance','GetOriginalLODDistance','SetLODDistance')
+        'SetVehicleDummyPosition','ResetVehicleDummies','SetTime','GetLODDistance','GetOriginalLODDistance','SetLODDistance',
+        'GetVehicleSupportedUpgrades','ResetSupportedUpgrades','InitialiseSupportedUpgrades')
     $streamingProvided=@('RequestSpecialModel','LoadSceneCollision','GetModelStreamingFlags','RequestModel','RemoveModel','HasModelLoaded',
         'LoadAllRequestedModels','LoadScene','GetNumPedsLoaded','IsModelInLoadedPedGroup','GetNumLoadedVehicles','IsModelInLoadedVehicleGroup')
     $modelAll=@(Methods 'Client/sdk/game/CModelInfo.h')
     $modelInherited=@($modelAll|Where-Object{$_.name -in $modelProvided})
     $modelMethods=@($modelAll|Where-Object{$_.name -notin $modelProvided})
-    if($modelProvided.Count -ne 52 -or $modelInherited.Count -ne 52 -or $modelMethods.Count -ne 40 -or
-        @($modelProvided|Where-Object{$_ -notin $modelInherited.name}).Count){throw 'Actual startup model SDK partition changed; expected52 inherited/40 rejecting'}
+    if($modelProvided.Count -ne 55 -or $modelInherited.Count -ne 55 -or $modelMethods.Count -ne 37 -or
+        @($modelProvided|Where-Object{$_ -notin $modelInherited.name}).Count){throw 'Actual startup model SDK partition changed; expected55 inherited/37 rejecting'}
     $streamingAll=@(Methods 'Client/sdk/game/CStreaming.h')
     $streamingMethods=@($streamingAll|Where-Object{$_.name -notin $streamingProvided})
     $gameMethods=@(Methods 'Client/sdk/game/CGame.h'|Where-Object{$_.name -notin @('GetStreaming','GetBaseIDforTXD','GetBaseIDforIFP','GetModelInfo','IsASyncLoadingEnabled')})

@@ -5,6 +5,8 @@
  ****************************************************************************/
 #pragma once
 #include "NativeModelClassificationCalls.h"
+#include <string>
+#include <vector>
 namespace mta::game_de
 {
     class NativeModelClassificationAccess
@@ -31,6 +33,11 @@ namespace mta::game_de
         // null; successful null values grant no target layout or lifetime.
         virtual ClockResult ReadModelInterface(std::uint32_t, std::uintptr_t&) noexcept { return ClockResult::NotInitialized; }
         virtual ClockResult ReadModelRender(std::uint32_t, std::uintptr_t&) noexcept { return ClockResult::NotInitialized; }
+        // Copied names of non-root bones belonging to this exact vehicle and render object.
+        virtual ClockResult ReadModelVehicleUpgradeComponents(std::uint32_t, std::uintptr_t, std::vector<std::string>&) noexcept
+        {
+            return ClockResult::NotInitialized;
+        }
         // The qualified slot78 observes vehicle6c0 or genuine ped/clump68,
         // bookending the fullQWORD before the native request caller's EAX
         // conversion. Neither getter nor a sampled pointee is invoked.

@@ -168,6 +168,7 @@
 #include "NativeWorldIplCalls.h"
 #include "NativeModelArchiveReader.h"
 #include "NativeModelObjectReader.h"
+#include "NativeVehicleComponentReader.h"
 #include "NativeModelAnimationReader.h"
 #include "NativeStreamingModelGroupsReader.h"
 #include "NativeStreamingResourceCalls.h"
@@ -448,6 +449,7 @@ namespace mta::game_de
             ClockResult EnableWorldIplStreaming(MtaGame::CGameWorldPolicy::IplFilter) noexcept override;
             ClockResult ReadModelInterface(std::uint32_t, std::uintptr_t&) noexcept override;
             ClockResult ReadModelRender(std::uint32_t, std::uintptr_t&) noexcept override;
+            ClockResult ReadModelVehicleUpgradeComponents(std::uint32_t, std::uintptr_t, std::vector<std::string>&) noexcept override;
             ClockResult ReadModelPlayerPredicate(std::uint32_t, bool&) noexcept override;
             ClockResult ReadModelAnimFileIndex(std::uint32_t, std::uint32_t&) noexcept override;
             ClockResult CreateAndPublishPedModelMetadata(std::uint32_t) noexcept override;
@@ -6686,6 +6688,10 @@ namespace mta::game_de
             if (result == ClockResult::Ok)
                 output = next;
             return result;
+        }
+        ClockResult NativeAccess::ReadModelVehicleUpgradeComponents(std::uint32_t model, std::uintptr_t render, std::vector<std::string>& output) noexcept
+        {
+            return NativeVehicleComponents::Read(runtime.image, model, render, &CheckTimingOwner, &CheckApplicationTimingOwner, output);
         }
         ClockResult NativeAccess::ReadModelAnimFileIndex(std::uint32_t model, std::uint32_t& output) noexcept
         {

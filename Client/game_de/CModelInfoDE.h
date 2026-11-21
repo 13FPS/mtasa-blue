@@ -50,7 +50,8 @@ namespace mta::game_de
         // Request dependencies consume the native getter's EAX result. Keep
         // that observation in this same owner rather than dereferencing an
         // opaque interface as a classic model or caching the animation value.
-        std::uint32_t GetAnimFileIndex();
+        std::uint32_t             GetAnimFileIndex();
+        SVehicleSupportedUpgrades ReadVehicleSupportedUpgrades(RpClump* clump);
 
         // Use the same existing classification owner for this distinct
         // creation capability; construction parameters or raw getters

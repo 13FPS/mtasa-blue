@@ -19,6 +19,8 @@ namespace mta::game_de::NativeStreamingModelContext
     // callback. Capture/recheck never creates an owner, SDK service, weak
     // token, loaded state or persistent root/provider/model lifetime lease.
     bool QualifyProfile(std::uintptr_t image) noexcept;
+    // Guarded copy of model data in the current executable or committed non-executable heap pages.
+    bool Copy(std::uintptr_t address, void* output, std::size_t bytes) noexcept;
     // This model-independent observation qualifies only the current provider
     // header/membership and row range. Metadata/vtable fields remain zero;
     // no selected model or future ped row is created, read or admitted here.

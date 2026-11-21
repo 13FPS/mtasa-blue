@@ -19,7 +19,20 @@ namespace mta::game_de
         using ModelBase =
             CModelInfoLodMixinDE<CModelInfoTimeMixinDE<CModelInfoDummiesMixinDE<CModelInfoObjectGroupMixinDE<CModelInfoWheelMixinDE<CModelInfoUnmodifiedDE>>>>>;
 
+    public:
+        SVehicleSupportedUpgrades GetVehicleSupportedUpgrades() override { return supportedUpgrades; }
+        void                      ResetSupportedUpgrades() override { supportedUpgrades.Reset(); }
+        void                      InitialiseSupportedUpgrades(RpClump* clump) override
+        {
+            // A replacement may no longer have the previous model's attachment
+            // points. Invalidate first so a refused observation can be retried.
+            supportedUpgrades.Reset();
+            supportedUpgrades = ReadVehicleSupportedUpgrades(clump);
+        }
+
     protected:
+        SVehicleSupportedUpgrades supportedUpgrades;
+
         CModelInfoStartupDE(std::uint32_t model, NativeModelClassificationAccess& classification, NativeModelLodAccess& lod, NativeModelTimeAccess& time,
                             NativeModelWheelAccess& wheel, NativeModelObjectGroupAccess& groups, NativeModelDummiesAccess& dummies, CGame& game,
                             NativeModelBackingReferenceAccess& referenceOwner, const NativeModelBackingReferenceToken& reference, CCoreInterface& core)

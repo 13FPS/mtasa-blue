@@ -4,12 +4,29 @@
  * PURPOSE: Preserve actual SDK predicate results and explicit borrowed-owner refusals
  ****************************************************************************/
 #include "CModelInfoDE.h"
+#include <game/CVehicleUpgradeComponentNames.h>
 #include <stdexcept>
 #include <cstring>
 #include <exception>
 #include <string>
+#include <vector>
 namespace mta::game_de
 {
+    SVehicleSupportedUpgrades CModelInfoDE::ReadVehicleSupportedUpgrades(RpClump* clump)
+    {
+        // The SDK pointer is opaque in DE. The owner must confirm it belongs
+        // to this model before any names are eligible for MTA's component map.
+        std::vector<std::string> names;
+        const auto               status = access.ReadModelVehicleUpgradeComponents(model, reinterpret_cast<std::uintptr_t>(clump), names);
+        if (status != ClockResult::Ok)
+            throw std::runtime_error("DE model owner refused InitialiseSupportedUpgrades: " + std::to_string(static_cast<unsigned>(status)));
+        SVehicleSupportedUpgrades observed;
+        for (const auto& name : names)
+            MtaGame::ApplyVehicleUpgradeComponent(observed, name);
+        observed.m_bInitialised = true;
+        return observed;
+    }
+
     bool CModelInfoDE::GetTime(char& hourOn, char& hourOff)
     {
         NativeModelTimeObservation value;

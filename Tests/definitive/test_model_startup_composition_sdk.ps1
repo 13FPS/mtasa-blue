@@ -17,7 +17,7 @@ $record = [ordered]@{
     success = $false; failure = $null; recordedAt = [DateTimeOffset]::Now.ToString('o')
     sourceHashes = @(); sourcesUnchanged = $true; generatedFixture = $null; results = @(); checks = 0
     scratchDirectory = $scratchRoot; scratchRemoved = $false; actualModelStartupCompositionSdkTested = $false
-    scope = 'Actual composed LOD/time/dummies/object-group/wheel/unmodified/request/reference/diagnostics SDK receiver; controlled owner replies and one inherited model identity. Remaining pure methods abort if called.'
+    scope = 'Actual composed LOD/time/dummies/object-group/wheel/unmodified/request/reference/diagnostics SDK receiver and per-model supported-upgrade CPU cache; controlled owner replies and one inherited model identity. Component discovery receives controlled names through the SDK owner. Remaining pure methods abort if called.'
     nativeEngineCodeExecuted = $false; gameLaunched = $false; gameAttached = $false
     installationChanged = $false; completeModelInfoReady = $false; productionFactoryPublished = $false
 }
@@ -132,11 +132,14 @@ try {
     . (Join-Path $PSScriptRoot 'Write-ModelStartupCompositionFixture.ps1')
     $generated = Join-Path $scratchRoot 'ModelStartupCompositionFixture.generated.h'
     $record.generatedFixture = Write-ModelStartupCompositionFixture $taskRoot $generated
-    # A fixture rejector must never mask one of the 52 inherited production
+    # A fixture rejector must never mask one of the 55 inherited production
     # methods, particularly the model identity shared with request/reference.
-    if ($record.generatedFixture['inheritedModelMethods'] -ne 52 -or $record.generatedFixture['rejectingModelMethods'] -ne 40 -or
+    if ($record.generatedFixture['inheritedModelMethods'] -ne 55 -or $record.generatedFixture['rejectingModelMethods'] -ne 37 -or
         $record.generatedFixture['inheritedStreamingMethods'] -ne 12 -or 'GetModel' -notin $record.generatedFixture['modelInheritedNames'] -or
         'IsDynamic' -notin $record.generatedFixture['modelInheritedNames'] -or
+        'GetVehicleSupportedUpgrades' -notin $record.generatedFixture['modelInheritedNames'] -or
+        'ResetSupportedUpgrades' -notin $record.generatedFixture['modelInheritedNames'] -or
+        'InitialiseSupportedUpgrades' -notin $record.generatedFixture['modelInheritedNames'] -or
         $record.generatedFixture['productionFactoryPublished'] -ne $false) { throw 'Composed model fixture SDK partition changed' }
     $durableGenerated = Join-Path $outputRoot 'ModelStartupCompositionFixture.generated.h'
     Copy-Item -LiteralPath $generated -Destination $durableGenerated
@@ -178,7 +181,9 @@ try {
     $summary = [regex]::Match($stdout.TrimEnd(), '(?:^|\r?\n)Passed (\d+) model startup composition SDK checks \((\d+)-bit; CPU provider doubles only\)$')
     if ($summary.Success) { $result.checks = [int]$summary.Groups[1].Value; $result.pointerBits = [int]$summary.Groups[2].Value }
     $result.actualModelStartupCompositionSdkTested = [regex]::Matches($stdout, '(?m)^Production model startup composition SDK fixture completed\r?$').Count -eq 1
-    if ($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -ne 49 -or $result.pointerBits -ne 64 -or -not $result.actualModelStartupCompositionSdkTested) {
+    if ($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -ne 81 -or $result.pointerBits -ne 64 -or -not $result.actualModelStartupCompositionSdkTested -or
+        [regex]::Matches($stdout, '(?m)^Production model supported-upgrade cache SDK fixture completed\r?$').Count -ne 1 -or
+        [regex]::Matches($stdout, '(?m)^Production model supported-upgrade discovery SDK fixture completed\r?$').Count -ne 1) {
         throw 'Composed model SDK checks, x64 summary or exact-once completion marker failed'
     }
     # Explicit dictionary access also works for this single-result x64 cohort.

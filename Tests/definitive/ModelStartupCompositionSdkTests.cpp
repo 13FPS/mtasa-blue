@@ -24,6 +24,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <vector>
 
 namespace model_startup_fixture
 {
@@ -99,7 +100,20 @@ namespace
         NativeModelDummyPositions positions{};
         std::uint8_t              on = 0, off = 0;
         std::uint32_t             lod = Bits(50.0f);
-        void                      Touch(std::uint32_t key) noexcept
+        std::vector<std::string>  components;
+        ClockResult               componentResult = ClockResult::Ok;
+        std::uint32_t             observedModel = 0;
+        std::uintptr_t            observedClump = 0;
+        unsigned                  componentReads = 0;
+        ClockResult               ReadModelVehicleUpgradeComponents(std::uint32_t key, std::uintptr_t clump, std::vector<std::string>& output) noexcept override
+        {
+            observedModel = key;
+            observedClump = clump;
+            ++componentReads;
+            output.swap(components);
+            return componentResult;
+        }
+        void Touch(std::uint32_t key) noexcept
         {
             ++effects;
             keysMatch = keysMatch && key == current.modelIndex;
@@ -383,12 +397,17 @@ namespace
             : Model(owner.current.modelIndex, owner, owner, owner, owner, owner, owner, game, owner, owner.current, core)
         {
         }
+        // Seeding even the unused vent flag exercises every cache reset field.
+        void SeedSupportedUpgrades(const SVehicleSupportedUpgrades& value) { supportedUpgrades = value; }
     };
     static_assert(std::is_abstract_v<CModelInfoStartupDE> && !std::is_abstract_v<Model> && std::is_convertible_v<Model*, CModelInfoDE*>);
     static_assert(std::is_same_v<decltype(&Model::ModelAddRef), decltype(&CModelInfoRequestDE::ModelAddRef)> &&
                   std::is_same_v<decltype(&Model::RemoveRef), decltype(&CModelInfoRequestDE::RemoveRef)> &&
                   std::is_same_v<decltype(&Model::Request), decltype(&CModelInfoRequestDE::Request)> &&
                   std::is_same_v<decltype(&Model::SetCustomModel), decltype(&CModelInfoUnmodifiedDE::SetCustomModel)>);
+    static_assert(std::is_same_v<decltype(&Model::GetVehicleSupportedUpgrades), decltype(&CModelInfoStartupDE::GetVehicleSupportedUpgrades)> &&
+                  std::is_same_v<decltype(&Model::ResetSupportedUpgrades), decltype(&CModelInfoStartupDE::ResetSupportedUpgrades)> &&
+                  std::is_same_v<decltype(&Model::InitialiseSupportedUpgrades), decltype(&CModelInfoStartupDE::InitialiseSupportedUpgrades)>);
     struct Scenario
     {
         Owner          owner;
@@ -404,6 +423,130 @@ namespace
             owner.positions[0] = {1.0f, 2.0f, 3.0f};
         }
     };
+    void SupportedUpgradeCache()
+    {
+        // Name every SDK member instead of comparing object padding or asking
+        // the implementation's Reset() to manufacture the expected answer.
+        constexpr std::array<bool SVehicleSupportedUpgrades::*, 20> fields{&SVehicleSupportedUpgrades::m_bBonnet,
+                                                                           &SVehicleSupportedUpgrades::m_bBonnet_Left,
+                                                                           &SVehicleSupportedUpgrades::m_bBonnet_Left_dam,
+                                                                           &SVehicleSupportedUpgrades::m_bBonnet_Right,
+                                                                           &SVehicleSupportedUpgrades::m_bBonnet_Right_dam,
+                                                                           &SVehicleSupportedUpgrades::m_bSpoiler,
+                                                                           &SVehicleSupportedUpgrades::m_bSpoiler_dam,
+                                                                           &SVehicleSupportedUpgrades::m_bVent,
+                                                                           &SVehicleSupportedUpgrades::m_bSideSkirt_Right,
+                                                                           &SVehicleSupportedUpgrades::m_bSideSkirt_Left,
+                                                                           &SVehicleSupportedUpgrades::m_bFrontBullbars,
+                                                                           &SVehicleSupportedUpgrades::m_bRearBullbars,
+                                                                           &SVehicleSupportedUpgrades::m_bLamps,
+                                                                           &SVehicleSupportedUpgrades::m_bLamps_dam,
+                                                                           &SVehicleSupportedUpgrades::m_bRoof,
+                                                                           &SVehicleSupportedUpgrades::m_bExhaust,
+                                                                           &SVehicleSupportedUpgrades::m_bFrontBumper,
+                                                                           &SVehicleSupportedUpgrades::m_bRearBumper,
+                                                                           &SVehicleSupportedUpgrades::m_bMisc,
+                                                                           &SVehicleSupportedUpgrades::m_bInitialised};
+        const auto                                                  all = [&](const SVehicleSupportedUpgrades& value, bool expected)
+        {
+            for (const auto field : fields)
+                if (value.*field != expected)
+                    return false;
+            return true;
+        };
+        Scenario    first, second;
+        CModelInfo& sdk = first.model;
+        CModelInfo& other = second.model;
+        const auto  firstReads = first.owner.reads, secondReads = second.owner.reads;
+        Check(all(sdk.GetVehicleSupportedUpgrades(), false) && all(other.GetVehicleSupportedUpgrades(), false),
+              "new model caches start with all support fields false and explicit uninitialised status");
+
+        SVehicleSupportedUpgrades discovered;
+        for (const auto field : fields)
+            discovered.*field = true;
+        first.model.SeedSupportedUpgrades(discovered);
+        const auto saved = sdk.GetVehicleSupportedUpgrades();
+        Check(all(saved, true), "getter returns every seeded support field including the initialised status");
+        Check(all(other.GetVehicleSupportedUpgrades(), false), "another model does not share the first model's supported-upgrade cache");
+
+        auto detached = sdk.GetVehicleSupportedUpgrades();
+        for (const auto field : fields)
+            detached.*field = false;
+        Check(all(detached, false) && all(sdk.GetVehicleSupportedUpgrades(), true), "mutating the returned value cannot alter the model cache");
+        second.model.SeedSupportedUpgrades(discovered);
+        sdk.ResetSupportedUpgrades();
+        Check(all(sdk.GetVehicleSupportedUpgrades(), false), "reset clears all nineteen support fields and the initialised sentinel");
+        Check(all(saved, true), "reset cannot rewrite an earlier returned snapshot");
+        Check(all(other.GetVehicleSupportedUpgrades(), true), "reset on one model cannot invalidate another model's cache");
+        sdk.ResetSupportedUpgrades();
+        Check(all(sdk.GetVehicleSupportedUpgrades(), false), "reset remains idempotent while discovery is unknown");
+        Check(!first.owner.effects && !second.owner.effects && first.owner.reads == firstReads && second.owner.reads == secondReads && !first.owner.acquires &&
+                  !second.owner.acquires && !first.owner.releases && !second.owner.releases && !first.game.streamingReads && !second.game.streamingReads &&
+                  !first.core.count && !second.core.count && !sdk.GetRefCount() && !other.GetRefCount(),
+              "CPU cache reads and resets do not invoke native services, streaming, references or diagnostics");
+        std::puts("Production model supported-upgrade cache SDK fixture completed");
+    }
+    void SupportedUpgradeDiscovery()
+    {
+        using Upgrades = SVehicleSupportedUpgrades;
+        struct Expected
+        {
+            const char* name;
+            bool Upgrades::* flag;
+        };
+        constexpr Expected names[]{{"bump_front_dummy", &Upgrades::m_bFrontBumper},
+                                   {"bump_rear_dummy", &Upgrades::m_bRearBumper},
+                                   {"exhaust_ok", &Upgrades::m_bExhaust},
+                                   {"misc_c", &Upgrades::m_bMisc},
+                                   {"ug_backbullbar", &Upgrades::m_bRearBullbars},
+                                   {"ug_bonnet", &Upgrades::m_bBonnet},
+                                   {"ug_bonnet_left", &Upgrades::m_bBonnet_Left},
+                                   {"ug_bonnet_left_dam", &Upgrades::m_bBonnet_Left_dam},
+                                   {"ug_bonnet_right", &Upgrades::m_bBonnet_Right},
+                                   {"ug_bonnet_right_dam", &Upgrades::m_bBonnet_Right_dam},
+                                   {"ug_frontbullbar", &Upgrades::m_bFrontBullbars},
+                                   {"ug_lights", &Upgrades::m_bLamps},
+                                   {"ug_lights_dam", &Upgrades::m_bLamps_dam},
+                                   {"ug_roof", &Upgrades::m_bRoof},
+                                   {"ug_spoiler", &Upgrades::m_bSpoiler},
+                                   {"ug_spoiler_dam", &Upgrades::m_bSpoiler_dam},
+                                   {"ug_wing_left", &Upgrades::m_bSideSkirt_Left},
+                                   {"ug_wing_right", &Upgrades::m_bSideSkirt_Right}};
+        Scenario           s;
+        CModelInfo&        sdk = s.model;
+        auto* const        clump = reinterpret_cast<RpClump*>(&s);
+        for (const auto& expected : names)
+        {
+            s.owner.components = {expected.name};
+            sdk.InitialiseSupportedUpgrades(clump);
+            const auto flags = sdk.GetVehicleSupportedUpgrades();
+            bool       exact = flags.m_bInitialised && !flags.m_bVent;
+            for (const auto& candidate : names)
+                exact = exact && flags.*candidate.flag == (candidate.flag == expected.flag);
+            Check(exact, expected.name);
+        }
+        Check(s.owner.componentReads == 18 && s.owner.observedModel == s.owner.current.modelIndex &&
+                  s.owner.observedClump == reinterpret_cast<std::uintptr_t>(clump),
+              "discovery forwards the immutable model ID and full clump identity each time");
+        s.owner.components = {"ug_spoiler", "UG_ROOF", "bump_front_dummy_1", "ug_vent", "ug_lights", "ug_spoiler"};
+        sdk.InitialiseSupportedUpgrades(clump);
+        const auto flags = sdk.GetVehicleSupportedUpgrades();
+        Check(flags.m_bInitialised && flags.m_bSpoiler && flags.m_bLamps && !flags.m_bRoof && !flags.m_bFrontBumper && !flags.m_bVent &&
+                  !flags.m_bSideSkirt_Right,
+              "only exact named attachments count and duplicate names preserve valid siblings");
+        // Supply names even on a refusal so accidental partial publication is visible.
+        s.owner.components = {"exhaust_ok"};
+        s.owner.componentResult = ClockResult::BindingChanged;
+        Check(Refuses([&] { sdk.InitialiseSupportedUpgrades(clump); }), "a changed clump owner must refuse discovery");
+        const auto refused = sdk.GetVehicleSupportedUpgrades();
+        Check(!refused.m_bInitialised && !refused.m_bLamps && !refused.m_bSpoiler && !refused.m_bExhaust, "refusal clears old and partial discovery results");
+        s.owner.componentResult = ClockResult::Ok;
+        s.owner.components.clear();
+        sdk.InitialiseSupportedUpgrades(clump);
+        const auto empty = sdk.GetVehicleSupportedUpgrades();
+        Check(empty.m_bInitialised && !empty.m_bLamps && !empty.m_bSpoiler && !empty.m_bExhaust, "a qualified empty model completes discovery on retry");
+        std::puts("Production model supported-upgrade discovery SDK fixture completed");
+    }
     void SharedIdentityAndCycles()
     {
         Scenario    s;
@@ -531,6 +674,8 @@ int main()
         SharedIdentityAndCycles();
         RetainedPrefixAndRealDiagnostics();
         ConstructorAndReplacementRefusals();
+        SupportedUpgradeCache();
+        SupportedUpgradeDiscovery();
         std::puts("Production model startup composition SDK fixture completed");
         std::printf("Passed %u model startup composition SDK checks (%u-bit; CPU provider doubles only)\n", checks,
                     static_cast<unsigned>(sizeof(std::uintptr_t) * 8));

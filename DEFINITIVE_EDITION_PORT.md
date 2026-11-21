@@ -1,5 +1,44 @@
 # GTA San Andreas Definitive Edition: findings and port tracker
 
+## Current port status (2026-11-21)
+
+**Full multiplayer on DE is still unavailable.** The real MTA Core, Deathmatch
+client and DE backend all built in Release/x64. MTA's menu, Settings, console,
+key bindings, walking and sprinting have run inside DE. Remote gameplay still
+requires the complete `CGame` and multiplayer factories and compatible x64
+client networking. The November 21 binaries were built and tested locally.
+
+Core now honors a Deathmatch client that requests shutdown during initialization.
+The client shuts down before its first frame or chat activation. Lua vehicle
+upgrade calls also report whether the client could dispatch or queue the
+request. Public spoiler compatibility still follows the server's rules.
+The client registers custom models and texture dictionaries after successful
+allocation. A refused texture request returns Lua `false`, and a successful
+allocation of texture slot zero returns numeric `0`. If the engine publishes
+pedestrian metadata and then throws before returning, that slot can remain
+allocated because the client never received its ownership identity.
+
+On November 21, two pairs of live readings covered nine stock vehicles in one
+GTA launch, first indoors and then on Grove Street. Each pair agreed.
+Model 404 exposed spoiler, lights, side-skirt and exhaust
+attachments. Model 492 exposed bonnet, roof, spoiler and exhaust attachments.
+Four vehicles had no matching upgrade names. A later attempt caught the object
+registry changing during streaming and was excluded. GTA exited normally.
+
+The DE backend reads descendant bones and attached sockets for the supplied
+vehicle render object. Both game backends use the same 18 case-sensitive MTA
+attachment names. Classic also clears the parent ID and upgrade cache when a
+custom model slot is freed. The composed model now implements 55 of the 92
+`CModelInfo` methods and passes 81 SDK checks. Automatic cache population
+in GTA still needs the DE model-load callback. The native reader passed 20
+checks against controlled memory. The live observations used the installed
+game and a read-only capture.
+
+The [port overview](Client/definitive/README.md) describes the client features
+available today. Local build receipts are in `Build/definitive-recovery`.
+
+## Historical diagnostic tracker
+
 Last updated: **2026-10-15** (Europe/Luxembourg).
 Experimental branch: `definitive-edition-port`.
 Live renderer source baseline: `05e80a41ecfcdd27165c7eefa3912a809c5546a4`.

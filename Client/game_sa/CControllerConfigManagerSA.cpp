@@ -27,8 +27,8 @@ CControllerConfigManagerSA::CControllerConfigManagerSA()
 {
     m_bSuspendSteerAndFlyWithMouse = false;
     // Get initial settings
-    m_bSteerWithMouse = *VAR_FlyWithMouse != 0;
-    m_bFlyWithMouse = *VAR_SteerWithMouse != 0;
+    m_bSteerWithMouse = *VAR_SteerWithMouse != 0;
+    m_bFlyWithMouse = *VAR_FlyWithMouse != 0;
     MemSet((void*)0x5BC7B4, 0x90, 10);  // Stop vertical aim sensitivity value reset
 }
 

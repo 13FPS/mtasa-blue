@@ -1570,7 +1570,7 @@ static void __declspec(naked) HOOK_CMonsterTruck__PreRender_DumperSwing()
 //////////////////////////////////////////////////////////////////////////////////////////
 static std::uint32_t __fastcall ResolveAircraftWeaponModelId(std::uint32_t modelId)
 {
-    // Standard models leave m_dwParentID uninitialised, so answer the vanilla range here instead of reading it.
+    // Stock vehicles use their own IDs.
     if (modelId >= 400 && modelId <= 611)
         return modelId;
 
@@ -1599,7 +1599,7 @@ static std::uint32_t __fastcall ResolveAircraftWeaponModelId(std::uint32_t model
 
 static std::uint32_t __fastcall ResolveVehicleParentModelId(std::uint32_t modelId)
 {
-    // Standard models leave m_dwParentID uninitialised, so answer the vanilla range here instead of reading it.
+    // Stock vehicles use their own IDs.
     if (modelId >= 400 && modelId <= 611)
         return modelId;
 
@@ -1613,7 +1613,7 @@ static std::uint32_t __fastcall ResolveVehicleParentModelId(std::uint32_t modelI
 
 static std::uint32_t __fastcall ResolveJetAudioModelId(std::uint32_t modelId)
 {
-    // Standard models leave m_dwParentID uninitialised, so answer the vanilla range here instead of reading it.
+    // Stock vehicles use their own IDs.
     if (modelId >= 400 && modelId <= 611)
         return modelId;
 

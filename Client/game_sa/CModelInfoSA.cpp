@@ -22,6 +22,7 @@
 #include <game/CModelVehicleDummyPolicy.h>
 #include <game/CModelTimePolicy.h>
 #include <game/CModelLodDistancePolicy.h>
+#include <game/CVehicleUpgradeComponentNames.h>
 #include "CPedModelInfoSA.h"
 #include "CPedSA.h"
 #include "CPoolsSA.h"
@@ -101,6 +102,7 @@ CModelInfoSA::CModelInfoSA()
 {
     m_pInterface = NULL;
     m_dwModelID = 0xFFFFFFFF;
+    m_dwParentID = 0;
     m_dwReferences = 0;
     m_dwPendingInterfaceRef = 0;
     m_pOriginalColModelInterface = NULL;
@@ -1943,6 +1945,10 @@ void CModelInfoSA::DeallocateModel(void)
 
     ppModelInfo[m_dwModelID] = nullptr;
     *pGame->GetStreaming()->GetStreamingInfo(m_dwModelID) = CStreamingInfo{};
+    // The SDK wrapper survives deallocation. Its next model can have a
+    // different parent and new attachment names, or have neither.
+    m_dwParentID = 0;
+    m_ModelSupportedUpgrades.Reset();
 }
 //////////////////////////////////////////////////////////////////////////////////////////
 //
@@ -2011,91 +2017,7 @@ void CModelInfoSA::RwSetSupportedUpgrades(RwFrame* parent, DWORD dwModel)
         {
             RwSetSupportedUpgrades(ret, dwModel);
         }
-        SString strName = ret->szName;
-        // Spoiler
-        if (strName == "ug_bonnet")
-        {
-            m_ModelSupportedUpgrades.m_bBonnet = true;
-        }
-        else if (strName == "ug_bonnet_left")
-        {
-            m_ModelSupportedUpgrades.m_bBonnet_Left = true;
-        }
-        else if (strName == "ug_bonnet_left_dam")
-        {
-            m_ModelSupportedUpgrades.m_bBonnet_Left_dam = true;
-        }
-        else if (strName == "ug_bonnet_right")
-        {
-            m_ModelSupportedUpgrades.m_bBonnet_Right = true;
-        }
-        else if (strName == "ug_bonnet_right_dam")
-        {
-            m_ModelSupportedUpgrades.m_bBonnet_Right_dam = true;
-        }
-        // Spoiler
-        else if (strName == "ug_spoiler")
-        {
-            m_ModelSupportedUpgrades.m_bSpoiler = true;
-        }
-        else if (strName == "ug_spoiler_dam")
-        {
-            m_ModelSupportedUpgrades.m_bSpoiler_dam = true;
-        }
-        // Bonnet
-        else if (strName == "ug_lights")
-        {
-            m_ModelSupportedUpgrades.m_bLamps = true;
-        }
-        else if (strName == "ug_lights_dam")
-        {
-            m_ModelSupportedUpgrades.m_bLamps_dam = true;
-        }
-        // Roof
-        else if (strName == "ug_roof")
-        {
-            m_ModelSupportedUpgrades.m_bRoof = true;
-        }
-        // Side Skirt
-        else if (strName == "ug_wing_right")
-        {
-            m_ModelSupportedUpgrades.m_bSideSkirt_Right = true;
-        }
-        // Side Skirt
-        else if (strName == "ug_wing_left")
-        {
-            m_ModelSupportedUpgrades.m_bSideSkirt_Left = true;
-        }
-        // Exhaust
-        else if (strName == "exhaust_ok")
-        {
-            m_ModelSupportedUpgrades.m_bExhaust = true;
-        }
-        // Front bullbars
-        else if (strName == "ug_frontbullbar")
-        {
-            m_ModelSupportedUpgrades.m_bFrontBullbars = true;
-        }
-        // rear bullbars
-        else if (strName == "ug_backbullbar")
-        {
-            m_ModelSupportedUpgrades.m_bRearBullbars = true;
-        }
-        // Front bumper
-        else if (strName == "bump_front_dummy")
-        {
-            m_ModelSupportedUpgrades.m_bFrontBumper = true;
-        }
-        // Rear bumper
-        else if (strName == "bump_rear_dummy")
-        {
-            m_ModelSupportedUpgrades.m_bRearBumper = true;
-        }
-        // Rear bumper
-        else if (strName == "misc_c")
-        {
-            m_ModelSupportedUpgrades.m_bMisc = true;
-        }
+        MtaGame::ApplyVehicleUpgradeComponent(m_ModelSupportedUpgrades, ret->szName);
     }
 }
 

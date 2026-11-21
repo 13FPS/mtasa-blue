@@ -139,7 +139,13 @@ bool CModManager::Start()
     }
     CMessageLoopHook::GetSingleton().SetRefreshMsgQueueEnabled(true);
 
-    m_state = State::Idle;
+    // Deathmatch can request a disconnect from ClientInitialize and still
+    // return success. Retire it after its initializer has returned, before
+    // the caller can pulse the client or deliver another callback to it.
+    if (success && m_state == State::PendingStop)
+        Stop();
+    else
+        m_state = State::Idle;
     return success;
 }
 
@@ -189,6 +195,11 @@ bool CModManager::TryStart()
     }
 
     m_client = client;
+
+    // A successful initialization still needs ClientShutdown, but a client
+    // that already requested retirement must not take over console/chat input.
+    if (m_state == State::PendingStop)
+        return true;
 
     // HACK: make the console input active if its visible
     if (CLocalGUI::GetSingleton().IsConsoleVisible())

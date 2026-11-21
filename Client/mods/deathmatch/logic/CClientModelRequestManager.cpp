@@ -126,8 +126,12 @@ bool CClientModelRequestManager::Request(unsigned short usModelID, CClientEntity
     CModelInfo* pInfo = g_pGame->GetModelInfo(usModelID);
     if (pInfo)
     {
+        // A script can stream an entity back in during the same pulse that
+        // canceled its previous request. The latest valid request takes effect.
+        m_CancelQueue.remove(pRequester);
+        auto registration = g_pClientGame->GetManager()->GetModelManager()->FindModelByID(usModelID);
+
         // Has it already requested something?
-        auto                                 registration = g_pClientGame->GetManager()->GetModelManager()->FindModelByID(usModelID);
         list<SClientModelRequest*>::iterator iter;
         if (GetRequestEntry(pRequester, iter))
         {

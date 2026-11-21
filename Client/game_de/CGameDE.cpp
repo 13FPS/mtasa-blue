@@ -76,6 +76,9 @@ namespace mta::game_de
         RequireNativeWrite(NativeWrites().GetWeaponInfoSlot(slot, output), "GetWeaponInfo");
         if (preparedServices.generation && output != preparedServices.weapons[slot])
             RequireNativeWrite(ClockResult::OwnerConflict, "GetWeaponInfo");
+        // The runtime can keep the same SDK address across sessions. Recheck
+        // the game's prepared binding after each successful service lookup.
+        RequirePreparedServiceBinding("GetWeaponInfo");
         return output;
     }
 
@@ -112,6 +115,7 @@ namespace mta::game_de
             RequireNativeWrite(ClockResult::OwnerConflict, "GetWeaponStatManager");
         if (preparedServices.generation && output != preparedServices.weaponManager)
             RequireNativeWrite(ClockResult::OwnerConflict, "GetWeaponStatManager");
+        RequirePreparedServiceBinding("GetWeaponStatManager");
         return output;
     }
 
@@ -140,6 +144,7 @@ namespace mta::game_de
             RequireNativeWrite(ClockResult::NotInitialized, "GetStats");
         if (preparedServices.generation && output != preparedServices.stats)
             RequireNativeWrite(ClockResult::OwnerConflict, "GetStats");
+        RequirePreparedServiceBinding("GetStats");
         return output;
     }
 
@@ -155,6 +160,7 @@ namespace mta::game_de
             RequireNativeWrite(ClockResult::NotInitialized, "GetRopes");
         if (preparedServices.generation && output != preparedServices.ropes)
             RequireNativeWrite(ClockResult::OwnerConflict, "GetRopes");
+        RequirePreparedServiceBinding("GetRopes");
         return output;
     }
 
@@ -171,6 +177,7 @@ namespace mta::game_de
             RequireNativeWrite(ClockResult::NotInitialized, "GetPlayerInfo");
         if (preparedServices.generation && output != preparedServices.playerInfo)
             RequireNativeWrite(ClockResult::OwnerConflict, "GetPlayerInfo");
+        RequirePreparedServiceBinding("GetPlayerInfo");
         return output;
     }
 
@@ -187,6 +194,7 @@ namespace mta::game_de
             RequireNativeWrite(ClockResult::NotInitialized, "GetWeather");
         if (preparedServices.generation && output != preparedServices.weather)
             RequireNativeWrite(ClockResult::OwnerConflict, "GetWeather");
+        RequirePreparedServiceBinding("GetWeather");
         return output;
     }
 

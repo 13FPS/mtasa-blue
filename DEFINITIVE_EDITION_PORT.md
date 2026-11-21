@@ -1,12 +1,17 @@
 # GTA San Andreas Definitive Edition: findings and port tracker
 
-## Current port status (2026-11-21)
+## Current port status (2026-11-22)
 
 **Full multiplayer on DE is still unavailable.** The real MTA Core, Deathmatch
 client and DE backend all built in Release/x64. MTA's menu, Settings, console,
 key bindings, walking and sprinting have run inside DE. Remote gameplay still
 requires the complete `CGame` and multiplayer factories and compatible x64
-client networking. The November 21 binaries were built and tested locally.
+client networking. The current binaries were built and tested locally.
+
+During startup, DE can reuse the same service address across game sessions.
+Six MTA game lookups now recheck the session before returning a service to
+the client. This covers player info, stats, ropes, weather, weapon info and
+the weapon stat manager.
 
 Core now honors a Deathmatch client that requests shutdown during initialization.
 The client shuts down before its first frame or chat activation. Lua vehicle
@@ -22,8 +27,11 @@ On November 21, two pairs of live readings covered nine stock vehicles in one
 GTA launch, first indoors and then on Grove Street. Each pair agreed.
 Model 404 exposed spoiler, lights, side-skirt and exhaust
 attachments. Model 492 exposed bonnet, roof, spoiler and exhaust attachments.
-Four vehicles had no matching upgrade names. A later attempt caught the object
-registry changing during streaming and was excluded. GTA exited normally.
+Four vehicles had no matching upgrade names. In an offline replay of the saved
+vehicle hierarchies, the production C++ reader reproduced all 808 selected names
+and matched classic MTA on all 324 upgrade-flag comparisons. A later live
+attempt caught the object registry changing during streaming and was excluded.
+GTA exited normally.
 
 The DE backend reads descendant bones and attached sockets for the supplied
 vehicle render object. Both game backends use the same 18 case-sensitive MTA

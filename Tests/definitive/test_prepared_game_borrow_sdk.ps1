@@ -22,7 +22,7 @@ $record = [ordered]@{
     generatedFixture=$null;results=@();failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;
     scope='Internal CPU prepared-graph envelope only: genuine test-issued token, exact identities, fresh publication, failure retention and explicit producer drain. Existing production partial graph remains abstract; no engine or full-factory authority.';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;completeCGameReady=$false;
-    preparedGameBorrowSdkTested=$false;preparedGameBorrowIdentityTested=$false;preparedGameBorrowPublicationTested=$false;preparedGameBorrowDrainTested=$false;preparedGameBorrowPureSurfaceTested=$false;preparedStartupServiceBindingSdkTested=$false
+    preparedGameBorrowSdkTested=$false;preparedGameBorrowIdentityTested=$false;preparedGameBorrowPublicationTested=$false;preparedGameBorrowDrainTested=$false;preparedGameBorrowPureSurfaceTested=$false;preparedStartupServiceBindingSdkTested=$false;preparedConstructorServicePublicationTested=$false
 }
 
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -188,9 +188,10 @@ try {
         $result['preparedGameBorrowDrainTested']=$stdout.Contains('Prepared game borrow producer drain fixture completed')
         $result['preparedGameBorrowPureSurfaceTested']=$stdout.Contains('All prepared graph SDK obligations and thirteen lifecycle hooks remain abstract')
         $result['preparedStartupServiceBindingSdkTested']=[regex]::Matches($stdout,'(?m)^Production prepared startup service binding SDK fixture completed\r?$').Count -eq 1
+        $result['preparedConstructorServicePublicationTested']=[regex]::Matches($stdout,'(?m)^Production prepared constructor service publication SDK fixture completed\r?$').Count -eq 1
         $expectedBits=if($architecture -eq 'x86'){32}else{64}
-        if($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -ne 91 -or $result.pointerBits -ne $expectedBits -or
-            -not($result.preparedGameBorrowSdkTested -and $result.preparedGameBorrowIdentityTested -and $result.preparedGameBorrowPublicationTested -and $result.preparedGameBorrowDrainTested -and $result.preparedGameBorrowPureSurfaceTested -and $result.preparedStartupServiceBindingSdkTested)) {
+        if($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -ne 140 -or $result.pointerBits -ne $expectedBits -or
+            -not($result.preparedGameBorrowSdkTested -and $result.preparedGameBorrowIdentityTested -and $result.preparedGameBorrowPublicationTested -and $result.preparedGameBorrowDrainTested -and $result.preparedGameBorrowPureSurfaceTested -and $result.preparedStartupServiceBindingSdkTested -and $result.preparedConstructorServicePublicationTested)) {
             throw "$architecture prepared borrow SDK checks or required lifetime evidence failed"
         }
         # A separate owned process verifies the deliberately fatal live-token
@@ -205,14 +206,14 @@ try {
         $result.checks++
 
     }
-    foreach($marker in @('preparedGameBorrowSdkTested','preparedGameBorrowIdentityTested','preparedGameBorrowPublicationTested','preparedGameBorrowDrainTested','preparedGameBorrowPureSurfaceTested','preparedStartupServiceBindingSdkTested')) {
+    foreach($marker in @('preparedGameBorrowSdkTested','preparedGameBorrowIdentityTested','preparedGameBorrowPublicationTested','preparedGameBorrowDrainTested','preparedGameBorrowPureSurfaceTested','preparedStartupServiceBindingSdkTested','preparedConstructorServicePublicationTested')) {
         $record[$marker]=@($record.results|Where-Object{-not $_[$marker]}).Count -eq 0
     }
     # Index the dictionaries explicitly: a single-architecture result must
     # aggregate the same way as a multi-result PowerShell pipeline.
     $record['checks']=0
     foreach($completed in $record.results){$record['checks'] += [int]$completed['checks']}
-    $record.success=$record.results.Count -eq 1 -and $record.checks -eq 92 -and $record.preparedGameBorrowSdkTested -and $record.preparedGameBorrowIdentityTested -and $record.preparedGameBorrowPublicationTested -and $record.preparedGameBorrowDrainTested -and $record.preparedGameBorrowPureSurfaceTested -and $record.preparedStartupServiceBindingSdkTested
+    $record.success=$record.results.Count -eq 1 -and $record.checks -eq 141 -and $record.preparedGameBorrowSdkTested -and $record.preparedGameBorrowIdentityTested -and $record.preparedGameBorrowPublicationTested -and $record.preparedGameBorrowDrainTested -and $record.preparedGameBorrowPureSurfaceTested -and $record.preparedStartupServiceBindingSdkTested -and $record.preparedConstructorServicePublicationTested
 
 
 } catch { AddFailure ($_.Exception.ToString()) }

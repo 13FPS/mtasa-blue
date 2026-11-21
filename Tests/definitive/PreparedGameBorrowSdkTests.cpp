@@ -94,7 +94,10 @@ namespace
         // provider double below alone selects and faults their publication.
         CGaragesStartupDE           garagesSdk{*this};
         CStreamingStartupDE         streamingSdk{*this};
-        StartupLookup               garagesLookup, streamingLookup;
+        StartupLookup               garagesLookup, streamingLookup, capturedLookup;
+        bool                        wrongReceiver = false;
+        ClockResult                 validationAfterLookup = ClockResult::Ok;
+        unsigned                    constructorWeaponLookups = 0;
         std::array<StartupEvent, 8> startupEvents{};
         unsigned                    startupEventCount = 0;
         bool                        recordStartupEvents = false;
@@ -155,6 +158,34 @@ namespace
         ClockResult GetStartupStreaming(CStreaming*& output) noexcept override
         {
             return SelectStartup(streamingLookup, StartupEvent::Streaming, streamingSdk, output);
+        }
+        template <class T>
+        ClockResult SelectCaptured(T* current, T*& output) noexcept
+        {
+            ++capturedLookup.calls;
+            if (capturedLookup.absent)
+                output = nullptr;
+            else if (wrongReceiver)
+                output = reinterpret_cast<T*>(&foreignServiceTag);
+            else
+                output = current;
+            if (capturedLookup.mutation == LookupMutation::Generation)
+                ++bundle.generation;
+            else if (capturedLookup.mutation == LookupMutation::Bundle)
+                bundle.wanted = reinterpret_cast<CWanted*>(&foreignServiceTag);
+            validationResult = validationAfterLookup;
+            return capturedLookup.result;
+        }
+        ClockResult GetStats(CStats*& output) noexcept override { return SelectCaptured(bundle.stats, output); }
+        ClockResult GetPlayerInfo(CPlayerInfo*& output) noexcept override { return SelectCaptured(bundle.playerInfo, output); }
+        ClockResult GetWeather(CWeather*& output) noexcept override { return SelectCaptured(bundle.weather, output); }
+        ClockResult GetRopes(CRopes*& output) noexcept override { return SelectCaptured(bundle.ropes, output); }
+        ClockResult GetWeaponStatManager(CWeaponStatManager*& output) noexcept override { return SelectCaptured(bundle.weaponManager, output); }
+        ClockResult GetWeaponInfoSlot(std::size_t slot, CWeaponInfo*& output) noexcept override { return SelectCaptured(bundle.weapons.at(slot), output); }
+        ClockResult RequireConstructorWeapons(const CClock* clock, CWeaponStatManager*& output) noexcept override
+        {
+            ++constructorWeaponLookups;
+            return clock == bundle.clock ? SelectCaptured(bundle.weaponManager, output) : ClockResult::OwnerConflict;
         }
         ClockResult CaptureConstructorServices(const CClock* clock, NativeGameConstructorServices& output) noexcept override
         {
@@ -543,6 +574,91 @@ namespace
         }
         std::puts("Production prepared startup service binding SDK fixture completed");
     }
+    // Expose the protected constructor selector without adding a getter to
+    // the generated game. Every call below dispatches through the common SDK.
+    struct WeaponOnlyRoute : CGameDE
+    {
+        static constexpr auto PreparedWeapons = ConstructorServices::PreparedWeapons;
+    };
+    template <class Getter, class T>
+    void CapturedGetter(Context& c, Getter get, T* expected, bool weaponInfo = false)
+    {
+        auto&                       owner = c.owner;
+        auto&                       lookup = owner.capturedLookup;
+        const auto                  original = owner.bundle;
+        prepared_game_fixture::Game prepared(c.reader, c.clock, owner, c.streaming, c.state, original);
+        auto                        refused = [&](ClockResult reason)
+        {
+            try
+            {
+                get(prepared);
+            }
+            catch (const std::runtime_error& error)
+            {
+                const auto status = "(status " + std::to_string(static_cast<std::uint32_t>(reason)) + ")";
+                return std::string(error.what()).find(status) != std::string::npos;
+            }
+            return false;
+        };
+        for (auto mutation : {Owner::LookupMutation::Generation, Owner::LookupMutation::Bundle})
+        {
+            lookup.mutation = mutation;
+            Check(refused(ClockResult::OwnerConflict), "getter must withhold its selected pointer after the prepared generation or another service changes");
+            owner.bundle = original;
+        }
+        lookup = {};
+        auto validations = owner.bundleValidations;
+        Check(get(prepared) == expected && lookup.calls == 1 && owner.bundleValidations == validations + 2,
+              "the healthy prepared getter publishes the matching receiver after two validations around its single lookup");
+        owner.validationAfterLookup = ClockResult::Busy;
+        Check(refused(ClockResult::Busy), "a matching receiver cannot hide the final owner refusal");
+
+        // A native error, missing receiver or mismatched identity is already
+        // decisive. A second owner failure must not replace that earlier result.
+        owner.validationResult = ClockResult::Ok;
+        lookup.result = ClockResult::WrongThread;
+        validations = owner.bundleValidations;
+        Check(refused(ClockResult::WrongThread) && owner.bundleValidations == validations + 1, "native selection error takes precedence");
+        owner.validationResult = ClockResult::Ok;
+        lookup.result = ClockResult::Ok;
+        lookup.absent = true;
+        validations = owner.bundleValidations;
+        Check(refused(weaponInfo ? ClockResult::OwnerConflict : ClockResult::NotInitialized) && owner.bundleValidations == validations + 1,
+              "missing receiver retains its existing SDK refusal before revalidation");
+        owner.validationResult = ClockResult::Ok;
+        lookup.absent = false;
+        owner.wrongReceiver = true;
+        validations = owner.bundleValidations;
+        Check(refused(ClockResult::OwnerConflict) && owner.bundleValidations == validations + 1,
+              "foreign receiver takes precedence over the final owner refusal");
+        owner.wrongReceiver = false;
+        owner.validationResult = owner.validationAfterLookup = ClockResult::Ok;
+
+        prepared_game_fixture::Game unprepared(c.reader, c.clock, owner, c.streaming, c.state);
+        prepared_game_fixture::Game weapons(c.reader, c.clock, owner, c.streaming, c.state, WeaponOnlyRoute::PreparedWeapons);
+        owner.validationResult = owner.validationAfterLookup = ClockResult::Busy;
+        lookup.mutation = Owner::LookupMutation::Generation;
+        validations = owner.bundleValidations;
+        Check(get(unprepared) == expected && get(weapons) == expected && owner.bundleValidations == validations,
+              "unprepared and weapons-only routes admit the native result without constructor-bundle validation");
+        owner.bundle = original;
+        owner.validationResult = owner.validationAfterLookup = ClockResult::Ok;
+        lookup = {};
+    }
+    void CapturedServiceBinding()
+    {
+        Context     c;
+        const auto& b = c.owner.bundle;
+        CapturedGetter(c, [](CGame& game) { return game.GetStats(); }, b.stats);
+        CapturedGetter(c, [](CGame& game) { return game.GetPlayerInfo(); }, b.playerInfo);
+        CapturedGetter(c, [](CGame& game) { return game.GetWeather(); }, b.weather);
+        CapturedGetter(c, [](CGame& game) { return game.GetRopes(); }, b.ropes);
+        const auto weaponLookups = c.owner.constructorWeaponLookups;
+        CapturedGetter(c, [](CGame& game) { return game.GetWeaponStatManager(); }, b.weaponManager);
+        Check(c.owner.constructorWeaponLookups == weaponLookups + 2, "weapons-only constructor and manager getter use the original owner route");
+        CapturedGetter(c, [](CGame& game) { return game.GetWeaponInfo(WEAPONTYPE_PISTOL); }, b.weapons[WEAPONTYPE_PISTOL], true);
+        std::puts("Production prepared constructor service publication SDK fixture completed");
+    }
     Owner*            terminationOwner = nullptr;
     [[noreturn]] void ExpectedDestructorError() noexcept
     {
@@ -576,6 +692,7 @@ int main(int argc, char** argv)
         Refusals();
         ConstructorFailure();
         StartupServiceBinding();
+        CapturedServiceBinding();
         std::printf("Passed %u prepared game borrow SDK checks (%u-bit; CPU provider doubles only)\n", checks, static_cast<unsigned>(sizeof(void*) * 8));
         return 0;
     }

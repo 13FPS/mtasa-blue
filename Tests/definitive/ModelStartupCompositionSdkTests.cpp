@@ -657,11 +657,13 @@ namespace
         Scenario    s;
         CModelInfo& sdk = s.model;
         const auto  reads = s.owner.reads;
-        Check(Refuses([&] { static_cast<void>(sdk.SetCustomModel(nullptr)); }), "custom render replacement stays final and refused");
+        Check(Refuses([&] { static_cast<void>(sdk.SetCustomModel(reinterpret_cast<RpClump*>(&s))); }), "a custom render replacement is refused");
         Check(Refuses([&] { sdk.RestoreOriginalModel(); }), "custom render restore stays final and refused");
-        Check(Refuses([&] { sdk.SetColModel(nullptr); }), "collision replacement stays final and refused");
+        Check(Refuses([&] { sdk.SetColModel(reinterpret_cast<CColModel*>(&s)); }), "a custom collision replacement is refused");
         Check(Refuses([&] { sdk.RestoreColModel(); }), "collision restore stays final and refused");
-        Check(Refuses([&] { sdk.MakeCustomModel(); }), "custom model creation stays final and refused");
+        sdk.MakeCustomModel();
+        sdk.SetColModel(nullptr);
+        Check(!sdk.SetCustomModel(nullptr), "stock model reapplication finishes and an absent replacement clump returns false");
         Check(s.owner.reads == reads && !s.owner.effects && !s.owner.acquires && !s.owner.releases && !sdk.GetRefCount(),
               "replacement refusal cannot invalidate the single unmodified family's native-removal proof");
     }

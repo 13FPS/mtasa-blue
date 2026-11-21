@@ -162,7 +162,7 @@ try {
     if ($unmodifiedHeader -notmatch 'CModelInfoUnmodifiedDE\s*:\s*public\s+CModelInfoDiagnosticsDE') { throw 'Unmodified layer must compose the actual diagnostics base.' }
     if ($unmodifiedHeader -notmatch 'UnloadUnused\s*\(\s*\)\s*final\s+override') { throw 'Actual final UnloadUnused must remain inherited by the fixture.' }
     foreach ($method in @('SetCustomModel','RestoreOriginalModel','SetColModel','RestoreColModel','MakeCustomModel')) {
-        if ($unmodifiedHeader -notmatch ('\b'+$method+'\s*\([^;{}]*\)\s*final\s+override')) { throw ('Unmodified replacement refusal must be final: '+$method) }
+        if ($unmodifiedHeader -notmatch ('\b'+$method+'\s*\([^;{}]*\)\s*final\s+override')) { throw ('Unmodified replacement operation must be final: '+$method) }
     }
     if ($unmodifiedHeader -notmatch 'const\s+ReplacementState\s+replacements\s*\{\s*\}') { throw 'Unmodified layer must own initialized-empty immutable replacement state.' }
     if ($modelMethods.Count -ne 70 -or $streamingMethods.Count -ne 10) { throw 'Actual model22/70 or streaming12/10 fixture partition changed' }

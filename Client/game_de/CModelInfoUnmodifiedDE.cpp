@@ -19,8 +19,8 @@ namespace mta::game_de
     void CModelInfoUnmodifiedDE::RemoveNativeModelInterfaceReference()
     {
         // Source Remove tests these wrapper-owned fields after decrement.
-        // Here their actual initialized-empty state is immutable and every
-        // replacement entry point refuses. This grants no native/global claim.
+        // This family refuses installation of either replacement, so its
+        // wrapper-owned fields remain empty across streaming requests.
         if (replacements.customClump || replacements.customCollision)
             throw std::logic_error("DE unmodified model replacement ownership changed");
         ReleaseUnmodifiedBackingReference();
@@ -40,16 +40,20 @@ namespace mta::game_de
     {
         throw std::runtime_error(std::string("DE unmodified model does not support ") + operation);
     }
-    bool CModelInfoUnmodifiedDE::SetCustomModel(RpClump*)
+    bool CModelInfoUnmodifiedDE::SetCustomModel(RpClump* clump)
     {
+        if (!clump)
+            return false;
         ReplacementUnsupported("SetCustomModel");
     }
     void CModelInfoUnmodifiedDE::RestoreOriginalModel()
     {
         ReplacementUnsupported("RestoreOriginalModel");
     }
-    void CModelInfoUnmodifiedDE::SetColModel(CColModel*)
+    void CModelInfoUnmodifiedDE::SetColModel(CColModel* collision)
     {
+        if (!collision)
+            return;
         ReplacementUnsupported("SetColModel");
     }
     void CModelInfoUnmodifiedDE::RestoreColModel()
@@ -58,6 +62,11 @@ namespace mta::game_de
     }
     void CModelInfoUnmodifiedDE::MakeCustomModel()
     {
-        ReplacementUnsupported("MakeCustomModel");
+        // The client calls this for every streamed model before creating its
+        // entity. A stock model has no saved render or collision replacement.
+        if (replacements.customClump)
+            SetCustomModel(replacements.customClump);
+        if (replacements.customCollision)
+            SetColModel(replacements.customCollision);
     }
 }

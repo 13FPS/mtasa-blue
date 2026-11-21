@@ -30,7 +30,7 @@ namespace mta::game_de
 
     private:
         // Match the actual SA constructor's two CPU-owned null fields, not
-        // the ordinary engine RW/collision pointers. Final refusal routes
+        // the ordinary engine RW/collision pointers. The final setters
         // prevent derived implementations from silently invalidating this proof.
         struct ReplacementState
         {

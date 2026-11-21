@@ -268,13 +268,16 @@ namespace
                   s.owner.renews == 0 && s.owner.classificationReads == 0 && s.streamingOwner.queries == 0,
               "construction claims one CPU family without request, readiness, native acquisition or release effects");
         const auto reads = s.owner.reads;
-        Refuses([&] { static_cast<void>(sdk.SetCustomModel(nullptr)); });
+        sdk.MakeCustomModel();
+        Check(!sdk.SetCustomModel(nullptr), "an absent replacement clump returns the classic false result");
+        Refuses([&] { static_cast<void>(sdk.SetCustomModel(reinterpret_cast<RpClump*>(&s))); });
         Refuses([&] { sdk.RestoreOriginalModel(); });
-        Refuses([&] { sdk.SetColModel(nullptr); });
+        sdk.SetColModel(nullptr);
+        Refuses([&] { sdk.SetColModel(reinterpret_cast<CColModel*>(&s)); });
         Refuses([&] { sdk.RestoreColModel(); });
-        Refuses([&] { sdk.MakeCustomModel(); });
+        sdk.MakeCustomModel();
         Check(sdk.GetRefCount() == 0 && s.owner.reads == reads && s.owner.acquires == 0 && s.owner.releases == 0 && s.owner.renews == 0,
-              "five inherited final refusals cannot mutate private immutable replacement state or invoke the owner");
+              "reapplying a stock model after refused replacements leaves its reference family untouched");
     }
     void CycleChecks()
     {

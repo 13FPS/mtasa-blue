@@ -329,8 +329,8 @@ replacement features and playable full MTA remain unfinished.
 ## Current offline cohort: unmodified model families and reference cycles (2026-10-26)
 
 A separate partial model layer now owns the source constructor's two null MTA
-replacement fields. Its five replacement entry points explicitly refuse, so
-derived implementations cannot invalidate that initialized-empty domain. This
+replacement fields. Its final setters refuse custom clumps and collision models.
+Stock model requests can reapply the empty replacement state. This
 proves the wrapper's own state, without claiming engine-wide or native replacement
 absence. The layer uses the actual native removal hook only under that positive
 domain and inherits the existing real Core reporting layer without a diamond or

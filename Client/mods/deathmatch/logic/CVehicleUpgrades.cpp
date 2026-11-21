@@ -632,7 +632,11 @@ bool CVehicleUpgrades::ForceAddUpgrade(unsigned short usUpgrade)
         if (!pModelInfo)
             return false;
         if (!g_pGame->IsASyncLoadingEnabled() || !pModelInfo->IsLoaded())
+        {
             pModelInfo->Request(BLOCKING, "CVehicleUpgrades::ForceAddUpgrade");
+            if (!pModelInfo->IsLoaded())
+                return false;
+        }
         pVehicle->AddVehicleUpgrade(usUpgrade);
     }
 

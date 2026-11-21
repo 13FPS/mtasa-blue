@@ -37,7 +37,7 @@ struct CModelInfo
 {
     unsigned                  parent = 0, reads = 0, requests = 0;
     SVehicleSupportedUpgrades support;
-    bool                      loaded = true;
+    bool                      loaded = true, loadSucceeds = true;
     unsigned                  GetParentID() { return parent; }
     SVehicleSupportedUpgrades GetVehicleSupportedUpgrades()
     {
@@ -48,7 +48,7 @@ struct CModelInfo
     void Request(int, const char*)
     {
         ++requests;
-        loaded = true;
+        loaded = loadSucceeds;
     }
 };
 struct CVehicle
@@ -60,8 +60,9 @@ struct CVehicle
 struct Game
 {
     std::array<CModelInfo*, 2048> models{};
+    bool                          asyncLoading = true;
     CModelInfo*                   GetModelInfo(unsigned id) { return models.at(id); }
-    bool                          IsASyncLoadingEnabled() { return true; }
+    bool                          IsASyncLoadingEnabled() { return asyncLoading; }
 };
 Game* g_pGame;
 class CClientEntity
@@ -157,5 +158,32 @@ int main()
     Check(!Script::RemoveVehicleUpgrade(client, 1073) && client.wheelResets == 2 && native.removes == 1, "duplicate removal has no side effects");
     game.models[1008] = &upgrade;
     Check(Script::AddVehicleUpgrade(client, 1008) && upgrades.AddUpgrade(1008, false) && native.adds == 3, "server echo of local nitro must not apply twice");
+
+    upgrades.RemoveAll(false);
+    Check(Script::AddVehicleUpgrade(client, 1073), "install a wheel before attempting replacement");
+    CModelInfo otherWheel;
+    game.models[1074] = &otherWheel;
+    otherWheel.loaded = otherWheel.loadSucceeds = false;
+    const auto adds = native.adds, resets = client.wheelResets;
+    for (bool async : {true, false})
+    {
+        game.asyncLoading = async;
+        Check(!Script::AddVehicleUpgrade(client, 1074), "a blocking request that leaves the wheel unloaded must report failure");
+        Check(upgrades.GetSlotState(12) == 1073 && native.adds == adds && client.wheelResets == resets,
+              "failed wheel replacement must preserve the live slot and wheel scale");
+    }
+    Check(otherWheel.requests == 2, "each loading policy tried its normal blocking request");
+    game.asyncLoading = true;
+    client.native = nullptr;
+    Check(upgrades.AddUpgrade(1074, false) && otherWheel.requests == 2, "streamed-out network wheel waits for the next stream-in");
+    client.native = &native;
+    const auto queuedResets = client.wheelResets;
+    upgrades.ReAddAll();
+    Check(upgrades.HasUpgrade(1074) && otherWheel.requests == 3 && native.adds == adds && client.wheelResets == queuedResets,
+          "a failed stream-in load retains its queued wheel and skips scale changes");
+    otherWheel.loadSucceeds = true;
+    upgrades.RestreamVehicleUpgrades(1074);
+    Check(otherWheel.requests == 4 && native.adds == adds + 1 && client.wheelResets == queuedResets + 1,
+          "restreaming applies the queued wheel once after the model becomes available");
     std::puts("PASS vehicle upgrade client application, streaming and script results");
 }

@@ -28,13 +28,21 @@ void CClientModelManager::RemoveAll(void)
     const unsigned int uiMaxModelID = g_pGame->GetBaseIDforCOL();
     for (unsigned int i = 0; i < uiMaxModelID; i++)
     {
-        m_Models[i] = nullptr;
+        auto model = std::move(m_Models[i]);
+        if (model)
+        {
+            model->SetParentResource(nullptr);
+            if (model->GetModelType() == eClientModelType::TXD)
+                model->Deallocate();
+        }
     }
     m_modelCount = 0;
 }
 
 void CClientModelManager::Add(const std::shared_ptr<CClientModel>& pModel)
 {
+    if (!pModel || !pModel->m_bAllocatedByUs || pModel->GetModelID() < 0 || static_cast<unsigned>(pModel->GetModelID()) >= g_pGame->GetBaseIDforCOL())
+        return;
     if (m_Models[pModel->GetModelID()] != nullptr)
     {
         dassert(m_Models[pModel->GetModelID()].get() == pModel.get());
@@ -46,22 +54,18 @@ void CClientModelManager::Add(const std::shared_ptr<CClientModel>& pModel)
 
 bool CClientModelManager::Remove(const std::shared_ptr<CClientModel>& pModel)
 {
-    int modelId = pModel->GetModelID();
-
-    if (m_Models[modelId] != nullptr)
-    {
-        CResource* parentResource = m_Models[modelId]->GetParentResource();
-
-        if (parentResource)
-            parentResource->GetResourceModelStreamer()->FullyReleaseModel(static_cast<std::uint16_t>(modelId));
-
-        m_Models[modelId]->RestoreEntitiesUsingThisModel();
-        m_Models[modelId] = nullptr;
-        m_modelCount--;
-        return true;
-    }
-
-    return false;
+    if (!pModel || FindModelByID(pModel->GetModelID()) != pModel)
+        return false;
+    const int modelId = pModel->GetModelID();
+    // Restoration dispatches Lua events. Detach this registration before callbacks
+    // and keep the model alive while its entities release their shared references.
+    auto model = std::move(m_Models[modelId]);
+    --m_modelCount;
+    if (auto* resource = model->GetParentResource())
+        resource->GetResourceModelStreamer()->FullyReleaseModel(static_cast<std::uint16_t>(modelId));
+    model->SetParentResource(nullptr);
+    model->RestoreEntitiesUsingThisModel();
+    return true;
 }
 
 int CClientModelManager::GetFirstFreeModelID(void)
@@ -70,7 +74,7 @@ int CClientModelManager::GetFirstFreeModelID(void)
     for (unsigned int i = 0; i < uiMaxModelID; i++)
     {
         CModelInfo* pModelInfo = g_pGame->GetModelInfo(i, true);
-        if (!pModelInfo->IsValid())
+        if (!m_Models[i] && pModelInfo && !pModelInfo->IsValid())
         {
             return i;
         }
@@ -101,14 +105,9 @@ std::shared_ptr<CClientModel> CClientModelManager::FindModelByID(int iModelID)
 
 std::shared_ptr<CClientModel> CClientModelManager::Request(CClientManager* pManager, int iModelID, eClientModelType eType)
 {
-    std::shared_ptr<CClientModel> pModel = FindModelByID(iModelID);
-    if (pModel == nullptr)
-    {
-        pModel = std::make_shared<CClientModel>(pManager, iModelID, eType);
-    }
-
-    pModel->m_eModelType = eType;
-    return pModel;
+    if (iModelID < 0 || static_cast<unsigned>(iModelID) >= g_pGame->GetBaseIDforCOL() || m_Models[iModelID])
+        return nullptr;
+    return std::make_shared<CClientModel>(pManager, iModelID, eType);
 }
 
 std::vector<std::shared_ptr<CClientModel>> CClientModelManager::GetModelsByType(const eClientModelType type, const unsigned int minModelID)

@@ -920,7 +920,6 @@ int CLuaEngineDefs::EngineRequestModel(lua_State* luaVM)
                 if (iModelID != INVALID_MODEL_ID)
                 {
                     std::shared_ptr<CClientModel> pModel = m_pManager->GetModelManager()->Request(m_pManager, iModelID, eModelType);
-                    m_pManager->GetModelManager()->Add(pModel);
 
                     ushort usParentID = -1;
 
@@ -953,15 +952,15 @@ int CLuaEngineDefs::EngineRequestModel(lua_State* luaVM)
                         }
                     }
 
-                    if (pModel->Allocate(usParentID))
+                    if (pModel && pModel->Allocate(usParentID))
                     {
                         pModel->SetParentResource(pResource);
+                        m_pManager->GetModelManager()->Add(pModel);
 
                         lua_pushinteger(luaVM, iModelID);
                         return 1;
                     }
 
-                    m_pManager->GetModelManager()->Remove(pModel);
                     argStream.SetCustomError("Expected valid original model ID at argument 2");
                 }
             }
@@ -2516,7 +2515,7 @@ bool CLuaEngineDefs::EngineRestreamWorld()
     return true;
 }
 
-uint CLuaEngineDefs::EngineRequestTXD(lua_State* const luaVM, std::string strTxdName)
+std::variant<bool, uint> CLuaEngineDefs::EngineRequestTXD(lua_State* const luaVM, std::string strTxdName)
 {
     if (strTxdName.size() > 24)
         throw std::invalid_argument("TXD name length shoudn't be more than 24 characters");
@@ -2527,11 +2526,12 @@ uint CLuaEngineDefs::EngineRequestTXD(lua_State* const luaVM, std::string strTxd
 
     std::shared_ptr<CClientModel> pModel = m_pManager->GetModelManager()->Request(m_pManager, iModelID, eClientModelType::TXD);
 
-    pModel->AllocateTXD(strTxdName);
+    if (!pModel || !pModel->AllocateTXD(strTxdName))
+        return false;
     pModel->SetParentResource(m_pLuaManager->GetVirtualMachine(luaVM)->GetResource());
     m_pManager->GetModelManager()->Add(pModel);
 
-    return iModelID - MAX_MODEL_DFF_ID;
+    return static_cast<uint>(iModelID - MAX_MODEL_DFF_ID);
 }
 
 bool CLuaEngineDefs::EngineFreeTXD(uint txdID)

@@ -27,6 +27,7 @@ enum class eClientModelType
 
 class CResource;
 class CClientManager;
+class CBaseModelInfoSAInterface;
 
 class CClientModel final
 {
@@ -52,8 +53,9 @@ private:
 protected:
     CClientManager* m_pManager;
 
-    int              m_iModelID;
-    eClientModelType m_eModelType;
-    bool             m_bAllocatedByUs = false;
-    CResource*       m_pParentResource = nullptr;  // Resource that allocated model
+    int                        m_iModelID;
+    eClientModelType           m_eModelType;
+    bool                       m_bAllocatedByUs = false;
+    CBaseModelInfoSAInterface* m_pAllocatedModelInterface = nullptr;
+    CResource*                 m_pParentResource = nullptr;  // Resource that allocated model
 };

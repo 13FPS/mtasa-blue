@@ -25,10 +25,34 @@ void WriteBindingFixture(const std::filesystem::path& path, const std::string& b
     std::filesystem::create_directories(path.parent_path());
     std::ofstream stream(path, std::ios::binary | std::ios::trunc);
     stream.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-    Check(stream.good(), "write only the explicitly owned invalid-load fixture");
+    Check(stream.good(), "write the explicitly owned movement binding fixture");
 }
 
-void CheckMovementFile(const std::string& bytes)
+void SeedForwardAlternates(const std::filesystem::path& file)
+{
+    auto       bytes = ReadBindingFixture(file);
+    const auto primary = bytes.find("key=\"i\"");
+    Check(primary != std::string::npos, "locate the actual generated forwards binding");
+    const auto start = bytes.rfind('\n', primary);
+    const auto end = bytes.find('>', primary);
+    Check(start != std::string::npos && end != std::string::npos, "locate one complete generated binding line");
+    const auto newlineStart = start > 0 && bytes[start - 1] == '\r' ? start - 1 : start;
+    const auto record = bytes.substr(newlineStart, end - newlineStart + 1);
+    const auto insertAt = bytes.rfind('>', bytes.find("</binds>") - 1);
+    Check(insertAt != std::string::npos, "locate the last existing movement record");
+    std::string alternates;
+    for (const char key : std::string("zxcvbn"))
+    {
+        auto copy = record;
+        copy[primary - newlineStart + 5] = key;
+        alternates += copy;
+    }
+    // Alternate records follow the other five controls to cover interleaved XML.
+    bytes.insert(insertAt + 1, alternates);
+    WriteBindingFixture(file, bytes);
+}
+
+void CheckMovementFile(const std::string& bytes, const std::vector<const char*>& forwards = {"i"})
 {
     constexpr std::array<const char*, 6> controls{"forwards", "backwards", "left", "right", "sprint", "walk"};
     constexpr std::array<const char*, 6> keys{"i", "k", "j", "l", "u", "o"};
@@ -47,8 +71,10 @@ void CheckMovementFile(const std::string& bytes)
         {
             if (record.find(std::string("control=\"") + controls[index] + '"') == std::string::npos)
                 continue;
-            Check(record.find(std::string("key=\"") + keys[index] + '"') != std::string::npos && !found[index]++,
-                  "generated movement record retains its applied key exactly once");
+            Check(found[index] < (index == 0 ? forwards.size() : 1), "generated movement file preserves the expected binding count per control");
+            const char* expected = index == 0 ? forwards[found[index]] : keys[index];
+            Check(record.find(std::string("key=\"") + expected + '"') != std::string::npos, "generated movement keys retain their primary and alternate order");
+            ++found[index];
             matched = true;
         }
         Check(matched && record.find("command=") == std::string::npos && record.find("arguments=") == std::string::npos,
@@ -56,7 +82,7 @@ void CheckMovementFile(const std::string& bytes)
         ++records;
         cursor = end + 1;
     }
-    Check(records == controls.size() && std::all_of(found.begin(), found.end(), [](auto count) { return count == 1; }) &&
+    Check(records == controls.size() - 1 + forwards.size() &&
               bytes.find("host_preserve") == std::string::npos && bytes.find("control=\"fire\"") == std::string::npos,
           "all six movements persist while unrelated command and control binds stay outside the durable file");
 }
@@ -143,7 +169,7 @@ void BindingPersistenceOwner(Owned& owned, const std::filesystem::path& root, bo
     const auto enabled = RuntimeState(owned);
     Check(enabled[Runtime::ConfigurationReadOnly] == 0 && !enabled[Runtime::ViewBorrowed] && !enabled[Runtime::ViewsAttached] &&
               enabled[Runtime::BindingManagerCreations] == (restarted ? 2u : 1u) && enabled[Runtime::BindingLoads] == (restarted ? 2u : 1u) &&
-              enabled[Runtime::BindCount] == before[Runtime::BindCount],
+              enabled[Runtime::BindCount] == before[Runtime::BindCount] + (restarted ? 6u : 0u),
           "existing disk bindings commit to the hidden actual manager before local-input configuration can borrow it");
     Check(call(owned.startup, file) == Frontend::Status::Ok && RuntimeState(owned) == enabled &&
               call(owned.startup, root / L"other-binding-fixture/definitive/keybinds.xml") == Frontend::Status::Busy && RuntimeState(owned) == enabled,
@@ -246,9 +272,9 @@ void BindingPersistenceSettings(Owned& owned, const std::filesystem::path& root,
         }
         Check(count == controls.size() && grid->GetRowCount() == 7, "nonmovement and command fixture bindings never appear in the constrained Settings grid");
     };
-    const auto capture = [&](std::size_t index, WPARAM key)
+    const auto capture = [&](std::size_t index, WPARAM key, unsigned column = 2)
     {
-        grid->SetSelectedItem(rows[index], 2, true);
+        grid->SetSelectedItem(rows[index], column, true);
         Check(grid->Event_OnDoubleClick() && message(WM_KEYDOWN, key), "real durable Settings capture stages the requested key");
         message(WM_KEYUP, key);
     };
@@ -268,14 +294,48 @@ void BindingPersistenceSettings(Owned& owned, const std::filesystem::path& root,
         inspect(applied);
         button(observed.settingsCancel);
     }
+    else if (restarted && view == 1)
+    {
+        const auto inspectColumns = [&](std::array<const char*, 4> expected)
+        {
+            inspect(applied);
+            for (unsigned slot = 0; slot < expected.size(); ++slot)
+                Check(grid->GetItemText(rows[0], 2 + slot) == std::string(expected[slot]), "reopened grid displays the first four durable keys in order");
+        };
+        const auto applyAndReopen = [&]
+        {
+            button(observed.settingsApply);
+            Check(!window->IsVisible(), "Apply commits the edited alternate keys");
+            open();
+        };
+        inspectColumns({"i", "z", "x", "c"});
+        const auto original = ReadBindingFixture(file);
+        applyAndReopen();
+        inspectColumns({"i", "z", "x", "c"});
+        Check(ReadBindingFixture(file) == original, "no-op Apply preserves interleaved movement XML byte for byte including six alternates");
+        capture(0, 'X', 3);
+        capture(0, 'Z', 4);
+        applyAndReopen();
+        inspectColumns({"i", "x", "z", "c"});
+        CheckMovementFile(ReadBindingFixture(file), {"i", "x", "z", "c", "v", "b", "n"});
+        capture(0, VK_ESCAPE, 5);
+        applyAndReopen();
+        inspectColumns({"i", "x", "z", "v"});
+        CheckMovementFile(ReadBindingFixture(file), {"i", "x", "z", "v", "b", "n"});
+        capture(0, 'B', 4);
+        applyAndReopen();
+        inspectColumns({"i", "x", "b", "v"});
+        CheckMovementFile(ReadBindingFixture(file), {"i", "x", "b", "v", "n"});
+        button(observed.settingsCancel);
+    }
     else
     {
         inspect(applied);
         button(observed.settingsCancel);
     }
     const auto saved = ReadBindingFixture(file);
-    CheckMovementFile(saved);
-    Check(state()[Bindings::BindCount] == before[Bindings::BindCount] && state()[Bindings::BindCount] == 8 &&
+    CheckMovementFile(saved, restarted ? std::vector<const char*>{"i", "x", "b", "v", "n"} : std::vector<const char*>{"i"});
+    Check(state()[Bindings::BindCount] == (restarted ? 12u : 8u) &&
               state()[Bindings::IgnoredBindings] == before[Bindings::IgnoredBindings] && state()[Bindings::IgnoredBindings] == 1,
           "Apply and reload preserve the base manager's unrelated control and command binding counts");
     open();

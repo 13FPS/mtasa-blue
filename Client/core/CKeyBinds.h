@@ -192,6 +192,14 @@ public:
     bool TriggerKeyStrokeHandler(const SString& strKey, bool bState, bool bIsConsoleInputKey);
 
 private:
+    friend class CSettings;
+    struct ControlBindingOrder
+    {
+        SBindableGTAControl*             control;
+        std::vector<const SBindableKey*> keys;
+    };
+    bool ApplyFrontendControlBindingOrder(const std::vector<ControlBindingOrder>& controls);
+
     bool DispatchConfiguredControlBind(CGTAControlBind* bind, bool down, bool allowPress);
     bool ProcessConfiguredControlKey(const SBindableKey* key, bool down, bool allowPress, std::uint64_t allowedActions);
 

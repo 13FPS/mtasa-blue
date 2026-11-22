@@ -1530,6 +1530,103 @@ bool CKeyBinds::GetBoundControls(SBindableGTAControl* pControl, std::list<CGTACo
     return true;
 }
 
+bool CKeyBinds::ApplyFrontendControlBindingOrder(const std::vector<ControlBindingOrder>& controls)
+{
+    if (m_bProcessingKeyStroke)
+        return false;
+
+    // Build the new order before changing any records borrowed by the grid.
+    // List iterators remain valid when their nodes move between the three lists.
+    struct Rename
+    {
+        CGTAControlBind*    bind;
+        const SBindableKey* newKey;
+        const SBindableKey* heldKey;
+    };
+    std::vector<Rename>                     renames;
+    KeyBindContainer                        added;
+    std::vector<KeyBindContainer::iterator> order;
+    std::vector<size_t>                     slots(controls.size());
+    const auto append = [&](const ControlBindingOrder& control, const SBindableKey* key, KeyBindContainer::iterator slot)
+    {
+        auto record = std::find_if(m_binds.begin(), m_binds.end(), [&](const KeyBindPtr& bind)
+        {
+            return !bind->isBeingDeleted && bind->type == KeyBindType::GTA_CONTROL && bind->boundKey == key &&
+                   static_cast<CGTAControlBind*>(bind.get())->control == control.control;
+        });
+        if (record != m_binds.end())
+            order.push_back(record);
+        else if (slot != m_binds.end() && std::find(control.keys.begin(), control.keys.end(), (*slot)->boundKey) == control.keys.end())
+        {
+            // A newly named slot can reuse its original grid record when no
+            // other slot needs that key. A rename never carries a held press.
+            auto* bind = static_cast<CGTAControlBind*>(slot->get());
+            renames.push_back({bind, key, bind->state ? bind->boundKey : nullptr});
+            order.push_back(slot);
+        }
+        else
+        {
+            auto bind = std::make_unique<CGTAControlBind>();
+            bind->boundKey = key;
+            bind->control = control.control;
+            added.push_back(std::move(bind));
+            order.push_back(std::prev(added.end()));
+        }
+    };
+
+    for (auto record = m_binds.begin(); record != m_binds.end(); ++record)
+    {
+        auto control = controls.end();
+        if (!(*record)->isBeingDeleted && (*record)->type == KeyBindType::GTA_CONTROL)
+        {
+            auto* action = static_cast<CGTAControlBind*>(record->get())->control;
+            control = std::find_if(controls.begin(), controls.end(), [action](const ControlBindingOrder& edit) { return edit.control == action; });
+        }
+        if (control == controls.end())
+            order.push_back(record);
+        else
+        {
+            auto& slot = slots[control - controls.begin()];
+            if (slot < control->keys.size())
+                append(*control, control->keys[slot++], record);
+        }
+    }
+    for (size_t index = 0; index < controls.size(); ++index)
+        for (auto& slot = slots[index]; slot < controls[index].keys.size(); ++slot)
+            append(controls[index], controls[index].keys[slot], m_binds.end());
+
+    KeyBindContainer ordered;
+    m_binds.splice(m_binds.end(), added);
+    for (auto record : order)
+        ordered.splice(ordered.end(), m_binds, record);
+    m_binds.swap(ordered);
+    for (const auto& rename : renames)
+    {
+        rename.bind->boundKey = rename.newKey;
+        rename.bind->state = false;
+    }
+    // Retained keys carry their original pressed state. Removing a held key can
+    // release the action, unless another retained key for the action is held.
+    const auto releaseHeld = [&](SBindableGTAControl* control, const SBindableKey* key)
+    {
+        if (control->bEnabled)
+            ResetGTAControlState(control);
+        if (std::none_of(m_binds.begin(), m_binds.end(), [key](const KeyBindPtr& other)
+            { return !other->isBeingDeleted && other->isActive && other->type == KeyBindType::GTA_CONTROL && other->boundKey == key; }))
+            GetBindableKeyState(key) = false;
+    };
+    for (const auto& rename : renames)
+        if (rename.heldKey)
+            releaseHeld(rename.bind->control, rename.heldKey);
+    for (const auto& removed : ordered)
+    {
+        auto* bind = static_cast<CGTAControlBind*>(removed.get());
+        if (bind->state)
+            releaseHeld(bind->control, bind->boundKey);
+    }
+    return true;
+}
+
 bool CKeyBinds::AddFunction(const char* szKey, KeyFunctionBindHandler Handler, bool bState, bool bIgnoreGUI)
 {
     if (!szKey)

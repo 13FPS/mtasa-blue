@@ -869,16 +869,16 @@ namespace
     {
         return std::uint64_t{state[field]} | (std::uint64_t{state[field + 1]} << 32);
     }
-    void RuntimeHidden(const Runtime::Snapshot& state, unsigned views, bool writable = false)
+    void RuntimeHidden(const Runtime::Snapshot& state, unsigned views, unsigned bindingManagers = 1)
     {
         Check(state[Startup::Phase] == 2 && state[Startup::CoreRetained] && state[Startup::BackendStarted] && !state[Startup::FrontendRetained] &&
                   !state[Startup::GuiBorrowed] && !state[Startup::ServicesRetained] && state[Startup::LastViewCleanupComplete] &&
                   state[Runtime::RuntimePhase] == static_cast<std::uint32_t>(Runtime::Phase::Hidden) && state[Runtime::ServicesInitialized] &&
                   state[Runtime::ServicesRetained] && state[Runtime::XmlRetained] && state[Runtime::ConfigRetained] && state[Runtime::CVarsLoaded] &&
-                  state[Runtime::BindingsRetained] && state[Runtime::BindingManagerCreations] == (writable ? 2u : 1u) &&
-                  state[Runtime::ConfigurationLoads] == 1 && state[Runtime::BindingLoads] == (writable ? 2u : 1u) && state[Runtime::ViewsAttached] == views &&
+                  state[Runtime::BindingsRetained] && state[Runtime::BindingManagerCreations] == bindingManagers &&
+                  state[Runtime::ConfigurationLoads] == 1 && state[Runtime::BindingLoads] == bindingManagers && state[Runtime::ViewsAttached] == views &&
                   state[Runtime::ViewsRetired] == views && !state[Runtime::ViewBorrowed] && state[Runtime::HiddenNeutralVerified] &&
-                  state[Runtime::ConfigurationReadOnly] == !writable && !state[Runtime::CleanupPending] && !state[Runtime::CleanupComplete],
+                  state[Runtime::ConfigurationReadOnly] == (bindingManagers == 1) && !state[Runtime::CleanupPending] && !state[Runtime::CleanupComplete],
               "hidden runtime retains exactly one real XML/CVars/bindings owner with neutral view aliases");
     }
 
@@ -928,9 +928,9 @@ namespace
             Check(row >= 0, "runtime view exposes configured Forwards from its real manager");
             return row;
         };
-        const auto capture = [&](int row, WPARAM key)
+        const auto capture = [&](int row, WPARAM key, int column = 2)
         {
-            grid->SetSelectedItem(row, 2, true);
+            grid->SetSelectedItem(row, column, true);
             Check(grid->Event_OnDoubleClick() && message(WM_KEYDOWN, key), "real runtime capture consumes the staged binding key");
             message(WM_KEYUP, key);
         };
@@ -938,12 +938,30 @@ namespace
         int row = forwards();
         if (!secondView)
         {
-            capture(row, 'I');
-            Check(grid->GetItemText(row, 2) == std::string("i"), "first runtime view stages Forwards I");
+            capture(row, 'J');
+            capture(row, 'I', 3);
+            capture(row, 'K', 4);
             button(observed.settingsApply);
             Check(!window->IsVisible(), "first runtime view applies through the actual Settings callback");
             open();
             row = forwards();
+            auto* keyJ = grid->GetItemData(row, 2);
+            auto* keyI = grid->GetItemData(row, 3);
+            auto* keyK = grid->GetItemData(row, 4);
+            Check(keyJ && keyI && keyK, "session Apply creates the actual primary and two alternates");
+            capture(row, 'I');
+            capture(row, 'K', 3);
+            capture(row, 'J', 4);
+            button(observed.settingsApply);
+            open();
+            row = forwards();
+            Check(grid->GetItemData(row, 2) == keyI && grid->GetItemData(row, 3) == keyK && grid->GetItemData(row, 4) == keyJ,
+                  "swapping the primary and alternates keeps all three original session bind records");
+            button(observed.settingsApply);
+            open();
+            row = forwards();
+            Check(grid->GetItemData(row, 2) == keyI && grid->GetItemData(row, 3) == keyK && grid->GetItemData(row, 4) == keyJ,
+                  "no-op session Apply preserves primary and alternate identity and order");
         }
         auto* bind = static_cast<CGTAControlBind*>(grid->GetItemData(row, 2));
         Check(grid->GetItemText(row, 2) == std::string("i") && std::string(bind->boundKey->szKey) == "i",
@@ -955,14 +973,16 @@ namespace
             // Dereference only the freshly borrowed second-view grid record.
             Check(identity == previousIdentity, "fresh second GUI view borrows the identical retained MTA control record");
             capture(row, 'O');
+            capture(row, 'P', 3);
             Check(grid->GetItemText(row, 2) == std::string("o") && std::string(bind->boundKey->szKey) == "i",
                   "second runtime view stages O without changing actual retained I");
             button(observed.settingsCancel);
             open();
             row = forwards();
             bind = static_cast<CGTAControlBind*>(grid->GetItemData(row, 2));
-            Check(grid->GetItemText(row, 2) == std::string("i") && std::string(bind->boundKey->szKey) == "i",
-                  "second-view Cancel discards O across an actual grid rebuild");
+            Check(grid->GetItemText(row, 2) == std::string("i") && std::string(bind->boundKey->szKey) == "i" &&
+                      grid->GetItemText(row, 3) == std::string("k") && grid->GetItemText(row, 4) == std::string("j"),
+                  "second-view Cancel discards primary and alternate edits across an actual grid rebuild");
             grid->SetSelectedItem(row, 2, true);
             Check(grid->Event_OnDoubleClick() && message(WM_CHAR, 'P'), "runtime hide retains a real modal capture for teardown coverage");
             settingsCaptureRetainedForCleanup = true;
@@ -1298,7 +1318,10 @@ namespace
                           "retired frontend identity cannot reload or select a durable file");
                 }
                 const auto hidden = RuntimeState(owned);
-                RuntimeHidden(hidden, view, persistence);
+                // A fresh persisted owner loads the base and movement XML, then
+                // commits a new manager for each of the four alternate-key Applies.
+                const unsigned bindingManagers = persistenceRestart ? 6u : (persistence ? 2u : 1u);
+                RuntimeHidden(hidden, view, bindingManagers);
                 if (interaction)
                     RuntimeLoggerRetained(root, true);
                 Check(RuntimePair(hidden, Runtime::SessionGenerationLow) == session && GetModuleHandleW(L"xmll.dll") && configBytes() == originalConfig,
@@ -1315,8 +1338,8 @@ namespace
                     Check(disabled[LocalInput::Phase] == static_cast<std::uint32_t>(LocalInput::State::Disabled) && !disabled[LocalInput::Configured] &&
                               !disabled[LocalInput::Enabled] && !disabled[LocalInput::BindingsBorrowed] && !disabled[LocalInput::NativeAttempted] &&
                               !disabled[LocalInput::CleanupPending] && disabled[LocalInput::CleanupComplete] && disabled[LocalInput::CanonicalNeutral] &&
-                              RuntimeState(owned)[Runtime::BindingManagerCreations] == (persistence ? 2u : 1u) &&
-                              RuntimeState(owned)[Runtime::ConfigurationLoads] == 1 && RuntimeState(owned)[Runtime::BindingLoads] == (persistence ? 2u : 1u),
+                              RuntimeState(owned)[Runtime::BindingManagerCreations] == bindingManagers &&
+                              RuntimeState(owned)[Runtime::ConfigurationLoads] == 1 && RuntimeState(owned)[Runtime::BindingLoads] == bindingManagers,
                           "disabled local producer leaves no native debt and retains one actual manager/configuration for the second I/CancelO view");
                     Check(owned.suspendLocal(owned.startup) == Frontend::Status::Ok && localState() == disabled,
                           "Suspend after Disable remains idempotently Disabled with unchanged qualified neutral values");
@@ -1528,13 +1551,15 @@ int wmain(int argc, wchar_t** argv)
             RuntimeSessionCase(owned, root, mode, startup, frontend);
             if (mode == L"runtime-persistence")
             {
-                const auto saved = ReadBindingFixture(BindingFixturePath(root));
+                const auto file = BindingFixturePath(root);
+                SeedForwardAlternates(file);
+                CheckMovementFile(ReadBindingFixture(file), {"i", "z", "x", "c", "v", "b", "n"});
                 Check(owned.localWindow && DestroyWindow(owned.localWindow), "retire the first owned local HWND before creating a fresh Core runtime");
                 owned.localWindow = nullptr;
                 owned.observed.reset();
                 RuntimeSessionCase(owned, root, mode, startup, frontend, true);
-                Check(bindingPersistenceRestartVerified && ReadBindingFixture(BindingFixturePath(root)) == saved,
-                      "a newly constructed Core reloads all six disk bindings without rewriting their generated document");
+                Check(bindingPersistenceRestartVerified, "a newly constructed Core reloads disk bindings and retains edits across both Settings views");
+                CheckMovementFile(ReadBindingFixture(file), {"i", "x", "b", "v", "n"});
             }
             bool legacyUnchanged = true;
             for (std::uint32_t index = 0; index < legacy.size(); ++index)

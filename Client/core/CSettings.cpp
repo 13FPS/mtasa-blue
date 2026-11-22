@@ -3451,9 +3451,9 @@ bool CSettings::StageFrontendBindingEdits(CKeyBinds& target)
 {
     if (!IsFrontendBindings() || m_bCaptureKey || !m_pBindsList)
         return false;
-    // GUI rows still borrow the current manager. Apply to an XML-cloned actual
-    // manager by control identity, never by writing those borrowed bind pointers.
-    std::vector<SBindableGTAControl*> seen;
+    // Read every borrowed row before committing to either the live session
+    // manager or the durable Apply transaction's separate XML clone.
+    std::vector<CKeyBinds::ControlBindingOrder> controls;
     for (int row = 0; row < m_pBindsList->GetRowCount(); ++row)
     {
         const auto           type = static_cast<KeyBindType>(reinterpret_cast<std::intptr_t>(m_pBindsList->GetItemData(row, m_hBind)));
@@ -3470,38 +3470,40 @@ bool CSettings::StageFrontendBindingEdits(CKeyBinds& target)
         // Section headings have no bind data and use the default row type.
         if (!control && type == KeyBindType::UNDEFINED)
             continue;
-        if (!IsFrontendControl(control) || std::find(seen.begin(), seen.end(), control) != seen.end())
+        if (!IsFrontendControl(control) ||
+            std::any_of(controls.begin(), controls.end(), [control](const CKeyBinds::ControlBindingOrder& edit) { return edit.control == control; }))
             return false;
-        seen.push_back(control);
-        // Replace only the records actually represented by editable cells.
-        // Extra configured alternates beyond the grid's slots stay intact.
-        const auto remove = [&](int column)
+        std::list<CGTAControlBind*> existing;
+        target.GetBoundControls(control, existing);
+        controls.push_back({control, {}});
+        auto& keys = controls.back().keys;
+        const auto appendKey = [&](const SBindableKey* key)
         {
-            auto* bind = static_cast<CGTAControlBind*>(m_pBindsList->GetItemData(row, column));
-            if (bind && bind->boundKey)
-                target.RemoveGTAControl(bind->boundKey->szKey, control->szControl);
+            if (std::find(keys.begin(), keys.end(), key) == keys.end())
+                keys.push_back(key);
         };
-        if (type == KeyBindType::GTA_CONTROL)
+        for (int slot = 0; slot <= SecKeyNum; ++slot)
         {
-            remove(m_hPriKey);
-            for (int alternate = 0; alternate < SecKeyNum; ++alternate)
-                remove(m_hSecKeys[alternate]);
-        }
-        const auto add = [&](int column)
-        {
-            const std::string key = m_pBindsList->GetItemText(row, column);
-            if (key.empty() || key == CORE_SETTINGS_NO_KEY)
-                return true;
-            const auto* bound = target.GetBindableFromKey(key.c_str());
-            return bound && (target.GTAControlExists(bound, control) || target.AddGTAControl(bound, control));
-        };
-        if (!add(m_hPriKey))
-            return false;
-        for (int alternate = 0; alternate < SecKeyNum; ++alternate)
-            if (!add(m_hSecKeys[alternate]))
+            const auto        column = slot == 0 ? m_hPriKey : m_hSecKeys[slot - 1];
+            const std::string name = m_pBindsList->GetItemText(row, column);
+            if (name.empty() || name == CORE_SETTINGS_NO_KEY)
+                continue;
+            const auto* key = target.GetBindableFromKey(name.c_str());
+            if (!key)
                 return false;
+            appendKey(key);
+        }
+
+        // The grid shows the first four records per control. Keep any remaining
+        // alternates behind those cells in the same order as the saved XML.
+        size_t slot = 0;
+        for (auto* bind : existing)
+        {
+            if (slot++ > SecKeyNum)
+                appendKey(bind->boundKey);
+        }
     }
-    return seen.size() == 6;
+    return controls.size() == 6 && target.ApplyFrontendControlBindingOrder(controls);
 }
 
 void CSettings::ProcessKeyBinds()
@@ -4120,7 +4122,11 @@ bool CSettings::OnOKButtonClick(CGUIElement* pElement)
         }
         else
 #endif
-            ProcessKeyBinds();
+        {
+            auto* bindings = static_cast<CKeyBinds*>(CCore::GetSingleton().GetKeyBinds());
+            if (!bindings || !StageFrontendBindingEdits(*bindings))
+                return true;
+        }
         SetVisible(false);
         pMainMenu->m_bIsInSubWindow = false;
         return true;

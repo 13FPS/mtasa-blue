@@ -6,10 +6,14 @@
 client and DE backend all built in Release/x64. MTA's menu, Settings, console,
 key bindings, walking and sprinting have run inside DE. Core currently stops
 before loading gameplay modules because the DE adapter returns no `CGame`.
-The first settings pass needs that interface to provide controller and game
-settings for mouse controls, shadows and aspect ratio. Remote gameplay also
-requires a DE multiplayer factory, multiplayer and renderer startup, and a
-compatible x64 client network module. The current binaries were tested locally.
+Remote gameplay also requires a DE multiplayer factory, multiplayer and
+renderer startup, and a compatible x64 client network module. The current
+binaries were tested locally.
+
+An x64 compiler check of the DE game class `CGameModelLodResetDE` identified
+80 `CGame` SDK methods that are still abstract on that class. They include
+`GetControllerConfigManager`, `GetSettings` and `GetModelInfo`. Core needs the
+first two to apply mouse controls, shadows and aspect ratio during startup.
 
 DE movement polling now reads the left, right, middle and two side mouse
 buttons. Settings and movement polling agree on which physical
@@ -49,6 +53,16 @@ cancellations and propagates the original error. Shutdown also visits the
 remaining entries if one release fails. The registration table uses its own
 allocated size for lookups and cleanup after the game stops reporting its
 streaming limits.
+
+While an object, vehicle or ped model is loading, the Deathmatch client now
+rechecks whether the streamer still wants the entity. Leaving the active
+sectors or moving beyond the stream-out distance releases the queued reference
+on the next model pulse. Returning to range can request the model again.
+Forced stream references, direct passenger requests and explicit skin changes
+retain their existing behavior. If the SDK throws during stream-in, the
+streamer can retry the entity on a later pulse. The nine cases in
+`Tests/definitive/test_client_streamer_pending_model.py` exercise this with
+the production sector grid and model queue. Five fail on the previous client.
 
 During startup, DE can reuse the same service address across game sessions.
 Six MTA game lookups now recheck the session before returning a service to

@@ -22,9 +22,10 @@ class CClientModel;
 struct SClientModelRequest
 {
     std::shared_ptr<CClientModel> registration;
-    CModelInfo*    pModel;
-    CClientEntity* pEntity;
-    CElapsedTime   requestTimer;
+    CModelInfo*                   pModel;
+    CClientEntity*                pEntity;
+    CElapsedTime                  requestTimer;
+    bool                          canceled = false;
 };
 
 class CClientModelRequestManager
@@ -47,9 +48,10 @@ public:
 
 private:
     void DoPulse();
-    bool GetRequestEntry(CClientEntity* pRequester, std::list<SClientModelRequest*>::iterator& iter);
+    using Requests = std::list<SClientModelRequest>;
+    Requests::iterator  FindRequest(CClientEntity* pRequester);
+    SClientModelRequest Detach(Requests::iterator iter);
 
-    bool                            m_bDoingPulse;
-    std::list<SClientModelRequest*> m_Requests;
-    std::list<CClientEntity*>       m_CancelQueue;
+    bool     m_bDoingPulse = false;
+    Requests m_Requests;
 };

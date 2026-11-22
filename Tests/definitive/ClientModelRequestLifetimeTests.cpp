@@ -8,6 +8,7 @@
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <functional>
 #include <list>
 #include <memory>
@@ -34,22 +35,48 @@ bool ListContains(const std::list<T>& list, T value)
 class CClientModel
 {
 };
+enum class Failure
+{
+    LoadCheck,
+    Acquire,
+    Apply,
+    Callback,
+    Release
+};
 struct CModelInfo
 {
     std::weak_ptr<CClientModel> registration;
     int                         references = 0, removals = 0, applied = 0;
     bool                        loaded = false, releasedWithRegistration = true;
-    bool                        IsLoaded() const { return loaded; }
-    void                        Request(EModelRequestType, const char*) {}
-    void                        ModelAddRef(EModelRequestType, const char*) { ++references; }
-    void                        MakeCustomModel() { ++applied; }
-    void                        RemoveRef()
+    bool                        failLoadCheck = false, failAcquire = false, failApply = false, failRelease = false;
+    bool                        IsLoaded() const
+    {
+        if (failLoadCheck)
+            throw Failure::LoadCheck;
+        return loaded;
+    }
+    void Request(EModelRequestType, const char*) {}
+    void ModelAddRef(EModelRequestType, const char*)
+    {
+        if (failAcquire)
+            throw Failure::Acquire;
+        ++references;
+    }
+    void MakeCustomModel()
+    {
+        ++applied;
+        if (failApply)
+            throw Failure::Apply;
+    }
+    void RemoveRef()
     {
         // The SDK receiver stays alive in every test, so even the historical
         // implementation can safely report whether the registration survived.
         releasedWithRegistration &= !registration.expired();
         --references;
         ++removals;
+        if (failRelease)
+            throw Failure::Release;
     }
 };
 struct CClientEntity
@@ -101,8 +128,25 @@ void Check(bool condition, const char* message)
     }
 }
 
+template <class Operation>
+void ExpectFailure(Failure expected, Operation operation)
+{
+    try
+    {
+        operation();
+    }
+    catch (Failure failure)
+    {
+        Check(failure == expected, "propagate the original SDK or callback failure");
+        return;
+    }
+    Check(false, "operation must propagate its failure");
+}
+
 int main(int argc, char** argv)
 {
+    // A historical destructor throwing from noexcept should fail this subprocess promptly.
+    std::set_terminate([] { std::_Exit(91); });
     Game       game;
     ClientGame client;
     g_pGame = &game;
@@ -179,11 +223,87 @@ int main(int argc, char** argv)
                   "only the new model is delivered on a later pulse and its reference is released exactly once");
             registrations[0].reset();
         }
+        else if (scenario == "callback-failure" || scenario == "apply-failure" || scenario == "completion-release-failure")
+        {
+            bool called = false;
+            oldModel.loaded = true;
+            oldModel.failApply = scenario == "apply-failure";
+            oldModel.failRelease = scenario != "apply-failure";
+            Check(!requests.Request(1, &other), "queue an unrelated request alongside completion");
+            entity.callback = [&](CModelInfo*)
+            {
+                called = true;
+                if (scenario == "callback-failure")
+                {
+                    requests.Cancel(&other, true);
+                    newModel.failRelease = true;
+                    throw Failure::Callback;
+                }
+            };
+            registrations[0].reset();
+            const auto expected = oldModel.failApply ? Failure::Apply : (scenario == "callback-failure" ? Failure::Callback : Failure::Release);
+            ExpectFailure(expected, [&] { client.manager.Pulse(requests); });
+            Check(called == !oldModel.failApply && !requests.HasRequested(&entity) && oldModel.removals == 1 && oldModel.releasedWithRegistration,
+                  "completion detaches and releases its registration on every exception");
+            Check(requests.HasRequested(&other) == (scenario != "callback-failure"), "the failed pulse drains only its deferred cancellations");
+            newModel.failRelease = false;
+            requests.Cancel(&other, true);
+            Check(!requests.HasRequested(&other) && newModel.removals == 1, "cancel works immediately after a failed pulse");
+            Check(!requests.Request(1, &other), "a fresh request can be made after a failed pulse");
+            bool delivered = false;
+            other.callback = [&](CModelInfo* model) { delivered = model == &newModel; };
+            newModel.loaded = true;
+            client.manager.Pulse(requests);
+            Check(delivered && newModel.removals == 2 && newModel.references == 0, "the next pulse delivers the fresh request normally");
+        }
+        else if (scenario == "poll-failure")
+        {
+            oldModel.failLoadCheck = true;
+            ExpectFailure(Failure::LoadCheck, [&] { client.manager.Pulse(requests); });
+            Check(requests.HasRequested(&entity) && !oldModel.removals, "a refused poll preserves the pending request");
+            requests.Cancel(&entity, true);
+            Check(!requests.HasRequested(&entity) && oldModel.removals == 1, "a failed poll leaves immediate cancellation available");
+            registrations[0].reset();
+        }
+        else if (scenario == "replace-query-failure" || scenario == "replace-acquire-failure" || scenario == "replace-release-failure")
+        {
+            oldModel.failRelease = scenario == "replace-release-failure";
+            newModel.failAcquire = scenario == "replace-acquire-failure";
+            newModel.failLoadCheck = scenario == "replace-query-failure";
+            registrations[0].reset();
+            const auto expected = oldModel.failRelease ? Failure::Release : (newModel.failAcquire ? Failure::Acquire : Failure::LoadCheck);
+            ExpectFailure(expected, [&] { requests.Request(1, &entity); });
+            Check(!requests.HasRequested(&entity) && oldModel.removals == 1 && oldModel.releasedWithRegistration && !newModel.removals,
+                  "failed replacement cannot leave the retired old request or a speculative new reference");
+            requests.Cancel(&entity, false);
+            newModel.failAcquire = newModel.failLoadCheck = false;
+            Check(!requests.Request(1, &entity), "a replacement may be requested after a refused transition");
+            requests.Cancel(&entity, false);
+            Check(newModel.removals == 1 && newModel.references == 0, "only the successful acquire is released");
+        }
+        else if (scenario == "cancel-release-failure")
+        {
+            registrations[0].reset();
+            oldModel.failRelease = true;
+            ExpectFailure(Failure::Release, [&] { requests.Cancel(&entity, false); });
+            Check(!requests.HasRequested(&entity), "failed release detaches the canceled request");
+            requests.Cancel(&entity, false);
+        }
+        else if (scenario == "teardown-failure")
+        {
+            Check(!requests.Request(1, &other), "queue a second request for shutdown");
+            registrations[0].reset();
+            registrations[1].reset();
+            oldModel.failRelease = newModel.failRelease = true;
+        }
         else if (scenario == "destroy")
             registrations[0].reset();
         else
             return 2;
     }
+    if (scenario == "teardown-failure")
+        Check(newModel.removals == 1 && !newModel.references && newModel.releasedWithRegistration && newModel.registration.expired(),
+              "shutdown attempts each release once even when a previous release failed");
     const int expectedRemovals = scenario == "cancel" || scenario == "replace-after-cancel" ? 2 : 1;
     Check(oldModel.references == 0 && oldModel.removals == expectedRemovals && oldModel.releasedWithRegistration && oldModel.registration.expired(),
           "the last pending request balances its SDK reference and then releases the registration");

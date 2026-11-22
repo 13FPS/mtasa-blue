@@ -14,7 +14,10 @@ from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[2]
 LOGIC = Path("Client/mods/deathmatch/logic")
-SCENARIOS = ("cancel", "replace", "replace-loaded", "complete", "destroy", "replace-after-cancel")
+SCENARIOS = ("cancel", "replace", "replace-loaded", "complete", "destroy", "replace-after-cancel",
+             "callback-failure", "apply-failure", "completion-release-failure", "poll-failure",
+             "replace-query-failure", "replace-acquire-failure", "replace-release-failure",
+             "cancel-release-failure", "teardown-failure")
 
 
 def main():

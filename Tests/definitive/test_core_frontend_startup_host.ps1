@@ -10,12 +10,13 @@ param(
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedXmllSha256,
     [string]$Unifont='Build/gui-asset-cache/unifont-16.0.04.ttf',
     [switch]$BindingPersistenceOnly,
+    [switch]$BindingSettingsOnly,
     [switch]$InteractionServicesOnly,
     [switch]$PresentationPolicyOnly
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
-if (@(@($BindingPersistenceOnly,$InteractionServicesOnly,$PresentationPolicyOnly)|Where-Object {$_}).Count -gt 1) { throw 'Choose one focused actual-host case group.' }
+if (@(@($BindingPersistenceOnly,$BindingSettingsOnly,$InteractionServicesOnly,$PresentationPolicyOnly)|Where-Object {$_}).Count -gt 1) { throw 'Choose one focused actual-host case group.' }
 if ([IntPtr]::Size -ne 8) { throw 'The owned frontend requires native x64 PowerShell.' }
 $taskRoot=(Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $outputRoot=Join-Path $taskRoot ('Build/mta-core-frontend-startup-host/'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N'))
@@ -46,7 +47,7 @@ $sourceNames+=@(Get-ChildItem -LiteralPath (Join-Path $taskRoot 'Client/sdk/gui'
 $certificates=@();$selectedArtifacts=@();$sourceHashes=@();$artifacts=@();$assets=@();$windowsFonts=@();$systemDlls=@();$runs=@()
 $compileExit=$null;$testExit=$null;$testCount=0;$timedOut=$false;$failure=$null;$compilerRecord=$null
 $sourceUnchanged=$true;$artifactsUnchanged=$true;$assetsUnchanged=$true;$certificatesUnchanged=$true;$platformUnchanged=$true
-$caseNames=@(if($PresentationPolicyOnly){'presentation-policy'}elseif($BindingPersistenceOnly){'runtime-persistence'}elseif($InteractionServicesOnly){'runtime-interaction','runtime-locale-failure'}else{'normal','gated','frontend-failure','backend-failure','runtime','runtime-frontend-failure','runtime-backend-failure','runtime-persistence','runtime-interaction','runtime-locale-failure'})
+$caseNames=@(if($PresentationPolicyOnly){'presentation-policy'}elseif($BindingPersistenceOnly){'runtime-persistence'}elseif($BindingSettingsOnly){'normal','runtime','runtime-persistence'}elseif($InteractionServicesOnly){'runtime-interaction','runtime-locale-failure'}else{'normal','gated','frontend-failure','backend-failure','runtime','runtime-frontend-failure','runtime-backend-failure','runtime-persistence','runtime-interaction','runtime-locale-failure'})
 try {
     # Both DLLs are normal build artifacts with complete current declared input
     # certificates. This rejects an old GUI/consumer pairing before execution.
@@ -54,6 +55,30 @@ try {
         $path=(Resolve-Path -LiteralPath $spec.receipt).Path
         Assert-NoLinks $path
         $certificate=Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        if ($spec.role -eq 'core' -and $null -ne $certificate.PSObject.Properties['schema'] -and $certificate.schema -eq 'mta_core_idle_normal_release_x64_build_v1') {
+            # The normal Core build restores Bin and retains Core, pthread and its paired backend.
+            # Verify the actual compiler graph, generated inputs and linked libraries before staging these copies.
+            $verifier=Join-Path $PSScriptRoot 'compiler_dependency_evidence.py'
+            $proofPath=Join-Path $outputRoot 'core-compiler-verification.json'
+            & python -I $verifier --verify-core $path --output $proofPath
+            if ($LASTEXITCODE -ne 0) { throw "Core compiler evidence verification failed: $proofPath" }
+            $proof=Get-Content -LiteralPath $proofPath -Raw | ConvertFrom-Json
+            if (-not $proof.success -or -not $proof.retainedArtifactsAuthoritative -or $proof.receipt.sha256 -ne (Sha $path)) { throw 'Invalid retained Core verification' }
+            foreach ($name in $spec.names) {
+                $item=@($proof.artifacts | Where-Object { [IO.Path]::GetFileName($_.path) -eq $name })
+                if ($item.Count -ne 1) { throw "Expected one verified retained $name" }
+                $saved=$item[0].path
+                Assert-NoLinks $saved
+                $selectedArtifacts+=@([ordered]@{name=$name;source=$saved;sha256=$item[0].sha256;bytes=(Get-Item -LiteralPath $saved).Length;certificate=$path})
+            }
+            $sourceNames+=@('Tests/definitive/compiler_dependency_evidence.py')
+            foreach ($item in $certificate.compiler_read_inputs.inputs) {
+                $relative=[IO.Path]::GetRelativePath($taskRoot,$item.path)
+                if (-not $relative.StartsWith('..'+[IO.Path]::DirectorySeparatorChar) -and -not [IO.Path]::IsPathRooted($relative)) { $sourceNames+=@($relative) }
+            }
+            $certificates+=@([ordered]@{role='core';path=$path;sha256=$proof.receipt.sha256;declaredSourceCount=$proof.compilerSourceInputs;sourceVerification='Verified MSVC inputs, retained binaries and link libraries';verification=$proofPath})
+            continue
+        }
         foreach ($required in @('success','source_hashes','artifacts','guards','default_projects_restored')) {
             if ($null -eq $certificate.PSObject.Properties[$required]) { throw "Normal $($spec.role) certificate is missing $required`: $path" }
         }
@@ -63,6 +88,11 @@ try {
             throw "Normal build certificate is not green/restored: $path"
         }
         $declaredSources=@($certificate.source_hashes.PSObject.Properties)
+        $usesGuiCompilerInputs=$spec.role -eq 'gui' -and ($BindingSettingsOnly -or $BindingPersistenceOnly) -and $null -ne $certificate.PSObject.Properties['compiler_read_local_inputs']
+        if ($usesGuiCompilerInputs) {
+            # The GUI build also hashes unrelated client files for project generation. The trace identifies the inputs of the actual GUI and CEGUI compiles.
+            $declaredSources=@($certificate.compiler_read_local_inputs.PSObject.Properties)
+        }
         if ($declaredSources.Count -eq 0) { throw "Normal certificate has no declared source hashes: $path" }
         # The GUI receipt records sources_unchanged explicitly. The Core receipt
         # instead succeeds only after its before/after source checks and publishes
@@ -91,7 +121,7 @@ try {
             $selectedArtifacts+=@([ordered]@{name=$name;source=$artifact.saved;sha256=$artifact.sha256;bytes=$artifact.bytes;certificate=$path})
         }
         $certificates+=@([ordered]@{role=$spec.role;path=$path;sha256=(Sha $path);declaredSourceCount=$declaredSources.Count;
-            sourceVerification=if($spec.role -eq 'gui'){'Explicit sources_unchanged plus every declared source rehashed'}else{'Successful Core before/after certificate, exact declared source_count, plus every final declared source rehashed'}})
+            sourceVerification=if($usesGuiCompilerInputs){'Explicit sources_unchanged plus every compiler-read local GUI and CEGUI input rehashed'}elseif($spec.role -eq 'gui'){'Explicit sources_unchanged plus every declared source rehashed'}else{'Successful Core before/after certificate, exact declared source_count, plus every final declared source rehashed'}})
     }
     $xml=(Resolve-Path -LiteralPath $XmllDll).Path
     Assert-NoLinks $xml
@@ -239,7 +269,7 @@ try {
                     $runtime[1] -ne 4 -or $runtime[3] -ne 1 -or $runtime[5] -ne 0) {
                     throw "Actual runtime service/backend retirement differs: $case"
                 }
-                $expectedManagers=if($case -eq 'runtime-persistence'){2}else{1}
+                $expectedManagers=if($case -eq 'runtime-persistence'){6}else{1}
                 if ($successfulRuntime -and ($runtime[43] -ne $expectedManagers -or $runtime[44] -ne 1 -or $runtime[45] -ne $expectedManagers -or
                     $runtime[46] -ne 2 -or $runtime[47] -ne 2 -or $runtime[48] -ne 2 -or $runtime[49] -ne 0 -or
                     $runtime[51] -ne 1 -or $hostResult.actualSessionBindingsSettingsVerified -ne $true -or
@@ -274,14 +304,15 @@ try {
     $success=$null -eq $failure -and $compileExit -eq 0 -and $testExit -eq 0 -and $testCount -gt 0 -and $runs.Count -eq $caseNames.Count -and
         @($runs | Where-Object { -not $_.success }).Count -eq 0 -and -not $timedOut -and $sourceUnchanged -and $artifactsUnchanged -and
         $assetsUnchanged -and $certificatesUnchanged -and $platformUnchanged
-    $legacySuiteSuccess=$success -and -not $BindingPersistenceOnly -and -not $PresentationPolicyOnly
+    $legacySuiteSuccess=$success -and -not $BindingPersistenceOnly -and -not $BindingSettingsOnly -and -not $PresentationPolicyOnly
+    $sessionSettingsVerified=$success -and @($runs | Where-Object { $_.case -eq 'normal' -and $_.actualHostResult.actualSessionBindingsSettingsVerified }).Count -eq 1
     $receipt=[ordered]@{schema='mta_owned_frontend_startup_host_tests_v1';recordedAt=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=$success;
         focusedPresentationPolicyOnly=[bool]$PresentationPolicyOnly;
         actualCompletedCorePresentationPolicyTested=($success -and $PresentationPolicyOnly -and @($runs|Where-Object {$_.case -eq 'presentation-policy' -and $_.actualHostResult.actualCompletedCorePresentationPolicyTested -eq $true}).Count -eq 1);
         actualCorePresentationWrongImageRetirementTested=($success -and $PresentationPolicyOnly -and @($runs|Where-Object {$_.case -eq 'presentation-policy' -and $_.actualHostResult.actualCorePresentationWrongImageRetirementTested -eq $true}).Count -eq 1);
-        focusedBindingPersistenceOnly=[bool]$BindingPersistenceOnly;focusedInteractionServicesOnly=[bool]$InteractionServicesOnly;selectedCases=$caseNames;
+        focusedBindingPersistenceOnly=[bool]$BindingPersistenceOnly;focusedBindingSettingsOnly=[bool]$BindingSettingsOnly;focusedInteractionServicesOnly=[bool]$InteractionServicesOnly;selectedCases=$caseNames;
         failure=$failure;compileExit=$compileExit;testExit=$testExit;checks=$testCount;timedOut=$timedOut;cases=$runs;
-        sourceHashes=$sourceHashes;sourceUnchanged=$sourceUnchanged;sourceSnapshotScope='Fixture plus complete current declared Core and GUI normal-build inputs; a declared superset, not an independently recovered compiler-read trace.';
+        sourceHashes=$sourceHashes;sourceUnchanged=$sourceUnchanged;sourceSnapshotScope='Host fixture and repository inputs for each verified build certificate. Each certificate records whether its compiler trace or declared source list was checked.';
         normalBuildCertificates=$certificates;certificatesUnchanged=$certificatesUnchanged;artifacts=$artifacts;artifactsUnchanged=$artifactsUnchanged;
         assets=$assets;assetsUnchanged=$assetsUnchanged;windowsFonts=$windowsFonts;systemDlls=$systemDlls;compiler=$compilerRecord;platformUnchanged=$platformUnchanged;executionArtifacts=$executionArtifacts;
         targetFormat=87;width=1280;height=1024;coreFrontendApi=1;frontendFields=32;frontendStartupApi=1;frontendStartupFields=32;persistentFrontendApi=1;persistentFrontendFields=288;
@@ -299,10 +330,10 @@ try {
         localInputNativeMovementVerified=$false;
         optionalBindingPersistenceApiVersion=1;optionalBindingPersistenceAcrossViewsAndFreshCoreVerified=($success -and @($runs | Where-Object { $_.case -eq 'runtime-persistence' -and $_.actualHostResult.bindingPersistenceRestartVerified -eq $true }).Count -eq 1);
         optionalBindingPersistenceAtomicFailurePreservesManagerAndFileVerified=($success -and @($runs | Where-Object { $_.case -eq 'runtime-persistence' -and $_.actualHostResult.bindingPersistenceSaveFailureVerified -eq $true }).Count -eq 1);
-        actualMtaSessionBindingsSettingsOnOwnedWarp=$legacySuiteSuccess;actualSixMovementBindingsApplyAndCancelVerified=$legacySuiteSuccess;reservedConsoleKeyCaptureAndFocusLossVerified=$legacySuiteSuccess;modalCaptureRetiredDuringFrontendTeardownVerified=$legacySuiteSuccess;
+        actualMtaSessionBindingsSettingsOnOwnedWarp=$sessionSettingsVerified;actualSixMovementBindingsApplyAndCancelVerified=$sessionSettingsVerified;reservedConsoleKeyCaptureAndFocusLossVerified=$legacySuiteSuccess;modalCaptureRetiredDuringFrontendTeardownVerified=$legacySuiteSuccess;
         cpuFrontendTeardownWhileGpuRetainedVerified=$legacySuiteSuccess;startupFailureOwnerCleanupVerified=$legacySuiteSuccess;normalFrontendReacquireVerified=$legacySuiteSuccess;completedCoreRetainedAfterFrontendReleaseVerified=$legacySuiteSuccess;backendFailureOwnerCleanupVerified=$legacySuiteSuccess;
         configurationCopiesUnchanged=$assetsUnchanged;installedFilesChanged=$false;gameLaunched=$false;gameAttached=$false;engineInputSuppressionVerified=$false;fullMtaReady=$false;
-        scope=$(if($PresentationPolicyOnly){'One focused actual newly rebuilt Core presentation path: generic completed CPU startup stays hook-free; explicit Begin requires current controller/Core producer; invalid state/handle/thread and wrong image refuse; failed provider admission retires before completed Core shutdown/release and module unload. No old GUI matrix, positive native policy, full game factory or playable MTA claim.'}elseif($BindingPersistenceOnly){'One focused runtime-persistence case using actual Core/CKeyBinds/XML and real MTA Settings on owned WARP. Hidden owner opt-in precedes every GUI view and local-input Configure; two views retain the selected path and Cancel state; final retirement followed by a fresh Core/runtime proves generated movement-file reload before input borrows the manager. Exercises invalid handles/versions/paths/thread/XML, actual nonruntime-owner refusal, armed-input/visible/stopped-view Busy, stopped/stale-owner refusal, all six movements, delayed file creation, locked-destination atomic-save failure preserving file and manager, unchanged baseconfig and unrelated bind counts. Does not run historical frontend/failure matrix or opt into any user profile. No native engine input, GTA, network, or playable multiplayer claim.'}else{'Completed real Core and actual Game DE lifecycle, borrowed actual MTA menu/credits/console/configured bindings and existing session-only settings on a private WARP target. All four historical cases remain; three additive Runtime64 cases prove one actual Core/backend and one XML/CVars/CKeyBinds owner across two freshly borrowed GUI views, Apply I then hide/release then identical real bind record and Cancel O, neutral hidden input, unchanged disk configuration, stopped-unreleased borrower exclusion and final manager/CVars/XML/backend retirement. XML/backend preparation failures retain inspectable owners until explicit cleanup. Fixture GUI observation forwards actual widgets/callbacks. Includes completed-owner Clock API1/Read96 admission and actual wrong-image refusal in historical routes, while Runtime refuses clock and all legacy mutating owner routes. Startup32 and Persistent288 are unchanged. No positive native clock or runtime-view workload is claimed. Disposable SanAndreas.exe is this hashed owned host, not GTA. No engine facade stubs, native engine binding, game/device attachment, native hooks, full multiplayer startup or visible GTA claim. One additive durable runtime case covers hidden-owner fixture-only persistence before GUI/input borrowing and a fresh Core reload.'})}
+        scope=$(if($BindingSettingsOnly){'Real Settings widgets on WARP exercise startup, session-only Apply and Cancel, and persisted movement bindings after a fresh Core load.'}elseif($PresentationPolicyOnly){'One focused actual newly rebuilt Core presentation path: generic completed CPU startup stays hook-free; explicit Begin requires current controller/Core producer; invalid state/handle/thread and wrong image refuse; failed provider admission retires before completed Core shutdown/release and module unload. No old GUI matrix, positive native policy, full game factory or playable MTA claim.'}elseif($BindingPersistenceOnly){'One focused runtime-persistence case using actual Core/CKeyBinds/XML and real MTA Settings on owned WARP. Hidden owner opt-in precedes every GUI view and local-input Configure; two views retain the selected path and Cancel state; final retirement followed by a fresh Core/runtime proves generated movement-file reload before input borrows the manager. Exercises invalid handles/versions/paths/thread/XML, actual nonruntime-owner refusal, armed-input/visible/stopped-view Busy, stopped/stale-owner refusal, all six movements, delayed file creation, locked-destination atomic-save failure preserving file and manager, unchanged baseconfig and unrelated bind counts. Does not run historical frontend/failure matrix or opt into any user profile. No native engine input, GTA, network, or playable multiplayer claim.'}else{'Completed real Core and actual Game DE lifecycle, borrowed actual MTA menu/credits/console/configured bindings and existing session-only settings on a private WARP target. All four historical cases remain; three additive Runtime64 cases prove one actual Core/backend and one XML/CVars/CKeyBinds owner across two freshly borrowed GUI views, Apply I then hide/release then identical real bind record and Cancel O, neutral hidden input, unchanged disk configuration, stopped-unreleased borrower exclusion and final manager/CVars/XML/backend retirement. XML/backend preparation failures retain inspectable owners until explicit cleanup. Fixture GUI observation forwards actual widgets/callbacks. Includes completed-owner Clock API1/Read96 admission and actual wrong-image refusal in historical routes, while Runtime refuses clock and all legacy mutating owner routes. Startup32 and Persistent288 are unchanged. No positive native clock or runtime-view workload is claimed. Disposable SanAndreas.exe is this hashed owned host, not GTA. No engine facade stubs, native engine binding, game/device attachment, native hooks, full multiplayer startup or visible GTA claim. One additive durable runtime case covers hidden-owner fixture-only persistence before GUI/input borrowing and a fresh Core reload.'})}
     $receipt | ConvertTo-Json -Depth 9 | Set-Content -LiteralPath (Join-Path $outputRoot 'test-result.json') -Encoding utf8
 }
 [ordered]@{success=$success;receipt=(Join-Path $outputRoot 'test-result.json');checks=$testCount;failure=$failure} | ConvertTo-Json -Compress

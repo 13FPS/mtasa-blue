@@ -170,7 +170,7 @@ public:
         std::uint32_t eligibleKeys = 0, unsupportedKeys = 0, supportedBindings = 0, ignoredBindings = 0, changedKeys = 0;
         bool          focused = false, armed = false;
     };
-    // Poll the actual configured keyboard routes. Unsupported device/ambiguous
+    // Poll configured keyboard keys and held mouse buttons. Unsupported device/ambiguous
     // routes remain visible in counts, and focus/startup require a neutral
     // baseline before held keys can become new control presses.
     ConfiguredControlPollResult PollConfiguredControlKeys(bool focused, ConfiguredKeyStateSampler sampler = nullptr, void* context = nullptr,

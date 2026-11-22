@@ -612,20 +612,33 @@ CKeyBinds::ConfiguredControlPollResult CKeyBinds::PollConfiguredControlKeys(bool
         unsigned int        code;
         bool                eligible = false, unsupported = false, down = false;
     };
-    auto keyboardRoute = [](const SBindableKey& key) -> unsigned int
+    const bool mouseButtonsSwapped = GetSystemMetrics(SM_SWAPBUTTON) != 0;
+    auto       pollingRoute = [mouseButtonsSwapped](const SBindableKey& key) -> unsigned int
     {
-        // MTA's table distinguishes Shift sides through GTA-relative identity,
-        // while both entries use VK_SHIFT. Poll their real physical VKs rather
-        // than inventing a second key-name map or aliasing both sides together.
-        if (key.iGTARelative == GTA_KEY_LSHIFT)
-            return VK_LSHIFT;
-        if (key.iGTARelative == GTA_KEY_RSHIFT)
-            return VK_RSHIFT;
+        // Settings captures logical button messages. GetAsyncKeyState samples physical buttons.
+        switch (key.iGTARelative)
+        {
+            case GTA_KEY_LMOUSE:
+                return mouseButtonsSwapped ? VK_RBUTTON : VK_LBUTTON;
+            case GTA_KEY_RMOUSE:
+                return mouseButtonsSwapped ? VK_LBUTTON : VK_RBUTTON;
+            case GTA_KEY_MMOUSE:
+                return VK_MBUTTON;
+            case GTA_KEY_MXB1:
+                return VK_XBUTTON1;
+            case GTA_KEY_MXB2:
+                return VK_XBUTTON2;
+            // The bind table shares VK_SHIFT between both sides.
+            case GTA_KEY_LSHIFT:
+                return VK_LSHIFT;
+            case GTA_KEY_RSHIFT:
+                return VK_RSHIFT;
+        }
         const auto code = key.ulCode;
         if (key.data != DATA_NONE || code < VK_BACK || code > 0xfe || code == VK_CLEAR || code == VK_SHIFT || code == VK_CONTROL || code == VK_MENU ||
             (code >= VK_NUMPAD0 && code <= VK_DIVIDE))
             return 0;
-        // Wheel/mouse/joy and NumLock/AltGr-dependent routes need their existing
+        // Wheel, joystick and NumLock/AltGr-dependent routes need their existing
         // message/device context. Report and skip them instead of guessing.
         return static_cast<unsigned int>(code);
     };
@@ -654,7 +667,7 @@ CKeyBinds::ConfiguredControlPollResult CKeyBinds::PollConfiguredControlKeys(bool
                 continue;
             auto*       control = static_cast<CGTAControlBind*>(bind.get());
             const auto* key = control->boundKey;
-            const auto  code = keyboardRoute(*key);
+            const auto  code = pollingRoute(*key);
             const bool  allowed = (allowedActions & MtaInput::ActionBit(control->control->action)) != 0;
             auto        found = std::find_if(samples.begin(), samples.end(), [key](const KeySample& sample) { return sample.key == key; });
             if (found == samples.end())

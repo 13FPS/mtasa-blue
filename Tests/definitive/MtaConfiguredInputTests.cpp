@@ -259,6 +259,56 @@ namespace
         }
     };
 
+    void MouseButtonPolling(CGameAdapterModule& module)
+    {
+        Scenario   test(module);
+        const bool swapped = GetSystemMetrics(SM_SWAPBUTTON) != 0;
+        struct MouseBinding
+        {
+            UINT              message;
+            WPARAM            wParam;
+            int               physicalKey;
+            const char*       control;
+            eControllerAction action;
+        };
+        const MouseBinding bindings[] = {
+            {WM_LBUTTONDOWN, 0, swapped ? VK_RBUTTON : VK_LBUTTON, "forwards", FORWARDS},
+            {WM_RBUTTONDOWN, 0, swapped ? VK_LBUTTON : VK_RBUTTON, "backwards", BACKWARDS},
+            {WM_MBUTTONDOWN, 0, VK_MBUTTON, "left", LEFT},
+            {WM_XBUTTONDOWN, MAKEWPARAM(0, XBUTTON1), VK_XBUTTON1, "right", RIGHT},
+            {WM_XBUTTONDOWN, MAKEWPARAM(0, XBUTTON2), VK_XBUTTON2, "sprint", SPRINT},
+        };
+        for (const auto& binding : bindings)
+        {
+            bool        down = false;
+            const auto* key = test.keys.GetBindableFromMessage(binding.message, binding.wParam, 0, down);
+            Check(key && down, "Settings captures a mouse button press");
+            test.Bind(key->szKey, binding.control);
+        }
+        PhysicalKeys physical;
+        const auto   poll = [&](bool focused) { return test.keys.PollConfiguredControlKeys(focused, PhysicalKeys::Sample, &physical); };
+        physical.down[VK_XBUTTON2] = true;
+        Check(!poll(true).armed && test.Pulse().heldActions == 0, "held side button is neutral on startup");
+        physical.down[VK_XBUTTON2] = false;
+        const auto baseline = poll(true);
+        Check(baseline.armed && baseline.eligibleKeys == 5 && baseline.unsupportedKeys == 0, "all five captured mouse buttons can drive movement");
+        for (const auto& binding : bindings)
+        {
+            physical.down[binding.physicalKey] = true;
+            Check(poll(true).changedKeys == 1 && test.Pulse().heldActions == MtaInput::ActionBit(binding.action),
+                  "a held physical button activates its captured action");
+            Check(poll(true).changedKeys == 0 && test.Pulse().heldActions == MtaInput::ActionBit(binding.action), "holding a button sustains its action");
+            physical.down[binding.physicalKey] = false;
+            Check(poll(true).changedKeys == 1 && test.Pulse().heldActions == 0, "releasing a button clears its action while focused");
+        }
+        physical.down[VK_XBUTTON2] = true;
+        Check(poll(true).armed && test.Pulse().heldActions == MtaInput::ActionBit(SPRINT), "side button starts sprint before focus loss");
+        Check(!poll(false).armed && test.Pulse().heldActions == 0, "focus loss releases the held mouse action");
+        Check(!poll(true).armed && test.Pulse().heldActions == 0, "a held mouse button stays neutral on refocus");
+        physical.down[VK_XBUTTON2] = false;
+        Check(poll(true).armed, "releasing the mouse button rearms configured controls");
+    }
+
     class ActualXml
     {
     public:
@@ -421,6 +471,7 @@ extern "C" __declspec(dllexport) int MTA_RunConfiguredInputTests(std::uint32_t* 
         ContextTransition(module);
         MouseWheelBoundary(module);
         DirectionAndDeadContext(module);
+        MouseButtonPolling(module);
         SavedXmlAndPhysicalPolling(module);
         Check(GetModuleHandleW(L"xmll.dll") == nullptr, "actual XML wrappers/interface/module are released before Core cleanup");
         module.Stop();

@@ -30,6 +30,8 @@ public:
     CClientStreamSectorRow* GetStreamRow() { return m_pStreamRow; }
     CClientStreamSector*    GetStreamSector() { return m_pStreamSector; }
     bool                    IsStreamedIn() { return m_bStreamedIn; }
+    bool                    IsAttemptingToStreamIn() const { return m_bAttemptingToStreamIn; }
+    bool                    IsModelStreamInWanted();
     void                    InternalStreamIn(bool bInstantly);
     void                    InternalStreamOut();
     virtual void            StreamIn(bool bInstantly) = 0;
@@ -52,6 +54,7 @@ public:
     virtual bool IsVisibleInAllDimensions() { return false; };
 
 private:
+    bool CanStreamInByDistance();
     void SetStreamRow(CClientStreamSectorRow* pRow) { m_pStreamRow = pRow; }
     void SetStreamSector(CClientStreamSector* pSector) { m_pStreamSector = pSector; }
     void SetExpDistance(float fDistance) { m_fExpDistance = fDistance; }

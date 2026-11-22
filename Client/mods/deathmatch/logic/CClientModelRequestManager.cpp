@@ -100,6 +100,17 @@ bool CClientModelRequestManager::RequestBlocking(unsigned short usModelID, const
 
 bool CClientModelRequestManager::Request(unsigned short usModelID, CClientEntity* pRequester)
 {
+    return Request(usModelID, pRequester, nullptr);
+}
+
+bool CClientModelRequestManager::RequestForStreamIn(unsigned short usModelID, CClientStreamElement* pRequester)
+{
+    // A vehicle can also ask its passengers to stream in directly, outside their own stream radius.
+    return Request(usModelID, pRequester, pRequester->IsAttemptingToStreamIn() ? pRequester : nullptr);
+}
+
+bool CClientModelRequestManager::Request(unsigned short usModelID, CClientEntity* pRequester, CClientStreamElement* rangeOwner)
+{
     assert(pRequester);
     CModelInfo* info = g_pGame->GetModelInfo(usModelID);
     if (!info)
@@ -113,6 +124,9 @@ bool CClientModelRequestManager::Request(unsigned short usModelID, CClientEntity
     {
         if (previous->pModel == info)
         {
+            // Any explicit demand keeps this request alive. A canceled entry starts afresh.
+            if (previous->canceled || !rangeOwner)
+                previous->rangeOwner = rangeOwner;
             previous->canceled = false;
             return false;
         }
@@ -133,6 +147,7 @@ bool CClientModelRequestManager::Request(unsigned short usModelID, CClientEntity
     Requests pending;
     auto&    entry = pending.emplace_back();
     entry.pEntity = pRequester;
+    entry.rangeOwner = rangeOwner;
     entry.pModel = info;
     entry.registration = std::move(registration);
     entry.requestTimer.SetMaxIncrement(500);
@@ -168,6 +183,8 @@ void CClientModelRequestManager::DoPulse()
     {
         for (auto iter = m_Requests.begin(); iter != m_Requests.end();)
         {
+            if (!iter->canceled && iter->rangeOwner && !iter->rangeOwner->IsModelStreamInWanted())
+                iter->canceled = true;
             if (iter->canceled)
             {
                 ++iter;

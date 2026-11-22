@@ -2485,7 +2485,7 @@ void CClientVehicle::StreamIn(bool bInstantly)
     else
     {
         // Request its model.
-        if (m_pModelRequester->Request(m_usModel, this))
+        if (m_pModelRequester->RequestForStreamIn(m_usModel, this))
         {
             // If it got loaded immediately, create the vehicle now.
             // Otherwise we create it when the model loaded callback calls us

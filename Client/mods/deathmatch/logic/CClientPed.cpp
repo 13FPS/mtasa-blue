@@ -4305,7 +4305,7 @@ void CClientPed::StreamIn(bool bInstantly)
 #endif
     {
         // Request it
-        if (!m_pPlayerPed && m_pRequester->Request(static_cast<unsigned short>(m_ulModel), this))
+        if (!m_pPlayerPed && m_pRequester->RequestForStreamIn(static_cast<unsigned short>(m_ulModel), this))
         {
             m_pModelInfo->MakeCustomModel();
             // If it was loaded, create it immediately.

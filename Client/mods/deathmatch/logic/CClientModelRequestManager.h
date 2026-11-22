@@ -18,12 +18,14 @@ class CClientModelRequestManager;
 #include <memory>
 
 class CClientModel;
+class CClientStreamElement;
 
 struct SClientModelRequest
 {
     std::shared_ptr<CClientModel> registration;
     CModelInfo*                   pModel;
     CClientEntity*                pEntity;
+    CClientStreamElement*         rangeOwner = nullptr;
     CElapsedTime                  requestTimer;
     bool                          canceled = false;
 };
@@ -44,9 +46,11 @@ public:
     bool RequestBlocking(unsigned short usModelID, const char* szTag);
 
     bool Request(unsigned short usModelID, CClientEntity* pRequester);
+    bool RequestForStreamIn(unsigned short usModelID, CClientStreamElement* pRequester);
     void Cancel(CClientEntity* pRequester, bool bAllowQueue);
 
 private:
+    bool Request(unsigned short usModelID, CClientEntity* pRequester, CClientStreamElement* rangeOwner);
     void DoPulse();
     using Requests = std::list<SClientModelRequest>;
     Requests::iterator  FindRequest(CClientEntity* pRequester);

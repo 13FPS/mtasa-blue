@@ -53,12 +53,57 @@ void CClientStreamElement::UpdateStreamPosition(const CVector& vecPosition)
     }
 }
 
+bool CClientStreamElement::CanStreamInByDistance()
+{
+    // The towing vehicle owns its trailer's stream-in. Light-sync players and their vehicles stay out.
+    CClientVehicle* vehicle = DynamicCast<CClientVehicle>(this);
+    if (vehicle && vehicle->GetTowedByVehicle())
+        return false;
+    CClientPlayer* player = vehicle ? DynamicCast<CClientPlayer>(vehicle->GetOccupant()) : DynamicCast<CClientPlayer>(this);
+    if (player && player->GetLastPuresyncType() == PURESYNC_TYPE_LIGHTSYNC)
+        return false;
+
+    // An attachment follows its parent, except when the two objects are different LOD versions.
+    CClientStreamElement* parent = DynamicCast<CClientStreamElement>(GetAttachedTo());
+    if (!parent || parent->IsStreamedIn())
+        return true;
+    CClientObject* object = DynamicCast<CClientObject>(this);
+    CClientObject* parentObject = DynamicCast<CClientObject>(parent);
+    return object && parentObject && object->IsLowLod() != parentObject->IsLowLod();
+}
+
+bool CClientStreamElement::IsModelStreamInWanted()
+{
+    if (!IsVisibleInAllDimensions() && GetDimension() != m_pStreamer->GetDimension())
+        return false;
+
+    if (GetTotalStreamReferences() != 0)
+        return true;
+
+    if (!m_pStreamer->IsActiveElement(this) || !CanStreamInByDistance())
+        return false;
+
+    // A script can move the camera or element before the next streamer distance sort.
+    CVector cameraPosition;
+    m_pManager->GetCamera()->GetPosition(cameraPosition);
+    return GetDistanceToBoundingBoxSquared(cameraPosition) <= m_pStreamer->m_fMaxDistanceThreshold;
+}
+
 void CClientStreamElement::InternalStreamIn(bool bInstantly)
 {
     if (!m_bStreamedIn && !m_bAttemptingToStreamIn)
     {
         m_bAttemptingToStreamIn = true;
-        StreamIn(bInstantly);
+        try
+        {
+            StreamIn(bInstantly);
+        }
+        catch (...)
+        {
+            // A failed request must allow another stream-in on a later pulse.
+            NotifyUnableToCreate();
+            throw;
+        }
     }
 }
 

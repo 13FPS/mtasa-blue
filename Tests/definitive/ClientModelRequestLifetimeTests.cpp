@@ -84,6 +84,12 @@ struct CClientEntity
     std::function<void(CModelInfo*)> callback;
     void                             ModelRequestCallback(CModelInfo* model) { callback(model); }
 };
+class CClientStreamElement : public CClientEntity
+{
+public:
+    bool IsAttemptingToStreamIn() const { return true; }
+    bool IsModelStreamInWanted() const { return true; }
+};
 #include "CClientModelRequestManager.h"
 struct CClientModelManager
 {

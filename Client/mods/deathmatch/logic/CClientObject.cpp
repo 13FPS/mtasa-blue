@@ -472,7 +472,7 @@ void CClientObject::StreamIn(bool bInstantly)
     else
     {
         // Request the model async
-        if (m_pModelRequester->Request(m_usModel, this))
+        if (m_pModelRequester->RequestForStreamIn(m_usModel, this))
         {
             // Create us now if we already had it loaded
             Create();

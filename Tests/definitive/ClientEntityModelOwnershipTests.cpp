@@ -106,6 +106,7 @@ struct Requester
         pending = ready ? nullptr : game.GetModelInfo(id);
         return ready;
     }
+    bool RequestForStreamIn(unsigned short id, void* entity) { return Request(id, entity); }
     bool RequestBlocking(unsigned short, const char*) const { return ready; }
 } requester;
 struct Streamer

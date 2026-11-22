@@ -492,44 +492,8 @@ void CClientStreamer::Restream(bool bMovedFar)
                 if (fElementDistanceExp > m_fMaxDistanceExp)
                     continue;
 
-                if (IS_VEHICLE(pElement))
-                {
-                    CClientVehicle* pVehicle = DynamicCast<CClientVehicle>(pElement);
-                    if (pVehicle && pVehicle->GetOccupant() && IS_PLAYER(pVehicle->GetOccupant()))
-                    {
-                        CClientPlayer* pPlayer = DynamicCast<CClientPlayer>(pVehicle->GetOccupant());
-                        if (pPlayer->GetLastPuresyncType() == PURESYNC_TYPE_LIGHTSYNC)
-                        {
-                            // if the last packet was ls he isn't streaming in soon.
-                            continue;
-                        }
-                    }
-
-                    if (pVehicle && pVehicle->GetTowedByVehicle())
-                    {
-                        // Streaming in of towed vehicles is done in CClientVehicle::StreamIn by the towing vehicle
-                        continue;
-                    }
-                }
-                if (IS_PLAYER(pElement))
-                {
-                    CClientPlayer* pPlayer = DynamicCast<CClientPlayer>(pElement);
-                    if (pPlayer->GetLastPuresyncType() == PURESYNC_TYPE_LIGHTSYNC)
-                    {
-                        // if the last packet was ls he isn't streaming in soon.
-                        continue;
-                    }
-                }
-                // If attached and attached-to is streamed out, don't consider for streaming in
-                CClientStreamElement* pAttachedTo = DynamicCast<CClientStreamElement>(pElement->GetAttachedTo());
-                if (pAttachedTo && !pAttachedTo->IsStreamedIn())
-                {
-                    // ...unless attached to low LOD version
-                    CClientObject* pAttachedToObject = DynamicCast<CClientObject>(pAttachedTo);
-                    CClientObject* pObject = DynamicCast<CClientObject>(pElement);
-                    if (!pObject || !pAttachedToObject || pObject->IsLowLod() == pAttachedToObject->IsLowLod())
-                        continue;
-                }
+                if (!pElement->CanStreamInByDistance())
+                    continue;
 
                 // Prevent rapid in/out thrashing of the same element.
                 if (!bMovedFar && (currentTime - pElement->GetLastStreamOutTime()) < minStreamInDelayAfterOutMs)

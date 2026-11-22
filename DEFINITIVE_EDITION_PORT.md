@@ -4,11 +4,25 @@
 
 **Full multiplayer on DE is still unavailable.** The real MTA Core, Deathmatch
 client and DE backend all built in Release/x64. MTA's menu, Settings, console,
-key bindings, walking and sprinting have run inside DE. Remote gameplay still
-requires the complete `CGame` and multiplayer factories and compatible x64
-client networking. In particular, Core's first settings pass needs DE's
-controller configuration and game settings services to apply mouse controls,
-shadows and aspect ratio. The current binaries were built and tested locally.
+key bindings, walking and sprinting have run inside DE. Core currently stops
+before loading gameplay modules because the DE adapter returns no `CGame`.
+The first settings pass needs that interface to provide controller and game
+settings for mouse controls, shadows and aspect ratio. Remote gameplay also
+requires a DE multiplayer factory, multiplayer and renderer startup, and a
+compatible x64 client network module. The current binaries were tested locally.
+
+DE movement polling now reads the left, right, middle and two side mouse
+buttons. Settings and movement polling agree on which physical
+button to use when Windows swaps the primary and secondary buttons. The Core
+input host exercised button presses, holds, releases and focus changes.
+
+Settings shows one primary key and three alternates for each movement
+control. Applying edits keeps additional saved keys in their original order.
+In a session, swapping two visible keys keeps both bindings when the window
+reopens. Cancel discards staged edits. Running
+`Tests/definitive/test_core_frontend_startup_host.ps1` with
+`-BindingSettingsOnly` exercises the Settings window and persistence on
+Windows' software renderer.
 
 MTA's Settings slider now uses the same SDK conversion between normalized
 vertical aim sensitivity and the raw value saved in the player's settings.
@@ -29,8 +43,12 @@ the old completion can no longer create an entity with the new model. A local
 ped keeps its current skin alive when a replacement fails to load.
 Queued requests hold the registration until they release the game reference.
 A stream-out cancels a pending completion, and a new request later in the same
-frame can still finish. The registration table uses its own allocated size for
-lookups and cleanup after the game stops reporting its streaming limits.
+frame can still finish. If applying a replacement or notifying a waiting
+entity throws, the queue releases its reference, processes deferred
+cancellations and propagates the original error. Shutdown also visits the
+remaining entries if one release fails. The registration table uses its own
+allocated size for lookups and cleanup after the game stops reporting its
+streaming limits.
 
 During startup, DE can reuse the same service address across game sessions.
 Six MTA game lookups now recheck the session before returning a service to

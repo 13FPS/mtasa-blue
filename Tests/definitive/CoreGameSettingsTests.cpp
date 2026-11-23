@@ -2,11 +2,13 @@
 #include <cerrno>
 #include <algorithm>
 #include <climits>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <list>
 #include <string_view>
 #include <core/CCVarsInterface.h>
+#include <game/CControllerConfigManager.h>
 #include <game/CSettings.h>
 #include <tinyxml2.h>
 
@@ -32,6 +34,7 @@ public:
     bool        GetTagContent(int&);
     bool        GetTagContent(unsigned int&);
     bool        GetTagContent(float&);
+    void        SetTagContent(bool);
     static bool StringToLong(const char*, long&);
 };
 #include "XmlScalars.generated.inl"
@@ -65,7 +68,7 @@ bool     CClientVariables::Load()
     return true;
 }
 
-struct CControllerConfigManager
+struct RecordingController : CControllerConfigManager
 {
     bool  inverted{}, flight{}, steering{}, classic{}, sameAim{};
     float aim{};
@@ -75,12 +78,19 @@ struct CControllerConfigManager
     void  SetClassicControls(bool value) { classic = value; }
     void  SetVerticalAimSensitivityRawValue(float value) { aim = value; }
     void  SetVerticalAimSensitivitySameAsHorizontal(bool value) { sameAim = value; }
+    float GetVerticalAimSensitivityRawValue() override { return aim; }
+    void  SetControllerKeyAssociatedWithAction(eControllerAction, int, eControllerType) override { std::abort(); }
+    int   GetControllerKeyAssociatedWithAction(eControllerAction, eControllerType) override { std::abort(); }
+    void  SuspendSteerAndFlyWithMouse(bool) override { std::abort(); }
 };
 struct SettingsReceiver
 {
     eAspectRatio  aspect{};
     bool          adjust{}, shadows{}, grass{}, pedShadows{};
     unsigned char radio{38}, effects{42};
+    float         mouse{0.8f};
+    float         GetMouseSensitivity() const { return mouse; }
+    void          SetMouseSensitivity(float value) { mouse = value; }
     void          SetVolumetricShadowsEnabled(bool value) { shadows = value; }
     void          SetAspectRatio(eAspectRatio ratio, bool value)
     {
@@ -113,7 +123,7 @@ struct CMultiplayer
 };
 struct Game
 {
-    CControllerConfigManager  controller;
+    RecordingController       controller;
     SettingsReceiver          settings;
     CControllerConfigManager* GetControllerConfigManager() { return &controller; }
     SettingsReceiver*         GetSettings() { return &settings; }
@@ -127,6 +137,7 @@ struct CCore
 #define CGameSettings SettingsReceiver
 #include "ApplyGameSettings.generated.inl"
 #undef CGameSettings
+#include "MouseControlsDialogTests.inl"
 
 int main(int argc, char** argv)
 {
@@ -153,6 +164,19 @@ int main(int argc, char** argv)
             "<mastervolume>1</mastervolume></c>";
     else if (name == "migration")
         xml = "<c><mastervolume>0.5</mastervolume><sfxvolume>0.25</sfxvolume><limit>91</limit><invalid>nan</invalid></c>";
+    else if (name == "controls-load")
+        xml =
+            "<c><invert_mouse>1</invert_mouse><steer_with_mouse>bad</steer_with_mouse><classic_controls>0</classic_controls>"
+            "<vertical_aim_sensitivity>bad</vertical_aim_sensitivity></c>";
+    else if (name == "controls-numbers" || name == "profile-floats")
+        xml = "<c/>";
+    else if (name == "controls-volumes")
+        xml = "<c><mastervolume>0</mastervolume><mtavolume>0.6</mtavolume><voicevolume>broken</voicevolume></c>";
+    else if (name == "controls-defaults" || name == "controls-invalid-nick")
+        xml =
+            "<c><invert_mouse>1</invert_mouse><steer_with_mouse>1</steer_with_mouse><fly_with_mouse>1</fly_with_mouse>"
+            "<classic_controls>1</classic_controls><vertical_aim_sensitivity>0.002</vertical_aim_sensitivity>"
+            "<use_mouse_sensitivity_for_aiming>1</use_mouse_sensitivity_for_aiming></c>";
     else
         return 2;
     tinyxml2::XMLDocument document;
@@ -161,7 +185,28 @@ int main(int argc, char** argv)
     root.m_pNode = document.RootElement();
     auto& variables = CClientVariables::GetSingleton();
     variables.Load();
-    Game         game;
+    if (name == "profile-floats")
+    {
+        float value = 0.375f;
+        if (variables.Get("scalar", value) || variables.Exists("scalar") || value != 0.375f)
+            return 1;
+        for (const char* text : {"", "   ", "bad", "0.001bad", "nan", "-inf", "1e99"})
+        {
+            variables.Set("scalar", text);
+            if (variables.Get("scalar", value) || value != 0.375f)
+                return 1;
+        }
+        for (const auto& [text, expected] : {std::pair{"0", 0.0f}, {" +1.25e-1\t", 0.125f}, {"-0.5", -0.5f}})
+        {
+            variables.Set("scalar", text);
+            if (!variables.Get("scalar", value) || value != expected)
+                return 1;
+        }
+        return 0;
+    }
+    Game game;
+    if (name.substr(0, 9) == "controls-")
+        return TestMouseDialog(name, game) ? 0 : 1;
     CMultiplayer multiplayer;
     CCore        core{&game, &multiplayer};
     if (name == "migration")

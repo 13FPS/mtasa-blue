@@ -39,7 +39,23 @@ def main():
         fixture = Path(__file__).with_name("CoreGameSettingsTests.cpp")
         shutil.copyfile(fixture, work / fixture.name)
         record["inputs"][fixture.relative_to(ROOT).as_posix()] = hashlib.sha256(fixture.read_bytes()).hexdigest()
+        dialog_fixture = fixture.with_name("MouseControlsDialogTests.inl")
+        shutil.copyfile(dialog_fixture, work / dialog_fixture.name)
+        record["inputs"][dialog_fixture.relative_to(ROOT).as_posix()] = hashlib.sha256(dialog_fixture.read_bytes()).hexdigest()
         core = source("Client/core/CCore.cpp")
+        settings = source("Client/core/CSettings.cpp")
+        load = method(settings, "void CSettings::LoadData()")
+        controls_load = load.split("    // Controls\n", 1)[1].split("    // Audio\n", 1)[0]
+        volume_snapshot = load.split('m_pComboUsertrackMode->SetText(_("Sequential"));', 1)[1]
+        snapshot_end = 'm_pAudioVoiceVolume->SetScrollPosition(m_fOldVoiceVolume);'
+        volume_snapshot = volume_snapshot[:volume_snapshot.index(snapshot_end) + len(snapshot_end)]
+        save = method(settings, "void CSettings::SaveData()")
+        controls = save[save.index("    CControllerConfigManager*"):save.index("    // Video\n")]
+        mouse = next(line for line in save.splitlines() if "gameSettings->SetMouseSensitivity(" in line)
+        (work / "DialogLoad.generated.inl").write_text(controls_load + volume_snapshot)
+        (work / "DialogSave.generated.inl").write_text(controls + mouse)
+        (work / "DialogButtons.generated.inl").write_text("\n".join(method(settings, signature) for signature in (
+            "bool CSettings::OnControlsDefaultClick(CGUIElement* pElement)", "bool CSettings::OnOKButtonClick(CGUIElement* pElement)")))
         xml = source("Shared/XML/CXMLNodeImpl.cpp")
         variables = source("Client/core/CClientVariables.cpp")
         (work / "CClientVariables.h").write_text(source("Client/core/CClientVariables.h"))
@@ -54,11 +70,14 @@ def main():
         (work / "ApplyGameSettings.generated.inl").write_text(method(core, "void CCore::ApplyGameSettings()"))
         (work / "XmlScalars.generated.inl").write_text("\n".join(method(xml, prefix) for prefix in (
             "bool CXMLNodeImpl::GetTagContent(bool& bContent)", "bool CXMLNodeImpl::GetTagContent(int& iContent)", "bool CXMLNodeImpl::GetTagContent(unsigned int& uiContent)",
-            "bool CXMLNodeImpl::GetTagContent(float& fContent)", "bool CXMLNodeImpl::StringToLong(const char* szString, long& lValue)")))
+            "bool CXMLNodeImpl::GetTagContent(float& fContent)", "void CXMLNodeImpl::SetTagContent(bool bContent)",
+            "bool CXMLNodeImpl::StringToLong(const char* szString, long& lValue)")))
         for path in ("Client/sdk/core/CCVarsInterface.h", "Client/sdk/game/CSettings.h", "vendor/tinyxml2/tinyxml2.h", "vendor/tinyxml2/tinyxml2.cpp"):
             relative = path.removeprefix("Client/sdk/").removeprefix("vendor/tinyxml2/")
             (work / relative).parent.mkdir(parents=True, exist_ok=True)
             (work / relative).write_text(source(path), encoding="utf-8")
+        (work / "game/CControllerConfigManager.h").write_text(source("Client/sdk/game/CControllerConfigManager.h"))
+        (work / "CControllerActions.h").write_text(source("Shared/sdk/CControllerActions.h"))
         env = dict(os.environ, TMP=temp, TEMP=temp, TMPDIR=temp)
         env.pop("CL", None)
         env.pop("_CL_", None)
@@ -76,7 +95,9 @@ def main():
                 return subprocess.run(args, cwd=work, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=120).returncode
         record["compile"] = run("build", command)
         if not record["compile"]:
-            record["cases"] = {case: run(case, [test, case]) for case in ("saved", "unreadable", "ranges", "migration")}
+            record["cases"] = {case: run(case, [test, case]) for case in (
+                "saved", "unreadable", "ranges", "migration", "profile-floats", "controls-load", "controls-numbers",
+                "controls-defaults", "controls-invalid-nick", "controls-volumes")}
             record["success"] = not any(record["cases"].values())
     receipt = output / "result.json"
     receipt.write_text(json.dumps(record, indent=2) + "\n")

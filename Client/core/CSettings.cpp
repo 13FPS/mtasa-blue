@@ -2260,20 +2260,14 @@ void CSettings::Update()
 
 void CSettings::UpdateAudioTab()
 {
-    float fMasterVolume = 0, fMTAVolume = 0, fVoiceVolume = 0;
-
-    CVARS_GET("mastervolume", fMasterVolume);
-    CVARS_GET("mtavolume", fMTAVolume);
-    CVARS_GET("voicevolume", fVoiceVolume);
-
     CGameSettings* gameSettings = CCore::GetSingleton().GetGame()->GetSettings();
 
     m_pAudioRadioVolume->SetScrollPosition(m_fRadioVolume);
     m_pAudioSFXVolume->SetScrollPosition(m_fSFXVolume);
-    m_pAudioMTAVolume->SetScrollPosition(fMTAVolume);
-    m_pAudioVoiceVolume->SetScrollPosition(fVoiceVolume);
+    m_pAudioMTAVolume->SetScrollPosition(CVARS_GET_VALUE<float>("mtavolume", 1.0f));
+    m_pAudioVoiceVolume->SetScrollPosition(CVARS_GET_VALUE<float>("voicevolume", 1.0f));
     // Lastly, set our master volume scroll position
-    m_pAudioMasterVolume->SetScrollPosition(fMasterVolume);
+    m_pAudioMasterVolume->SetScrollPosition(CVARS_GET_VALUE<float>("mastervolume", 1.0f));
 
     m_pCheckBoxAudioEqualizer->SetSelected(gameSettings->IsRadioEqualizerEnabled());
     m_pCheckBoxAudioAutotune->SetSelected(gameSettings->IsRadioAutotuneEnabled());
@@ -2982,37 +2976,20 @@ bool CSettings::OnAxisSelectClick(CGUIElement* pElement)
 //
 bool CSettings::OnControlsDefaultClick(CGUIElement* pElement)
 {
-    CGameSettings*            gameSettings = CCore::GetSingleton().GetGame()->GetSettings();
-    CControllerConfigManager* pController = g_pCore->GetGame()->GetControllerConfigManager();
-
-    // Load the default settings
     GetJoystickManager()->SetDefaults();
-    CVARS_SET("invert_mouse", false);
-    CVARS_SET("fly_with_mouse", false);
-    CVARS_SET("steer_with_mouse", false);
-    CVARS_SET("classic_controls", false);
-    pController->SetVerticalAimSensitivity(0.5f);
-    CVARS_SET("vertical_aim_sensitivity", pController->GetVerticalAimSensitivityRawValue());
-    gameSettings->SetMouseSensitivity(0.5f);
-
-    // Set game vars
-    pController->SetMouseInverted(CVARS_GET_VALUE<bool>("invert_mouse"));
-    pController->SetFlyWithMouse(CVARS_GET_VALUE<bool>("fly_with_mouse"));
-    pController->SetSteerWithMouse(CVARS_GET_VALUE<bool>("steer_with_mouse"));
-    pController->SetClassicControls(CVARS_GET_VALUE<bool>("classic_controls"));
-    pController->SetVerticalAimSensitivityRawValue(CVARS_GET_VALUE<float>("vertical_aim_sensitivity"));
-
-    // Update the GUI
     UpdateJoypadTab();
-    m_pInvertMouse->SetSelected(CVARS_GET_VALUE<bool>("invert_mouse"));
-    m_pFlyWithMouse->SetSelected(CVARS_GET_VALUE<bool>("fly_with_mouse"));
-    m_pSteerWithMouse->SetSelected(CVARS_GET_VALUE<bool>("steer_with_mouse"));
-    m_pStandardControls->SetSelected(!CVARS_GET_VALUE<bool>("classic_controls"));
-    m_pClassicControls->SetSelected(CVARS_GET_VALUE<bool>("classic_controls"));
-    m_pMouseSensitivity->SetScrollPosition(gameSettings->GetMouseSensitivity());
-    m_pVerticalAimSensitivity->SetScrollPosition(pController->GetVerticalAimSensitivity());
-    m_pCheckboxVerticalAimSensitivity->SetSelected(CVARS_GET_VALUE<bool>("use_mouse_sensitivity_for_aiming"));
-    m_pVerticalAimSensitivity->SetEnabled(!m_pCheckboxVerticalAimSensitivity->GetSelected());
+
+    // SaveData applies the mouse controls on OK. Keep the defaults in the
+    // dialog so Cancel preserves the player's profile and active controls.
+    m_pInvertMouse->SetSelected(false);
+    m_pFlyWithMouse->SetSelected(false);
+    m_pSteerWithMouse->SetSelected(false);
+    m_pStandardControls->SetSelected(true);
+    m_pClassicControls->SetSelected(false);
+    m_pMouseSensitivity->SetScrollPosition(0.5f);
+    m_pVerticalAimSensitivity->SetScrollPosition(0.5f);
+    m_pCheckboxVerticalAimSensitivity->SetSelected(false);
+    m_pVerticalAimSensitivity->SetEnabled(true);
 
     return true;
 }
@@ -4135,18 +4112,15 @@ bool CSettings::OnOKButtonClick(CGUIElement* pElement)
         return true;
     }
 
-    // Process keybinds
-    ProcessKeyBinds();
-    ProcessJoypad();
-
-    // Invalid nickname?
+    // Reject the form before changing bindings or saving joystick settings.
     if (!CCore::GetSingleton().IsValidNick(m_pEditNick->GetText().c_str()))
     {
         CCore::GetSingleton().ShowMessageBox(_("Error"), _("Your nickname contains invalid characters!"), MB_BUTTON_OK | MB_ICON_INFO);
         return true;
     }
 
-    // Save the config
+    ProcessKeyBinds();
+    ProcessJoypad();
     SaveData();
 
     // Close the window
@@ -4273,24 +4247,18 @@ void CSettings::LoadData()
     m_pCheckBoxCustomizedSAFiles->SetVisible(GetApplicationSettingInt("customized-sa-files-show") != 0);
 
     // Controls
-    CVARS_GET("invert_mouse", bVar);
-    m_pInvertMouse->SetSelected(bVar);
-    CVARS_GET("steer_with_mouse", bVar);
-    m_pSteerWithMouse->SetSelected(bVar);
-    CVARS_GET("fly_with_mouse", bVar);
-    m_pFlyWithMouse->SetSelected(bVar);
-    CVARS_GET("classic_controls", bVar);
-    m_pClassicControls->SetSelected(bVar);
+    m_pInvertMouse->SetSelected(CVARS_GET_VALUE<bool>("invert_mouse", false));
+    m_pSteerWithMouse->SetSelected(CVARS_GET_VALUE<bool>("steer_with_mouse", false));
+    m_pFlyWithMouse->SetSelected(CVARS_GET_VALUE<bool>("fly_with_mouse", false));
+    const bool classicControls = CVARS_GET_VALUE<bool>("classic_controls", false);
+    m_pClassicControls->SetSelected(classicControls);
+    m_pStandardControls->SetSelected(!classicControls);
 
-    CGameSettings*            gameSettings = CCore::GetSingleton().GetGame()->GetSettings();
-    CControllerConfigManager* pController = g_pCore->GetGame()->GetControllerConfigManager();
-
+    CGameSettings* gameSettings = CCore::GetSingleton().GetGame()->GetSettings();
     m_pMouseSensitivity->SetScrollPosition(gameSettings->GetMouseSensitivity());
-    pController->SetVerticalAimSensitivityRawValue(CVARS_GET_VALUE<float>("vertical_aim_sensitivity"));
-    m_pVerticalAimSensitivity->SetScrollPosition(pController->GetVerticalAimSensitivity());
-
-    CVARS_GET("use_mouse_sensitivity_for_aiming", bVar);
-    m_pCheckboxVerticalAimSensitivity->SetSelected(bVar);
+    const float rawAimSensitivity = CVARS_GET_VALUE<float>("vertical_aim_sensitivity", 0.0015f);
+    m_pVerticalAimSensitivity->SetScrollPosition(CControllerConfigManager::NormalizeVerticalAimSensitivity(rawAimSensitivity));
+    m_pCheckboxVerticalAimSensitivity->SetSelected(CVARS_GET_VALUE<bool>("use_mouse_sensitivity_for_aiming", false));
     m_pVerticalAimSensitivity->SetEnabled(!m_pCheckboxVerticalAimSensitivity->GetSelected());
 
     // Audio
@@ -4323,14 +4291,11 @@ void CSettings::LoadData()
     else if (uiUsertrackMode == 2)
         m_pComboUsertrackMode->SetText(_("Sequential"));
 
-    CVARS_GET("mastervolume", m_fOldMasterVolume);
-    CVARS_GET("mtavolume", m_fOldMTAVolume);
-    CVARS_GET("voicevolume", m_fOldVoiceVolume);
-    m_fOldMasterVolume = max(0.0f, min(1.0f, m_fOldMasterVolume));
+    m_fOldMasterVolume = std::clamp(CVARS_GET_VALUE<float>("mastervolume", 1.0f), 0.0f, 1.0f);
     m_fOldRadioVolume = max(0.0f, min(1.0f, m_fRadioVolume));
     m_fOldSFXVolume = max(0.0f, min(1.0f, m_fSFXVolume));
-    m_fOldMTAVolume = max(0.0f, min(1.0f, m_fOldMTAVolume));
-    m_fOldVoiceVolume = max(0.0f, min(1.0f, m_fOldVoiceVolume));
+    m_fOldMTAVolume = std::clamp(CVARS_GET_VALUE<float>("mtavolume", 1.0f), 0.0f, 1.0f);
+    m_fOldVoiceVolume = std::clamp(CVARS_GET_VALUE<float>("voicevolume", 1.0f), 0.0f, 1.0f);
     m_pAudioMasterVolume->SetScrollPosition(m_fOldMasterVolume);
     m_pAudioRadioVolume->SetScrollPosition(m_fOldRadioVolume);
     m_pAudioSFXVolume->SetScrollPosition(m_fOldSFXVolume);

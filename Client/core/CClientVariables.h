@@ -13,6 +13,7 @@
 
 #include <string>
 #include <cmath>
+#include <cstdlib>
 #include "CSingleton.h"
 #include <core/CCVarsInterface.h>
 #include <xml/CXMLNode.h>
@@ -52,8 +53,16 @@ public:
     bool Get(const std::string& strVariable, unsigned int& val) override { return ReadScalar(strVariable, val); }
     bool Get(const std::string& strVariable, float& val) override
     {
-        float value;
-        if (!ReadScalar(strVariable, value) || !std::isfinite(value))
+        CXMLNode* node = m_pStorage ? m_pStorage->FindSubNode(strVariable.c_str()) : nullptr;
+        if (!node)
+            return false;
+
+        // The legacy XML float accessor accepts numeric prefixes and returns zero
+        // for arbitrary text. Leave the caller's default intact for a malformed setting.
+        const std::string text = node->GetTagContent();
+        char*             end = nullptr;
+        const float       value = std::strtof(text.c_str(), &end);
+        if (end == text.c_str() || !std::isfinite(value) || text.find_first_not_of(" \t\r\n\f\v", end - text.c_str()) != std::string::npos)
             return false;
         val = value;
         return true;

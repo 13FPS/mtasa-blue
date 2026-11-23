@@ -146,20 +146,20 @@ enum eControllerType
 class CControllerConfigManager
 {
 public:
-    virtual void  SetControllerKeyAssociatedWithAction(eControllerAction action, int iKey, eControllerType controllerType) = 0;
-    virtual int   GetControllerKeyAssociatedWithAction(eControllerAction action, eControllerType controllerType) = 0;
-    virtual void  SetClassicControls(bool bClassicControls) = 0;
-    virtual void  SetMouseInverted(bool bInverted) = 0;
-    virtual void  SetFlyWithMouse(bool bFlyWithMouse) = 0;
-    virtual void  SetSteerWithMouse(bool bSteerWithMouse) = 0;
-    virtual void  SuspendSteerAndFlyWithMouse(bool bSuspend) = 0;
-    virtual float GetVerticalAimSensitivity()
+    virtual void SetControllerKeyAssociatedWithAction(eControllerAction action, int iKey, eControllerType controllerType) = 0;
+    virtual int  GetControllerKeyAssociatedWithAction(eControllerAction action, eControllerType controllerType) = 0;
+    virtual void SetClassicControls(bool bClassicControls) = 0;
+    virtual void SetMouseInverted(bool bInverted) = 0;
+    virtual void SetFlyWithMouse(bool bFlyWithMouse) = 0;
+    virtual void SetSteerWithMouse(bool bSteerWithMouse) = 0;
+    virtual void SuspendSteerAndFlyWithMouse(bool bSuspend) = 0;
+    static float NormalizeVerticalAimSensitivity(double raw)
     {
-        const double raw = GetVerticalAimSensitivityRawValue();
         const double range = static_cast<double>(MaxVerticalAimSensitivity) - MinVerticalAimSensitivity;
         return std::clamp(static_cast<float>((raw - MinVerticalAimSensitivity) / range), 0.0f, 1.0f);
     }
-    virtual void SetVerticalAimSensitivity(float sensitivity)
+    virtual float GetVerticalAimSensitivity() { return NormalizeVerticalAimSensitivity(GetVerticalAimSensitivityRawValue()); }
+    virtual void  SetVerticalAimSensitivity(float sensitivity)
     {
         SetVerticalAimSensitivityRawValue((MaxVerticalAimSensitivity - MinVerticalAimSensitivity) * sensitivity + MinVerticalAimSensitivity);
     }

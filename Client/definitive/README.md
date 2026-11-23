@@ -31,6 +31,23 @@ The sections below record individual implementation and validation boundaries.
 Their dated results apply to those specific builds, rather than every later
 source revision.
 
+### Apply an MTA mouse preference before starting GTA
+
+With GTA closed, run the following in PowerShell 7 or later from the repository
+root, using the path to your MTA profile. Add `-WhatIf` to preview the change.
+
+```powershell
+./Client/definitive/sync-mouse-inversion.ps1 -CoreConfig 'C:\Program Files (x86)\MTA San Andreas 1.6\MTA\config\coreconfig.xml'
+```
+
+The command reads `mainconfig/settings/invert_mouse` from the profile and
+updates the existing `InvertLook` field in GTA's `GameUserSettings.ini`.
+Start GTA normally and open **Options → Controls → Invert Look** to see
+the imported value. This is a one-time import. Changing the value from a
+running MTA session still requires a DE controller implementation.
+
+### Experimental launcher
+
 The experimental x64 MTA launcher now offers explicit `--de-launch` startup
 through Steam after checking the native package, installation ownership and
 registered app/library. Its existing `--de-preflight` remains read-only; see

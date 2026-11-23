@@ -17,6 +17,14 @@ The DE controller snapshot exposes observed pad state. Applying mouse
 inversion and volumetric shadows still requires writable DE services for
 the controller and game settings.
 
+Mouse inversion also has a prelaunch import. With GTA closed,
+`Client/definitive/sync-mouse-inversion.ps1` can copy MTA's saved
+`invert_mouse` preference into GTA's existing controls configuration.
+On separate Steam launches, GTA's own Controls menu showed Off after
+importing an installed MTA profile and On after importing a test profile.
+The same desktop drag at the same saved location produced an unarmed
+action in both cases. Camera pitch reversal remains unverified.
+
 DE movement polling now reads the left, right, middle and two side mouse
 buttons. Settings and movement polling agree on which physical
 button to use when Windows swaps the primary and secondary buttons. The Core
@@ -24,8 +32,10 @@ input host exercised button presses, holds, releases and focus changes.
 
 The DE bindings window checks whether movement polling can distinguish a
 key before accepting it. An unsupported key leaves the existing binding in
-place. The numeric keypad's multiply, add, subtract and divide keys can now
-be used for movement.
+place. Core's polling tests cover the numeric keypad's multiply, add,
+subtract and divide keys. The Windows frontend host also exercised binding
+capture and persistence. Movement in GTA with those four keys still needs
+a live test using the same Core build.
 
 On the first gameplay frame, Core uses each setting's own default when it
 cannot read the saved value. Invalid aspect ratio and clothing-loading

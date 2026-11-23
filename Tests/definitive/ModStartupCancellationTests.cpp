@@ -28,7 +28,7 @@ struct Scenario
     std::string              replacement;
     std::vector<std::string> arguments;
     unsigned                 initialized = 0, shutdown = 0, released = 0, pulse = 0, networkPulse = 0, chatLoad = 0, consoleActivate = 0;
-    unsigned                 cleanup = 0;
+    unsigned                 cleanup = 0, unloadNotifications = 0;
 };
 static Scenario scene;
 
@@ -111,25 +111,29 @@ public:
     void             OnModLoad() { ++scene.chatLoad; }
     void             ActivateInput() { ++scene.consoleActivate; }
     void             DoPulse() { ++scene.networkPulse; }
-    void             OnModUnload() { Check(!scene.inInitializer, "Core cleared input during client initialization"); }
-    void             OnFrameStart() {}
-    void             DoReliablePulse() {}
-    void             Printf(const char*, ...) {}
-    void             DeleteAll() {}
-    void             ClearScreenShotQueue() { ++scene.cleanup; }
-    void             SetInputVisible(bool) {}
-    void             Clear() {}
-    void             SetChatBoxVisible(bool) {}
-    void             SetVisible(bool, bool) {}
-    void             SetVisible(bool) {}
-    void             SetDebugViewVisible(bool) {}
-    void             SetClientMessageProcessor(void*) {}
-    void             SetExecuteHandler(void*) {}
-    void             SetCursorAlpha(float, bool) {}
-    void             Reset() {}
-    void             SetEnabled(bool) {}
-    void             SetConnected(bool) {}
-    void             SetIsIngame(bool) {}
+    void             OnModUnload()
+    {
+        Check(!scene.inInitializer, "Core cleared input during client initialization");
+        ++scene.unloadNotifications;
+    }
+    void OnFrameStart() {}
+    void DoReliablePulse() {}
+    void Printf(const char*, ...) {}
+    void DeleteAll() {}
+    void ClearScreenShotQueue() { ++scene.cleanup; }
+    void SetInputVisible(bool) {}
+    void Clear() {}
+    void SetChatBoxVisible(bool) {}
+    void SetVisible(bool, bool) {}
+    void SetVisible(bool) {}
+    void SetDebugViewVisible(bool) {}
+    void SetClientMessageProcessor(void*) {}
+    void SetExecuteHandler(void*) {}
+    void SetCursorAlpha(float, bool) {}
+    void Reset() {}
+    void SetEnabled(bool) {}
+    void SetConnected(bool) {}
+    void SetIsIngame(bool) {}
 };
 using CCore = Services;
 using CLocalGUI = Services;
@@ -226,14 +230,21 @@ static void TestLoadRequests()
         Check(scene.arguments == std::vector<std::string>{"local", "editor"} && scene.shutdown == 1 && scene.pulse == 1 && scene.chatLoad == 1,
               "a replacement requested by client initialization was lost or activated the superseded client");
     }
-    scene = {};
+    for (const bool unloadFirst : {false, true})
     {
+        scene = {};
         CModManager manager;
         Check(manager.Load("local"), "initial session failed");
         scene.keepModule = true;
         Check(!manager.Load("editor") && !manager.GetClient() && manager.IsLoaded() && scene.initialized == 1,
               "replacement used a module that failed to unload");
         scene.keepModule = false;
+        if (unloadFirst)
+        {
+            manager.RequestUnload();
+            manager.DoPulsePostFrame();
+            Check(!manager.IsLoaded() && scene.unloadNotifications == 1 && scene.cleanup == 1, "release retry notified an already retired client");
+        }
         Check(manager.Load("editor") && scene.initialized == 2 && scene.shutdown == 1 && scene.cleanup == 1,
               "retained-module retry failed or repeated session cleanup");
     }

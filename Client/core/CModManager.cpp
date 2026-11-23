@@ -62,7 +62,7 @@ void CModManager::RequestUnload()
         return;
     }
 
-    const bool notify = m_state == State::Idle && !m_inTransition;
+    const bool notify = m_client && m_state == State::Idle && !m_inTransition;
     m_state = State::PendingStop;
     if (notify)
         CCore::GetSingletonPtr()->OnModUnload();

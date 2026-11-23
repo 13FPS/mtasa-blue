@@ -31,7 +31,7 @@ The sections below record individual implementation and validation boundaries.
 Their dated results apply to those specific builds, rather than every later
 source revision.
 
-### Apply an MTA mouse preference before starting GTA
+### Import a saved MTA control preference before starting GTA
 
 With GTA closed, run the following in PowerShell 7 or later from the repository
 root, using the path to your MTA profile. Add `-WhatIf` to preview the change.
@@ -45,6 +45,14 @@ updates the existing `InvertLook` field in GTA's `GameUserSettings.ini`.
 Start GTA normally and open **Options → Controls → Invert Look** to see
 the imported value. This is a one-time import. Changing the value from a
 running MTA session still requires a DE controller implementation.
+
+To import controller vibration, select it explicitly. This reads
+`mainconfig/settings/controller_vibration` and updates `VibrationFeedback`
+in the same GTA file. The selected MTA setting must contain `0` or `1`.
+
+```powershell
+./Client/definitive/sync-mouse-inversion.ps1 -CoreConfig 'C:\Program Files (x86)\MTA San Andreas 1.6\MTA\config\coreconfig.xml' -Preference ControllerVibration
+```
 
 ### Sound effects and radio from a classic installation
 

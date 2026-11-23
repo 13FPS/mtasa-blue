@@ -23,6 +23,21 @@ The DE controller snapshot exposes observed pad state. Applying mouse
 inversion and volumetric shadows still requires writable DE services for
 the controller and game settings.
 
+Core queries keyboard, mouse and joystick action bindings through the
+controller manager. The ordinary Settings dialog also reads current game
+audio levels when it first imports them. The model cache needs a stable
+model interface for each ID so it can acquire and release streaming
+references. The assembled DE startup model class remains abstract.
+
+In the full MTA Settings dialog, opening Controls reads the saved vertical
+aim sensitivity without changing the active controller. Unreadable mouse
+options use the same defaults as startup. Nonnumeric aim sensitivity or a
+number followed by stray text falls back to the midpoint. Choosing defaults
+stages the mouse changes until OK. The dialog validates the nickname before
+committing staged key bindings or saving the joypad configuration. Unreadable
+master, MTA and voice volumes use their default level independently. The DE
+frontend currently exposes its movement bindings view.
+
 The DE game class now supplies `GetAudioContainer`. An x64 SDK test used
 the production audio implementation to read a sound effect and a radio track
 from a separately installed classic San Andreas audio directory. A second
@@ -54,6 +69,14 @@ On separate Steam launches, GTA's own Controls menu showed Off after
 importing an installed MTA profile and On after importing a test profile.
 The same desktop drag at the same saved location produced an unarmed
 action in both cases. Camera pitch reversal remains unverified.
+
+The same command now accepts `-Preference ControllerVibration` to copy
+MTA's explicit `controller_vibration` setting into GTA's `VibrationFeedback`.
+Two Steam launches checked the Off and On imports with test MTA profiles.
+GTA preserved each value when saving an Invert Look change from its own
+Controls menu. The final settings file matched the original byte for byte.
+Windows reported all four XInput slots disconnected. Physical controller
+rumble remains untested.
 
 DE movement polling now reads the left, right, middle and two side mouse
 buttons. Settings and movement polling agree on which physical

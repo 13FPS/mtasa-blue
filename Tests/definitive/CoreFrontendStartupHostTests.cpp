@@ -708,6 +708,19 @@ namespace
         open();
         findRows();
         beginCapture(0);
+        Check(message(WM_MOUSEWHEEL, MAKEWPARAM(0, WHEEL_DELTA)) && observed.lastMessageBoxTitle == "Unsupported movement input" &&
+                  grid->GetItemText(rows[0], primaryColumn) == replacement[0],
+              "a wheel impulse leaves the staged movement key intact and explains how to choose another");
+        Check(message(WM_KEYDOWN, VK_UP, 1 << 24) && message(WM_KEYUP, VK_UP, 1 << 24) && grid->GetItemText(rows[0], primaryColumn) == replacement[0],
+              "an ambiguous navigation key keeps the capture active");
+        Check(message(WM_KEYDOWN, VK_DIVIDE, 1 << 24) && grid->GetItemText(rows[0], primaryColumn) == std::string("num_div") &&
+                  std::string(realBinds[0]->boundKey->szKey) == replacement[0],
+              "the next supported keypad operator completes capture while the live binding stays intact until Apply");
+        message(WM_KEYUP, VK_DIVIDE, 1 << 24);
+        clickButton(observed.settingsCancel);
+        open();
+        findRows();
+        beginCapture(0);
         message(WM_KILLFOCUS, 0);
         Check(!message(WM_KEYDOWN, 'P') && grid->GetItemText(rows[0], primaryColumn) == replacement[0] &&
                   std::string(realBinds[0]->boundKey->szKey) == replacement[0],
@@ -875,10 +888,10 @@ namespace
                   !state[Startup::GuiBorrowed] && !state[Startup::ServicesRetained] && state[Startup::LastViewCleanupComplete] &&
                   state[Runtime::RuntimePhase] == static_cast<std::uint32_t>(Runtime::Phase::Hidden) && state[Runtime::ServicesInitialized] &&
                   state[Runtime::ServicesRetained] && state[Runtime::XmlRetained] && state[Runtime::ConfigRetained] && state[Runtime::CVarsLoaded] &&
-                  state[Runtime::BindingsRetained] && state[Runtime::BindingManagerCreations] == bindingManagers &&
-                  state[Runtime::ConfigurationLoads] == 1 && state[Runtime::BindingLoads] == bindingManagers && state[Runtime::ViewsAttached] == views &&
-                  state[Runtime::ViewsRetired] == views && !state[Runtime::ViewBorrowed] && state[Runtime::HiddenNeutralVerified] &&
-                  state[Runtime::ConfigurationReadOnly] == (bindingManagers == 1) && !state[Runtime::CleanupPending] && !state[Runtime::CleanupComplete],
+                  state[Runtime::BindingsRetained] && state[Runtime::BindingManagerCreations] == bindingManagers && state[Runtime::ConfigurationLoads] == 1 &&
+                  state[Runtime::BindingLoads] == bindingManagers && state[Runtime::ViewsAttached] == views && state[Runtime::ViewsRetired] == views &&
+                  !state[Runtime::ViewBorrowed] && state[Runtime::HiddenNeutralVerified] && state[Runtime::ConfigurationReadOnly] == (bindingManagers == 1) &&
+                  !state[Runtime::CleanupPending] && !state[Runtime::CleanupComplete],
               "hidden runtime retains exactly one real XML/CVars/bindings owner with neutral view aliases");
     }
 
@@ -980,8 +993,8 @@ namespace
             open();
             row = forwards();
             bind = static_cast<CGTAControlBind*>(grid->GetItemData(row, 2));
-            Check(grid->GetItemText(row, 2) == std::string("i") && std::string(bind->boundKey->szKey) == "i" &&
-                      grid->GetItemText(row, 3) == std::string("k") && grid->GetItemText(row, 4) == std::string("j"),
+            Check(grid->GetItemText(row, 2) == std::string("i") && std::string(bind->boundKey->szKey) == "i" && grid->GetItemText(row, 3) == std::string("k") &&
+                      grid->GetItemText(row, 4) == std::string("j"),
                   "second-view Cancel discards primary and alternate edits across an actual grid rebuild");
             grid->SetSelectedItem(row, 2, true);
             Check(grid->Event_OnDoubleClick() && message(WM_CHAR, 'P'), "runtime hide retains a real modal capture for teardown coverage");
@@ -1553,13 +1566,13 @@ int wmain(int argc, wchar_t** argv)
             {
                 const auto file = BindingFixturePath(root);
                 SeedForwardAlternates(file);
-                CheckMovementFile(ReadBindingFixture(file), {"i", "z", "x", "c", "v", "b", "n"});
+                CheckMovementFile(ReadBindingFixture(file), {"i", "z", "x", "c", "arrow_u", "b", "n"});
                 Check(owned.localWindow && DestroyWindow(owned.localWindow), "retire the first owned local HWND before creating a fresh Core runtime");
                 owned.localWindow = nullptr;
                 owned.observed.reset();
                 RuntimeSessionCase(owned, root, mode, startup, frontend, true);
                 Check(bindingPersistenceRestartVerified, "a newly constructed Core reloads disk bindings and retains edits across both Settings views");
-                CheckMovementFile(ReadBindingFixture(file), {"i", "x", "b", "v", "n"});
+                CheckMovementFile(ReadBindingFixture(file), {"i", "x", "b", "arrow_u", "n"});
             }
             bool legacyUnchanged = true;
             for (std::uint32_t index = 0; index < legacy.size(); ++index)
@@ -1755,15 +1768,20 @@ int wmain(int argc, wchar_t** argv)
                           state[Frontend::UpdaterCreated] && !state[Frontend::UpdaterWorkerStarted] && state[Frontend::GuiBorrowed] &&
                           state[Frontend::ConfigurationReadOnly] && !state[Frontend::ApplicationLocalePersisted],
                       "real read-only Core services and MTA menu start on the completed frontend owner");
-                const auto settleUntil = GetTickCount64() + 750;
+                // The fade advances per frame, so a slow software renderer needs more wall-clock time.
+                const auto settleUntil = GetTickCount64() + 5000;
+                bool       menuReady;
                 do
                 {
                     Frame(owned, 0, 0);
-                    Sleep(15);
+                    state = owned.State();
+                    menuReady =
+                        state[Frontend::MenuVisible] && !state[Frontend::MenuFading] && state[Frontend::Frames] >= 20 && state[Frontend::InputRequested];
+                    if (menuReady)
+                        break;
+                    Sleep(1);
                 } while (GetTickCount64() < settleUntil);
-                state = owned.State();
-                Check(state[Frontend::MenuVisible] && !state[Frontend::MenuFading] && state[Frontend::Frames] >= 20 && state[Frontend::InputRequested],
-                      "existing MTA main menu completes its real fade and input ownership");
+                Check(menuReady, "existing MTA main menu completes its real fade and input ownership");
                 const auto menu = Raster(owned);
                 Check(std::count_if(menu.begin(), menu.end(), [&](auto value) { return value != empty.front(); }) > 10000,
                       "actual menu assets produce substantial WARP pixels");

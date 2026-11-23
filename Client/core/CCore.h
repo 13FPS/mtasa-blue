@@ -467,6 +467,17 @@ private:
     CKeyBinds*     m_pKeyBinds = nullptr;
     CMouseControl* m_pMouseControl;
 
+    enum class FirstFrameStep
+    {
+        ValidateCVars,
+        ConsoleSettings,
+        GameSettings,
+        Steam,
+        Input,
+        Running,
+        Complete
+    };
+    FirstFrameStep    m_firstFrameStep = FirstFrameStep::ValidateCVars;
     unsigned short    m_menuFrame{};
     bool              m_isNetworkReady{};
     bool              m_bCrashDumpEncryptionDone{};

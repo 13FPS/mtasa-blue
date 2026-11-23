@@ -471,22 +471,14 @@ CSettings::CSettings(Mode mode) : m_Mode(mode)
     float fSFXVolume = 0.0f;
 
     // Keep exact slider values in CVARs. Fall back to reconstructed values for
-    // one-time migration when those keys do not exist yet.
-    if (clientVars.Exists("radiovolume"))
-    {
-        CVARS_GET("radiovolume", fRadioVolume);
-    }
-    else
+    // one-time migration when a channel has no readable saved value.
+    if (!clientVars.Get("radiovolume", fRadioVolume))
     {
         fRadioVolume = (float)gameSettings->GetRadioVolume() / 64.0f;
         CVARS_SET("radiovolume", fRadioVolume);
     }
 
-    if (clientVars.Exists("sfxvolume"))
-    {
-        CVARS_GET("sfxvolume", fSFXVolume);
-    }
-    else
+    if (!clientVars.Get("sfxvolume", fSFXVolume))
     {
         fSFXVolume = (float)gameSettings->GetSFXVolume() / 64.0f;
         CVARS_SET("sfxvolume", fSFXVolume);
@@ -2558,24 +2550,23 @@ void CSettings::PopulateResolutionComboBox()
                   return a.depth > b.depth;
               });
 
-    SString   selectedText;
-    VideoMode currentInfo;
-    if (gameSettings->GetVideoModeInfo(&currentInfo, iNextVidMode))
+    SString    selectedText;
+    VideoMode  currentInfo;
+    const bool hasCurrentMode = gameSettings->GetVideoModeInfo(&currentInfo, iNextVidMode) != nullptr;
+    // A saved mode can disappear when displays change. Keep the available choices selectable.
+    for (const auto& res : resolutions)
     {
-        for (const auto& res : resolutions)
+        SString       strMode("%d x %d x %d", res.width, res.height, res.depth);
+        CGUIListItem* pItem = m_pComboResolution->AddItem(strMode);
+        if (pItem)
         {
-            SString       strMode("%d x %d x %d", res.width, res.height, res.depth);
-            CGUIListItem* pItem = m_pComboResolution->AddItem(strMode);
-            if (pItem)
-                pItem->SetData((void*)res.vidMode);
-
-            if (currentInfo.width == res.width && currentInfo.height == res.height && currentInfo.depth == res.depth)
+            pItem->SetData((void*)res.vidMode);
+            if (hasCurrentMode && currentInfo.width == res.width && currentInfo.height == res.height && currentInfo.depth == res.depth)
                 selectedText = strMode;
         }
-
-        if (!selectedText.empty())
-            m_pComboResolution->SetText(selectedText);
     }
+    if (!selectedText.empty())
+        m_pComboResolution->SetText(selectedText);
 }
 
 //
@@ -3476,7 +3467,7 @@ bool CSettings::StageFrontendBindingEdits(CKeyBinds& target)
         std::list<CGTAControlBind*> existing;
         target.GetBoundControls(control, existing);
         controls.push_back({control, {}});
-        auto& keys = controls.back().keys;
+        auto&      keys = controls.back().keys;
         const auto appendKey = [&](const SBindableKey* key)
         {
             if (std::find(keys.begin(), keys.end(), key) == keys.end())
@@ -3805,6 +3796,14 @@ bool CSettings::ProcessMessage(UINT uMsg, WPARAM wParam, LPARAM lParam)
         }
         else if (pKey)
         {
+            // Leave an existing binding in place while the user chooses a key the movement poller can read.
+            if (IsFrontendBindings() && !CKeyBinds::CanPollConfiguredControlKey(*pKey))
+            {
+                if (bState)
+                    CCore::GetSingleton().ShowMessageBox(_("Unsupported movement input"), _("Choose another key or mouse button, or press Escape to clear."),
+                                                         MB_ICON_QUESTION);
+                return true;
+            }
             m_pSelectedBind->SetText(pKey->szKey);
         }
         else

@@ -309,6 +309,25 @@ namespace
         Check(poll(true).armed, "releasing the mouse button rearms configured controls");
     }
 
+    void KeypadOperatorPolling(CGameAdapterModule& module)
+    {
+        Scenario     test(module);
+        PhysicalKeys physical;
+        for (const auto code : {VK_MULTIPLY, VK_ADD, VK_SUBTRACT, VK_DIVIDE})
+        {
+            bool        down = false;
+            const auto* key = test.keys.GetBindableFromMessage(WM_KEYDOWN, code, code == VK_DIVIDE ? 1u << 24 : 0, down);
+            Check(key && down && CKeyBinds::CanPollConfiguredControlKey(*key), "an arithmetic keypad operator captured in Settings has a polling route");
+            test.Bind(key->szKey, "forwards");
+            const auto poll = [&] { return test.keys.PollConfiguredControlKeys(true, PhysicalKeys::Sample, &physical); };
+            Check(poll().armed, "a released keypad operator allows input to arm");
+            physical.down[code] = true;
+            Check(poll().changedKeys == 1 && test.Pulse().heldActions == MtaInput::ActionBit(FORWARDS), "the operator press moves the player forwards");
+            physical.down[code] = false;
+            Check(poll().changedKeys == 1 && test.Pulse().heldActions == 0, "releasing the operator releases the configured movement");
+        }
+    }
+
     class ActualXml
     {
     public:
@@ -472,6 +491,7 @@ extern "C" __declspec(dllexport) int MTA_RunConfiguredInputTests(std::uint32_t* 
         MouseWheelBoundary(module);
         DirectionAndDeadContext(module);
         MouseButtonPolling(module);
+        KeypadOperatorPolling(module);
         SavedXmlAndPhysicalPolling(module);
         Check(GetModuleHandleW(L"xmll.dll") == nullptr, "actual XML wrappers/interface/module are released before Core cleanup");
         module.Stop();

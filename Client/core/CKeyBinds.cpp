@@ -603,6 +603,42 @@ bool CKeyBinds::ProcessConfiguredControlKey(const SBindableKey* bindable, bool d
     return found;
 }
 
+static unsigned int GetConfiguredPollingCode(const SBindableKey& key, bool mouseButtonsSwapped) noexcept
+{
+    // Settings captures logical button messages. GetAsyncKeyState samples physical buttons.
+    switch (key.iGTARelative)
+    {
+        case GTA_KEY_LMOUSE:
+            return mouseButtonsSwapped ? VK_RBUTTON : VK_LBUTTON;
+        case GTA_KEY_RMOUSE:
+            return mouseButtonsSwapped ? VK_LBUTTON : VK_RBUTTON;
+        case GTA_KEY_MMOUSE:
+            return VK_MBUTTON;
+        case GTA_KEY_MXB1:
+            return VK_XBUTTON1;
+        case GTA_KEY_MXB2:
+            return VK_XBUTTON2;
+        // The bind table shares VK_SHIFT between both sides.
+        case GTA_KEY_LSHIFT:
+            return VK_LSHIFT;
+        case GTA_KEY_RSHIFT:
+            return VK_RSHIFT;
+    }
+    const auto code = key.ulCode;
+    // The four arithmetic keypad operators have dedicated VK codes in both Num Lock states.
+    // Digits, decimal and navigation, wheel events and AltGr require additional message context.
+    if (key.data != DATA_NONE || code < VK_BACK || code > 0xfe || code == VK_CLEAR || code == VK_SHIFT || code == VK_CONTROL || code == VK_MENU ||
+        (code >= VK_NUMPAD0 && code <= VK_NUMPAD9) || code == VK_DECIMAL || code == VK_SEPARATOR)
+        return 0;
+    return static_cast<unsigned int>(code);
+}
+
+bool CKeyBinds::CanPollConfiguredControlKey(const SBindableKey& key) noexcept
+{
+    // Swapping mouse buttons changes their physical VK, but both routes remain available.
+    return GetConfiguredPollingCode(key, false) != 0;
+}
+
 CKeyBinds::ConfiguredControlPollResult CKeyBinds::PollConfiguredControlKeys(bool focused, ConfiguredKeyStateSampler sampler, void* context,
                                                                             std::uint64_t allowedActions)
 {
@@ -613,35 +649,6 @@ CKeyBinds::ConfiguredControlPollResult CKeyBinds::PollConfiguredControlKeys(bool
         bool                eligible = false, unsupported = false, down = false;
     };
     const bool mouseButtonsSwapped = GetSystemMetrics(SM_SWAPBUTTON) != 0;
-    auto       pollingRoute = [mouseButtonsSwapped](const SBindableKey& key) -> unsigned int
-    {
-        // Settings captures logical button messages. GetAsyncKeyState samples physical buttons.
-        switch (key.iGTARelative)
-        {
-            case GTA_KEY_LMOUSE:
-                return mouseButtonsSwapped ? VK_RBUTTON : VK_LBUTTON;
-            case GTA_KEY_RMOUSE:
-                return mouseButtonsSwapped ? VK_LBUTTON : VK_RBUTTON;
-            case GTA_KEY_MMOUSE:
-                return VK_MBUTTON;
-            case GTA_KEY_MXB1:
-                return VK_XBUTTON1;
-            case GTA_KEY_MXB2:
-                return VK_XBUTTON2;
-            // The bind table shares VK_SHIFT between both sides.
-            case GTA_KEY_LSHIFT:
-                return VK_LSHIFT;
-            case GTA_KEY_RSHIFT:
-                return VK_RSHIFT;
-        }
-        const auto code = key.ulCode;
-        if (key.data != DATA_NONE || code < VK_BACK || code > 0xfe || code == VK_CLEAR || code == VK_SHIFT || code == VK_CONTROL || code == VK_MENU ||
-            (code >= VK_NUMPAD0 && code <= VK_DIVIDE))
-            return 0;
-        // Wheel, joystick and NumLock/AltGr-dependent routes need their existing
-        // message/device context. Report and skip them instead of guessing.
-        return static_cast<unsigned int>(code);
-    };
     if (!sampler)
         sampler = [](unsigned int code, void*) { return (GetAsyncKeyState(static_cast<int>(code)) & 0x8000) != 0; };
 
@@ -667,7 +674,7 @@ CKeyBinds::ConfiguredControlPollResult CKeyBinds::PollConfiguredControlKeys(bool
                 continue;
             auto*       control = static_cast<CGTAControlBind*>(bind.get());
             const auto* key = control->boundKey;
-            const auto  code = pollingRoute(*key);
+            const auto  code = GetConfiguredPollingCode(*key, mouseButtonsSwapped);
             const bool  allowed = (allowedActions & MtaInput::ActionBit(control->control->action)) != 0;
             auto        found = std::find_if(samples.begin(), samples.end(), [key](const KeySample& sample) { return sample.key == key; });
             if (found == samples.end())
@@ -1547,13 +1554,14 @@ bool CKeyBinds::ApplyFrontendControlBindingOrder(const std::vector<ControlBindin
     KeyBindContainer                        added;
     std::vector<KeyBindContainer::iterator> order;
     std::vector<size_t>                     slots(controls.size());
-    const auto append = [&](const ControlBindingOrder& control, const SBindableKey* key, KeyBindContainer::iterator slot)
+    const auto                              append = [&](const ControlBindingOrder& control, const SBindableKey* key, KeyBindContainer::iterator slot)
     {
-        auto record = std::find_if(m_binds.begin(), m_binds.end(), [&](const KeyBindPtr& bind)
-        {
-            return !bind->isBeingDeleted && bind->type == KeyBindType::GTA_CONTROL && bind->boundKey == key &&
-                   static_cast<CGTAControlBind*>(bind.get())->control == control.control;
-        });
+        auto record = std::find_if(m_binds.begin(), m_binds.end(),
+                                   [&](const KeyBindPtr& bind)
+                                   {
+                                       return !bind->isBeingDeleted && bind->type == KeyBindType::GTA_CONTROL && bind->boundKey == key &&
+                                              static_cast<CGTAControlBind*>(bind.get())->control == control.control;
+                                   });
         if (record != m_binds.end())
             order.push_back(record);
         else if (slot != m_binds.end() && std::find(control.keys.begin(), control.keys.end(), (*slot)->boundKey) == control.keys.end())
@@ -1612,7 +1620,7 @@ bool CKeyBinds::ApplyFrontendControlBindingOrder(const std::vector<ControlBindin
         if (control->bEnabled)
             ResetGTAControlState(control);
         if (std::none_of(m_binds.begin(), m_binds.end(), [key](const KeyBindPtr& other)
-            { return !other->isBeingDeleted && other->isActive && other->type == KeyBindType::GTA_CONTROL && other->boundKey == key; }))
+                         { return !other->isBeingDeleted && other->isActive && other->type == KeyBindType::GTA_CONTROL && other->boundKey == key; }))
             GetBindableKeyState(key) = false;
     };
     for (const auto& rename : renames)

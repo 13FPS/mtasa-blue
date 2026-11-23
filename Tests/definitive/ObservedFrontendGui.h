@@ -20,6 +20,7 @@ public:
     CGUIButton*              settingsApply = nullptr;
     CGUIButton*              settingsCancel = nullptr;
     std::vector<std::string> settingsButtons;
+    std::string              lastMessageBoxTitle;
 
     void ResetSettingsObservation()
     {
@@ -70,6 +71,7 @@ public:
     eInputMode      GetGUIInputMode() override { return actual.GetGUIInputMode(); }
     CGUIMessageBox* CreateMessageBox(const char* szTitle, const char* szMessage, unsigned int uiFlags) override
     {
+        lastMessageBoxTitle = szTitle;
         return actual.CreateMessageBox(szTitle, szMessage, uiFlags);
     }
     CGUIButton* CreateButton(CGUIElement* pParent, const char* szCaption) override

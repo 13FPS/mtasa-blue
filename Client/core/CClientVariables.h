@@ -12,6 +12,7 @@
 #pragma once
 
 #include <string>
+#include <cmath>
 #include "CSingleton.h"
 #include <core/CCVarsInterface.h>
 #include <xml/CXMLNode.h>
@@ -40,36 +41,23 @@ public:
     ~CClientVariables();
 
     // Get queries
-    bool Get(const std::string& strVariable, bool& val)
-    {
-        SANGET;
-        Node(strVariable)->GetTagContent(val);
-        return true;
-    };
+    bool Get(const std::string& strVariable, bool& val) override { return ReadScalar(strVariable, val); }
     bool Get(const std::string& strVariable, std::string& val)
     {
         SANGET;
         val = Node(strVariable)->GetTagContent();
         return !val.empty();
     };
-    bool Get(const std::string& strVariable, int& val)
+    bool Get(const std::string& strVariable, int& val) override { return ReadScalar(strVariable, val); }
+    bool Get(const std::string& strVariable, unsigned int& val) override { return ReadScalar(strVariable, val); }
+    bool Get(const std::string& strVariable, float& val) override
     {
-        SANGET;
-        Node(strVariable)->GetTagContent(val);
+        float value;
+        if (!ReadScalar(strVariable, value) || !std::isfinite(value))
+            return false;
+        val = value;
         return true;
-    };
-    bool Get(const std::string& strVariable, unsigned int& val)
-    {
-        SANGET;
-        Node(strVariable)->GetTagContent(val);
-        return true;
-    };
-    bool Get(const std::string& strVariable, float& val)
-    {
-        SANGET;
-        Node(strVariable)->GetTagContent(val);
-        return true;
-    };
+    }
     bool Get(const std::string& strVariable, CVector& val);
     bool Get(const std::string& strVariable, CVector2D& val);
     bool Get(const std::string& strVariable, CColor& val);
@@ -129,6 +117,13 @@ public:
     void ValidateValues();
 
 private:
+    template <class T>
+    bool ReadScalar(const std::string& name, T& value) const
+    {
+        // Reading a missing setting must leave it available for one-time migration from the game.
+        CXMLNode* node = m_pStorage ? m_pStorage->FindSubNode(name.c_str()) : nullptr;
+        return node && node->GetTagContent(value);
+    }
     CXMLNode* Node(const std::string& strVariable);
     void      LoadDefaults();
 

@@ -98,7 +98,7 @@ public:
     virtual void          SetCurrentVideoMode(unsigned int modeIndex, bool bOnRestart) = 0;
     virtual unsigned int  GetNumAdapters() = 0;
     virtual unsigned int  GetCurrentAdapter() = 0;
-    virtual bool          HasUnsafeResolutions() = 0;
+    virtual bool          HasUnsafeResolutions();
     virtual bool          IsUnsafeResolution(int iWidth, int iHeight) = 0;
     virtual void          SetAdapter(unsigned int uiAdapterIndex) = 0;
     virtual unsigned char GetRadioVolume() = 0;
@@ -183,3 +183,16 @@ public:
     // unqualified backend must refuse it before Core touches its pad state.
     virtual bool SetVibrationEnabled(bool) { return false; }
 };
+
+inline bool CGameSettings::HasUnsafeResolutions()
+{
+    const unsigned int count = GetNumVideoModes();
+    for (unsigned int index = 0; index < count; ++index)
+    {
+        // A display mode may disappear between enumeration and lookup.
+        VideoMode mode;
+        if (GetVideoModeInfo(&mode, index) && (mode.flags & rwVIDEOMODEEXCLUSIVE) && IsUnsafeResolution(mode.width, mode.height))
+            return true;
+    }
+    return false;
+}

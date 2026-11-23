@@ -506,21 +506,20 @@ float CSettingsSA::GetAspectRatioValue()
 
 void CSettingsSA::SetAspectRatio(eAspectRatio aspectRatio, bool bAdjustmentEnabled)
 {
-    // Process change
-    m_AspectRatio = aspectRatio;
-
     float fValue;
-    if (m_AspectRatio == ASPECT_RATIO_AUTO)
+    if (aspectRatio == ASPECT_RATIO_AUTO)
     {
         VideoMode modeInfo;
-        pGame->GetSettings()->GetVideoModeInfo(&modeInfo, pGame->GetSettings()->GetCurrentVideoMode());
+        // Keep the applied ratio and HUD adjustment until a usable mode is available.
+        if (!GetVideoModeInfo(&modeInfo, GetCurrentVideoMode()) || modeInfo.width <= 0 || modeInfo.height <= 0)
+            return;
         fValue = modeInfo.width / (float)modeInfo.height;
     }
-    else if (m_AspectRatio == ASPECT_RATIO_4_3)
+    else if (aspectRatio == ASPECT_RATIO_4_3)
     {
         fValue = 4 / 3.f;
     }
-    else if (m_AspectRatio == ASPECT_RATIO_16_10)
+    else if (aspectRatio == ASPECT_RATIO_16_10)
     {
         fValue = 16 / 10.f;
     }
@@ -529,6 +528,7 @@ void CSettingsSA::SetAspectRatio(eAspectRatio aspectRatio, bool bAdjustmentEnabl
         fValue = 16 / 9.f;
     }
 
+    m_AspectRatio = aspectRatio;
     MemPutFast<float>(0xC3EFA4, fValue);
 
     // Adjust position and size of our HUD components
@@ -812,19 +812,7 @@ void CSettingsSA::SetCoronaReflectionsControlledByScript(bool bViaScript)
 ////////////////////////////////////////////////
 bool CSettingsSA::HasUnsafeResolutions()
 {
-    uint numVidModes = GetNumVideoModes();
-    for (uint vidMode = 0; vidMode < numVidModes; vidMode++)
-    {
-        VideoMode vidModeInfo;
-        GetVideoModeInfo(&vidModeInfo, vidMode);
-
-        if (vidModeInfo.flags & rwVIDEOMODEEXCLUSIVE)
-        {
-            if (IsUnsafeResolution(vidModeInfo.width, vidModeInfo.height))
-                return true;
-        }
-    }
-    return false;
+    return CGameSettings::HasUnsafeResolutions();
 }
 
 ////////////////////////////////////////////////
@@ -867,7 +855,8 @@ uint CSettingsSA::FindVideoMode(int iResX, int iResY, int iColorBits)
     for (uint vidMode = 0; vidMode < numVidModes; vidMode++)
     {
         VideoMode vidModeInfo;
-        GetVideoModeInfo(&vidModeInfo, vidMode);
+        if (!GetVideoModeInfo(&vidModeInfo, vidMode))
+            continue;
 
         // Remove resolutions that will make the gui unusable
         if (vidModeInfo.width < 640 || vidModeInfo.height < 480)

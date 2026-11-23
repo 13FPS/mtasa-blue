@@ -197,7 +197,8 @@ bool CClientVariables::Exists(const std::string& strVariable)
 void CClientVariables::ClampValue(const std::string& strVariable, int iMinValue, int iMaxValue)
 {
     int iTemp;
-    CVARS_GET(strVariable, iTemp);
+    if (!Get(strVariable, iTemp))
+        return;
     iTemp = Clamp(iMinValue, iTemp, iMaxValue);
     CVARS_SET(strVariable, iTemp);
 }
@@ -206,7 +207,8 @@ void CClientVariables::ClampValue(const std::string& strVariable, int iMinValue,
 void CClientVariables::ClampValue(const std::string& strVariable, float fMinValue, float fMaxValue)
 {
     float fTemp;
-    CVARS_GET(strVariable, fTemp);
+    if (!Get(strVariable, fTemp))
+        return;
     fTemp = Clamp(fMinValue, fTemp, fMaxValue);
     CVARS_SET(strVariable, fTemp);
 }
@@ -243,8 +245,7 @@ void CClientVariables::ValidateValues()
     ClampValue("console_size", CVector2D(50, 50), CVector2D(uiViewportWidth - 32, uiViewportHeight - 32));
 
     // CVars need a better API for this (Issue #4427)
-    int temp;
-    CVARS_GET("fps_limit", temp);
+    const int     temp = GetValue<int>("fps_limit", 100);
     std::uint16_t fps = static_cast<std::uint16_t>(temp);
     FPSLimits::IsValidAndSetValid(fps, fps);
     CVARS_SET("fps_limit", fps);

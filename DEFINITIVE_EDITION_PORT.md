@@ -1,24 +1,43 @@
 # GTA San Andreas Definitive Edition: findings and port tracker
 
-## Current port status (2026-11-22)
+## Current port status (2026-11-23)
 
 **Full multiplayer on DE is still unavailable.** The real MTA Core, Deathmatch
 client and DE backend all built in Release/x64. MTA's menu, Settings, console,
 key bindings, walking and sprinting have run inside DE. Core currently stops
 before loading gameplay modules because the DE adapter returns no `CGame`.
 Remote gameplay also requires a DE multiplayer factory, multiplayer and
-renderer startup, and a compatible x64 client network module. The current
-binaries were tested locally.
+renderer startup, and a compatible x64 client network module.
 
 An x64 compiler check of the DE game class `CGameModelLodResetDE` identified
 80 `CGame` SDK methods that are still abstract on that class. They include
 `GetControllerConfigManager`, `GetSettings` and `GetModelInfo`. Core needs the
 first two to apply mouse controls, shadows and aspect ratio during startup.
+The DE controller snapshot exposes observed pad state. Applying mouse
+inversion and volumetric shadows still requires writable DE services for
+the controller and game settings.
 
 DE movement polling now reads the left, right, middle and two side mouse
 buttons. Settings and movement polling agree on which physical
 button to use when Windows swaps the primary and secondary buttons. The Core
 input host exercised button presses, holds, releases and focus changes.
+
+The DE bindings window checks whether movement polling can distinguish a
+key before accepting it. An unsupported key leaves the existing binding in
+place. The numeric keypad's multiply, add, subtract and divide keys can now
+be used for movement.
+
+On the first gameplay frame, Core uses each setting's own default when it
+cannot read the saved value. Invalid aspect ratio and clothing-loading
+options use the automatic setting. Validation preserves a missing radio or
+effects volume so Settings can import that channel's volume from the game.
+Each Core instance runs its own first-frame setup. If a settings callback
+throws, a later pulse can resume from that step.
+
+If a saved display mode disappears, Settings still lists available
+resolutions. The shared SDK ignores failed display-mode queries when
+checking for unsafe resolutions. Classic also keeps the applied aspect
+ratio when it cannot read a usable mode.
 
 Settings shows one primary key and three alternates for each movement
 control. Applying edits keeps additional saved keys in their original order.

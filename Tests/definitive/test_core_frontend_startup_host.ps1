@@ -88,9 +88,12 @@ try {
             throw "Normal build certificate is not green/restored: $path"
         }
         $declaredSources=@($certificate.source_hashes.PSObject.Properties)
-        $usesGuiCompilerInputs=$spec.role -eq 'gui' -and ($BindingSettingsOnly -or $BindingPersistenceOnly) -and $null -ne $certificate.PSObject.Properties['compiler_read_local_inputs']
+        $usesGuiCompilerInputs=$spec.role -eq 'gui' -and $null -ne $certificate.PSObject.Properties['compiler_read_local_inputs']
         if ($usesGuiCompilerInputs) {
-            # The GUI build also hashes unrelated client files for project generation. The trace identifies the inputs of the actual GUI and CEGUI compiles.
+            # Every case loads the same GUI DLL. Its complete compiler trace also identifies the CEGUI sources used to build it.
+            if (!$certificate.allCurrentGuiSourcesCompiled -or !$certificate.allCurrentCeguiSourcesCompiled -or !$certificate.actualCurrentNormalGuiPairCompiled) {
+                throw "Normal GUI certificate has an incomplete GUI or CEGUI build: $path"
+            }
             $declaredSources=@($certificate.compiler_read_local_inputs.PSObject.Properties)
         }
         if ($declaredSources.Count -eq 0) { throw "Normal certificate has no declared source hashes: $path" }

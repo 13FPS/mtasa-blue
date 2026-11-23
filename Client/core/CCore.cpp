@@ -4922,44 +4922,43 @@ void CCore::ApplyConsoleSettings()
 
 void CCore::ApplyGameSettings()
 {
-    bool                      bVal;
-    int                       iVal;
-    float                     fVal;
     CControllerConfigManager* pController = m_pGame->GetControllerConfigManager();
     CGameSettings*            pGameSettings = m_pGame->GetSettings();
 
-    CVARS_GET("invert_mouse", bVal);
-    pController->SetMouseInverted(bVal);
-    CVARS_GET("fly_with_mouse", bVal);
-    pController->SetFlyWithMouse(bVal);
-    CVARS_GET("steer_with_mouse", bVal);
-    pController->SetSteerWithMouse(bVal);
-    CVARS_GET("classic_controls", bVal);
-    pController->SetClassicControls(bVal);
-    CVARS_GET("volumetric_shadows", bVal);
-    pGameSettings->SetVolumetricShadowsEnabled(bVal);
-    CVARS_GET("aspect_ratio", iVal);
-    pGameSettings->SetAspectRatio((eAspectRatio)iVal, CVARS_GET_VALUE<bool>("hud_match_aspect_ratio"));
-    CVARS_GET("grass", bVal);
-    pGameSettings->SetGrassEnabled(bVal);
-    CVARS_GET("heat_haze", bVal);
-    m_pMultiplayer->SetHeatHazeEnabled(bVal);
-    CVARS_GET("fast_clothes_loading", iVal);
-    m_pMultiplayer->SetFastClothesLoading((CMultiplayer::EFastClothesLoading)iVal);
-    CVARS_GET("tyre_smoke_enabled", bVal);
-    m_pMultiplayer->SetTyreSmokeEnabled(bVal);
+    // An empty or malformed XML value can leave the output of Get untouched.
+    // Each setting must start from its own default on the first gameplay frame.
+    pController->SetMouseInverted(CVARS_GET_VALUE<bool>("invert_mouse", false));
+    pController->SetFlyWithMouse(CVARS_GET_VALUE<bool>("fly_with_mouse", false));
+    pController->SetSteerWithMouse(CVARS_GET_VALUE<bool>("steer_with_mouse", false));
+    pController->SetClassicControls(CVARS_GET_VALUE<bool>("classic_controls", false));
+    pGameSettings->SetVolumetricShadowsEnabled(CVARS_GET_VALUE<bool>("volumetric_shadows", false));
+
+    int aspectRatio = CVARS_GET_VALUE<int>("aspect_ratio", ASPECT_RATIO_AUTO);
+    if (aspectRatio < ASPECT_RATIO_AUTO || aspectRatio > ASPECT_RATIO_16_9)
+        aspectRatio = ASPECT_RATIO_AUTO;
+    pGameSettings->SetAspectRatio(static_cast<eAspectRatio>(aspectRatio), CVARS_GET_VALUE<bool>("hud_match_aspect_ratio", true));
+    pGameSettings->SetGrassEnabled(CVARS_GET_VALUE<bool>("grass", true));
+    m_pMultiplayer->SetHeatHazeEnabled(CVARS_GET_VALUE<bool>("heat_haze", true));
+    int clothesLoading = CVARS_GET_VALUE<int>("fast_clothes_loading", CMultiplayer::FAST_CLOTHES_AUTO);
+    if (clothesLoading < CMultiplayer::FAST_CLOTHES_OFF || clothesLoading > CMultiplayer::FAST_CLOTHES_ON)
+        clothesLoading = CMultiplayer::FAST_CLOTHES_AUTO;
+    m_pMultiplayer->SetFastClothesLoading(static_cast<CMultiplayer::EFastClothesLoading>(clothesLoading));
+    m_pMultiplayer->SetTyreSmokeEnabled(CVARS_GET_VALUE<bool>("tyre_smoke_enabled", true));
     pGameSettings->UpdateFieldOfViewFromSettings();
     pGameSettings->ResetBlurEnabled();
     pGameSettings->ResetVehiclesLODDistance();
     pGameSettings->ResetPedsLODDistance();
     pGameSettings->ResetCoronaReflectionsEnabled();
-    CVARS_GET("dynamic_ped_shadows", bVal);
-    pGameSettings->SetDynamicPedShadowsEnabled(bVal);
-    pController->SetVerticalAimSensitivityRawValue(CVARS_GET_VALUE<float>("vertical_aim_sensitivity"));
-    pController->SetVerticalAimSensitivitySameAsHorizontal(CVARS_GET_VALUE<bool>("use_mouse_sensitivity_for_aiming"));
-    CVARS_GET("mastervolume", fVal);
-    pGameSettings->SetRadioVolume(CVARS_GET_VALUE<float>("radiovolume") * fVal * 64.0f);
-    pGameSettings->SetSFXVolume(CVARS_GET_VALUE<float>("sfxvolume") * fVal * 64.0f);
+    pGameSettings->SetDynamicPedShadowsEnabled(CVARS_GET_VALUE<bool>("dynamic_ped_shadows", false));
+    pController->SetVerticalAimSensitivityRawValue(CVARS_GET_VALUE<float>("vertical_aim_sensitivity", 0.0015f));
+    pController->SetVerticalAimSensitivitySameAsHorizontal(CVARS_GET_VALUE<bool>("use_mouse_sensitivity_for_aiming", false));
+    const float masterVolume = CVARS_GET_VALUE<float>("mastervolume", 1.0f);
+    // Settings imports unsaved channels from the game. Preserve their original volume until then.
+    float channelVolume;
+    if (CVARS_GET("radiovolume", channelVolume))
+        pGameSettings->SetRadioVolume(channelVolume * masterVolume * 64.0f);
+    if (CVARS_GET("sfxvolume", channelVolume))
+        pGameSettings->SetSFXVolume(channelVolume * masterVolume * 64.0f);
 }
 
 void CCore::SetConnected(bool bConnected)
@@ -5625,6 +5624,10 @@ void CCore::DoPreFramePulse()
 
 void CCore::DoPostFramePulse()
 {
+    // GUI and SDK callbacks can pump messages while the first frame is still being configured.
+    if (m_firstFrameStep == FirstFrameStep::Running)
+        return;
+
     TIMING_CHECKPOINT("+CorePostFrame1");
     if (m_bQuitOnPulse)
         Quit();
@@ -5635,25 +5638,42 @@ void CCore::DoPostFramePulse()
         m_bDestroyMessageBox = false;
     }
 
-    static bool bFirstPulse = true;
-    if (bFirstPulse)
+    if (m_firstFrameStep != FirstFrameStep::Complete)
     {
-        bFirstPulse = false;
-
-        // Validate CVARS
-        CClientVariables::GetSingleton().ValidateValues();
-
-        // Apply all settings
-        ApplyConsoleSettings();
-        ApplyGameSettings();
-
-        // Allow connecting with the local Steam client
-        bool allowSteamClient = false;
-        CVARS_GET("allow_steam_client", allowSteamClient);
-        if (allowSteamClient)
-            m_steamClient->Connect();
-
-        m_pGUI->SelectInputHandlers(INPUT_CORE);
+        auto step = std::exchange(m_firstFrameStep, FirstFrameStep::Running);
+        try
+        {
+            if (step == FirstFrameStep::ValidateCVars)
+            {
+                CClientVariables::GetSingleton().ValidateValues();
+                step = FirstFrameStep::ConsoleSettings;
+            }
+            if (step == FirstFrameStep::ConsoleSettings)
+            {
+                ApplyConsoleSettings();
+                step = FirstFrameStep::GameSettings;
+            }
+            if (step == FirstFrameStep::GameSettings)
+            {
+                ApplyGameSettings();
+                step = FirstFrameStep::Steam;
+            }
+            if (step == FirstFrameStep::Steam)
+            {
+                const bool allowSteamClient = CVARS_GET_VALUE<bool>("allow_steam_client", false);
+                // Connecting may already have created a Steam pipe if the external call throws.
+                step = FirstFrameStep::Input;
+                if (allowSteamClient)
+                    m_steamClient->Connect();
+            }
+            m_pGUI->SelectInputHandlers(INPUT_CORE);
+        }
+        catch (...)
+        {
+            m_firstFrameStep = step;
+            throw;
+        }
+        m_firstFrameStep = FirstFrameStep::Complete;
     }
 
     // This is the first frame in the menu?

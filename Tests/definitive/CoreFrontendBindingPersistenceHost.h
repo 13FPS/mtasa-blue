@@ -41,10 +41,10 @@ void SeedForwardAlternates(const std::filesystem::path& file)
     const auto insertAt = bytes.rfind('>', bytes.find("</binds>") - 1);
     Check(insertAt != std::string::npos, "locate the last existing movement record");
     std::string alternates;
-    for (const char key : std::string("zxcvbn"))
+    for (const char* key : {"z", "x", "c", "arrow_u", "b", "n"})
     {
         auto copy = record;
-        copy[primary - newlineStart + 5] = key;
+        copy.replace(primary - newlineStart + 5, 1, key);
         alternates += copy;
     }
     // Alternate records follow the other five controls to cover interleaved XML.
@@ -82,8 +82,8 @@ void CheckMovementFile(const std::string& bytes, const std::vector<const char*>&
         ++records;
         cursor = end + 1;
     }
-    Check(records == controls.size() - 1 + forwards.size() &&
-              bytes.find("host_preserve") == std::string::npos && bytes.find("control=\"fire\"") == std::string::npos,
+    Check(records == controls.size() - 1 + forwards.size() && bytes.find("host_preserve") == std::string::npos &&
+              bytes.find("control=\"fire\"") == std::string::npos,
           "all six movements persist while unrelated command and control binds stay outside the durable file");
 }
 
@@ -317,15 +317,15 @@ void BindingPersistenceSettings(Owned& owned, const std::filesystem::path& root,
         capture(0, 'Z', 4);
         applyAndReopen();
         inspectColumns({"i", "x", "z", "c"});
-        CheckMovementFile(ReadBindingFixture(file), {"i", "x", "z", "c", "v", "b", "n"});
+        CheckMovementFile(ReadBindingFixture(file), {"i", "x", "z", "c", "arrow_u", "b", "n"});
         capture(0, VK_ESCAPE, 5);
         applyAndReopen();
-        inspectColumns({"i", "x", "z", "v"});
-        CheckMovementFile(ReadBindingFixture(file), {"i", "x", "z", "v", "b", "n"});
+        inspectColumns({"i", "x", "z", "arrow_u"});
+        CheckMovementFile(ReadBindingFixture(file), {"i", "x", "z", "arrow_u", "b", "n"});
         capture(0, 'B', 4);
         applyAndReopen();
-        inspectColumns({"i", "x", "b", "v"});
-        CheckMovementFile(ReadBindingFixture(file), {"i", "x", "b", "v", "n"});
+        inspectColumns({"i", "x", "b", "arrow_u"});
+        CheckMovementFile(ReadBindingFixture(file), {"i", "x", "b", "arrow_u", "n"});
         button(observed.settingsCancel);
     }
     else
@@ -334,10 +334,10 @@ void BindingPersistenceSettings(Owned& owned, const std::filesystem::path& root,
         button(observed.settingsCancel);
     }
     const auto saved = ReadBindingFixture(file);
-    CheckMovementFile(saved, restarted ? std::vector<const char*>{"i", "x", "b", "v", "n"} : std::vector<const char*>{"i"});
-    Check(state()[Bindings::BindCount] == (restarted ? 12u : 8u) &&
-              state()[Bindings::IgnoredBindings] == before[Bindings::IgnoredBindings] && state()[Bindings::IgnoredBindings] == 1,
-          "Apply and reload preserve the base manager's unrelated control and command binding counts");
+    CheckMovementFile(saved, restarted ? std::vector<const char*>{"i", "x", "b", "arrow_u", "n"} : std::vector<const char*>{"i"});
+    Check(state()[Bindings::BindCount] == (restarted ? 12u : 8u) && state()[Bindings::IgnoredBindings] == before[Bindings::IgnoredBindings] &&
+              state()[Bindings::IgnoredBindings] == (restarted ? 2u : 1u),
+          "Apply preserves unrelated records and a legacy movement key outside the polling routes");
     open();
     inspect(applied);
     capture(0, 'P');

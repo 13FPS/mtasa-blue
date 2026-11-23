@@ -60,10 +60,11 @@ CClientSoundManager::CClientSoundManager(CClientManager* pClientManager)
     m_FxEffectNames["parameq"] = BASS_FX_DX8_PARAMEQ;
     m_FxEffectNames["reverb"] = BASS_FX_DX8_REVERB;
 
-    // Validate audio container on startup
-    for (int i = 0; i < 9; i++)
+    // Radio uses separate stream archives. Only SFX banks have a cached validation result.
+    auto* audio = g_pGame->GetAudioContainer();
+    for (size_t i = 0; i < m_aValidatedSFX.size(); ++i)
     {
-        m_aValidatedSFX[i] = g_pGame->GetAudioContainer()->ValidateContainer(static_cast<eAudioLookupIndex>(i));
+        m_aValidatedSFX[i] = audio->ValidateContainer(static_cast<eAudioLookupIndex>(i));
     }
 }
 
@@ -287,7 +288,8 @@ CClientSound* CClientSoundManager::PlayGTASFX3D(eAudioLookupIndex containerIndex
 
 bool CClientSoundManager::GetSFXStatus(eAudioLookupIndex containerIndex)
 {
-    return m_aValidatedSFX[static_cast<int>(containerIndex)];
+    const auto index = static_cast<size_t>(containerIndex);
+    return index < m_aValidatedSFX.size() && m_aValidatedSFX[index];
 }
 
 int CClientSoundManager::GetFxEffectFromName(const std::string& strEffectName)

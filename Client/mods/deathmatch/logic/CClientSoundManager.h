@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <array>
 #include <list>
 #include <bass.h>
 #include <game/CAudioContainer.h>
@@ -72,7 +73,7 @@ private:
 
     bool m_bMinimizeMuted;
 
-    bool m_aValidatedSFX[9];
+    std::array<bool, AUDIO_LOOKUP_RADIO> m_aValidatedSFX{};
 
     std::vector<DWORD>                  m_ChannelStopQueue;
     std::map<CBassAudio*, CElapsedTime> m_AudioStopQueue;

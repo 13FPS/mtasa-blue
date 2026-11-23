@@ -25,10 +25,10 @@ try {
 }
 $settings = $profile.SelectNodes('/mainconfig/settings')
 $values = $profile.SelectNodes('/mainconfig/settings/invert_mouse')
-if ($settings.Count -ne 1 -or $values.Count -ne 1 -or $values[0].SelectNodes('*').Count -or $values[0].InnerText.Trim() -cnotin @('0', '1')) {
+if ($settings.Count -ne 1 -or $values.Count -ne 1 -or $values[0].SelectNodes('*').Count -or $values[0].InnerText -cnotin @('0', '1')) {
     throw 'Expected one MTA mainconfig/settings/invert_mouse value of 0 or 1.'
 }
-$desired = if ($values[0].InnerText.Trim() -eq '1') { 'True' } else { 'False' }
+$desired = if ($values[0].InnerText -eq '1') { 'True' } else { 'False' }
 $path = (Get-Item -LiteralPath $GameUserSettings).FullName
 $bytes = [IO.File]::ReadAllBytes($path)
 $stream = [IO.MemoryStream]::new($bytes, $false)

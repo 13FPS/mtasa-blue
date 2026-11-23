@@ -60,6 +60,7 @@ try {
     }
     $ini = $template -join "`n"
     Assert-Rejected 'invalid MTA value' $xml.Replace('>1<', '>2<') $ini 'Expected one MTA'
+    Assert-Rejected 'space before MTA value' $xml.Replace('>1<', '> 1<') $ini 'Expected one MTA'
     Assert-Rejected 'missing MTA value' $xml.Replace('invert_mouse', 'invert_gyro') $ini 'Expected one MTA'
     Assert-Rejected 'duplicate MTA value' $xml.Replace('</settings>', '<invert_mouse>0</invert_mouse></settings>') $ini 'Expected one MTA'
     Assert-Rejected 'malformed MTA XML' '<mainconfig>' $ini 'XML|mainconfig'

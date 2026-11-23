@@ -9,13 +9,37 @@ before loading gameplay modules because the DE adapter returns no `CGame`.
 Remote gameplay also requires a DE multiplayer factory, multiplayer and
 renderer startup, and a compatible x64 client network module.
 
+The opted-in Windows Release/x64 projects now use Windows SDK headers for
+DXGI and Direct3D, while the June 2010 SDK supplies D3DX9. The previous
+header order prevented the DE frontend from compiling with the full legacy
+headers present. Core, Deathmatch and Game DE linked with the corrected
+projects and the workspace's x64 import libraries.
+
 An x64 compiler check of the DE game class `CGameModelLodResetDE` identified
-80 `CGame` SDK methods that are still abstract on that class. They include
+79 `CGame` SDK methods that are still abstract on that class. They include
 `GetControllerConfigManager`, `GetSettings` and `GetModelInfo`. Core needs the
 first two to apply mouse controls, shadows and aspect ratio during startup.
 The DE controller snapshot exposes observed pad state. Applying mouse
 inversion and volumetric shadows still requires writable DE services for
 the controller and game settings.
+
+The DE game class now supplies `GetAudioContainer`. An x64 SDK test used
+the production audio implementation to read a sound effect and a radio track
+from a separately installed classic San Andreas audio directory. A second
+test used synthetic archives with known sample bytes. GTA DE's packaged
+audio and playback inside a running DE session remain unverified.
+
+Core now cancels a queued local game or map editor launch if an unload arrives
+before the next frame. When switching sessions, Core shuts down the old client
+before starting its replacement. The lifecycle test exercises cancellation
+from both initialization and shutdown, and a retry after the old DLL fails
+to unload.
+
+Deathmatch keeps a broken object out of the world while respawn is disabled,
+including when its model finishes loading after it breaks. Repairing it or
+enabling respawn allows the streamer to create it on the next eligible pulse.
+All three cases failed on the previous client and passed in the Windows and
+Linux streamer tests after the change.
 
 Mouse inversion also has a prelaunch import. With GTA closed,
 `Client/definitive/sync-mouse-inversion.ps1` can copy MTA's saved
@@ -32,8 +56,11 @@ input host exercised button presses, holds, releases and focus changes.
 
 The DE bindings window checks whether movement polling can distinguish a
 key before accepting it. An unsupported key leaves the existing binding in
-place. Core's polling tests cover the numeric keypad's multiply, add,
-subtract and divide keys. The Windows frontend host also exercised binding
+place. Releasing a key or mouse button held before capture preserves the
+selected binding. Pressing Escape clears the cell, and holding Escape keeps
+the edit and the window open. The Windows frontend test exercises these
+cases on the built Core DLL. Core's polling tests cover the numeric keypad's
+multiply, add, subtract and divide keys. The Windows frontend host also exercised binding
 capture and persistence. Movement in GTA with those four keys still needs
 a live test using the same Core build.
 
@@ -89,7 +116,7 @@ sectors or moving beyond the stream-out distance releases the queued reference
 on the next model pulse. Returning to range can request the model again.
 Forced stream references, direct passenger requests and explicit skin changes
 retain their existing behavior. If the SDK throws during stream-in, the
-streamer can retry the entity on a later pulse. The nine cases in
+streamer can retry the entity on a later pulse. The original nine cases in
 `Tests/definitive/test_client_streamer_pending_model.py` exercise this with
 the production sector grid and model queue. Five fail on the previous client.
 

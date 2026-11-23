@@ -663,7 +663,15 @@ namespace
             Check(grid->GetItemText(rows[index], primaryColumn) == original[index], "initial grid text matches its actual CKeyBinds record");
             beginCapture(index);
             if (index == 0)
+            {
                 Check(!message(WM_LBUTTONUP, 0), "the initiating mouse release reaches the surface translator while settings capture remains armed");
+                Check(message(WM_KEYUP, 'P') && grid->GetItemText(rows[index], primaryColumn) == original[index],
+                      "releasing a key held before capture leaves the current binding in place");
+                Check(message(WM_MBUTTONUP, 0) && grid->GetItemText(rows[index], primaryColumn) == original[index],
+                      "releasing a mouse button held before capture leaves the current binding in place");
+                Check(message(WM_KEYDOWN, VK_ESCAPE, 1 | (LPARAM{1} << 30)) && grid->GetItemText(rows[index], primaryColumn) == original[index],
+                      "an already-held Escape cannot clear the next captured binding");
+            }
             Check(message(WM_KEYDOWN, keys[index]) && grid->GetItemText(rows[index], primaryColumn) == replacement[index] &&
                       std::string(realBinds[index]->boundKey->szKey) == original[index],
                   "real key capture changes only the staged cell until session Apply");
@@ -693,6 +701,8 @@ namespace
         Check(message(WM_KEYDOWN, VK_ESCAPE) && window->IsVisible() && grid->GetItemText(rows[0], primaryColumn) != replacement[0] &&
                   std::string(realBinds[0]->boundKey->szKey) == replacement[0] && !owned.State()[Frontend::CloseRequested],
               "Escape clears only the staged captured cell and cannot close the trial or mutate the manager");
+        Check(message(WM_KEYDOWN, VK_ESCAPE, 1 | (LPARAM{1} << 30)) && window->IsVisible() && grid->GetItemText(rows[0], primaryColumn) != replacement[0],
+              "holding Escape after clearing a binding keeps the edit and the Settings window open");
         message(WM_KEYUP, VK_ESCAPE);
         clickButton(observed.settingsCancel);
         open();

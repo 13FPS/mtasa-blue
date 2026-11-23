@@ -3756,6 +3756,10 @@ bool CSettings::ProcessMessage(UINT uMsg, WPARAM wParam, LPARAM lParam)
         }
         if (!IsVisible())
             return false;
+        // The first Escape clears the selected cell. Holding it cannot also
+        // cancel Settings or clear a cell whose capture started later.
+        if ((uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) && (HIWORD(lParam) & KF_REPEAT) && (m_bCaptureKey || wParam == VK_ESCAPE))
+            return true;
         if (!m_bCaptureKey && uMsg == WM_KEYDOWN && wParam == VK_ESCAPE)
             return OnCancelButtonClick(nullptr);
         // A reserved or untranslated key cannot fall through to F8, Enter or
@@ -3774,20 +3778,20 @@ bool CSettings::ProcessMessage(UINT uMsg, WPARAM wParam, LPARAM lParam)
             return false;
         }
 
-        // Ignore the first key, which is the one that initiated the capture process
-        if (m_uiCaptureKey == 0)
+        // The frontend GUI received the opening mouse-down and still owns its
+        // release. Its first keyboard press, however, is already a choice.
+        if (IsFrontendBindings() && uMsg == WM_LBUTTONUP)
+            return false;
+        if (!IsFrontendBindings() && m_uiCaptureKey == 0)
         {
             m_uiCaptureKey++;
-            // Classic routing includes the initiating click. The frontend may
-            // first receive a genuine keyboard press, which must not be lost.
-            if (!IsFrontendBindings() || uMsg == WM_LBUTTONUP)
-                // Its mouse-down was already delivered to the GUI translator;
-                // let the matching release discharge that existing ownership.
-                return false;
+            return false;
         }
 
-        bool                bState;
+        bool                bState = false;
         const SBindableKey* pKey = pKeyBinds->GetBindableFromMessage(uMsg, wParam, lParam, bState);
+        if (IsFrontendBindings() && !bState)
+            return true;
 
         // If escape was pressed, don't create a bind
         if (uMsg == WM_KEYDOWN && wParam == VK_ESCAPE)

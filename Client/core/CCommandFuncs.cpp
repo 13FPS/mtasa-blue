@@ -181,8 +181,8 @@ void CCommandFuncs::Load(const char* szParameters)
 
 void CCommandFuncs::Unload(const char* szParameters)
 {
-    // Any mod loaded?
-    if (CModManager::GetSingleton().IsLoaded())
+    // A menu or console load can still be waiting for the next frame.
+    if (CModManager::GetSingleton().IsLoaded() || CModManager::GetSingleton().IsLoadPending())
     {
         // Unload it
         CModManager::GetSingleton().RequestUnload();

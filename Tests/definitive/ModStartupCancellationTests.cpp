@@ -23,8 +23,12 @@ class CCoreInterface
 
 struct Scenario
 {
-    bool     load = true, cancel = false, reject = false, inInitializer = false, refreshing = true;
-    unsigned initialized = 0, shutdown = 0, released = 0, pulse = 0, networkPulse = 0, chatLoad = 0, consoleActivate = 0;
+    bool                     load = true, cancel = false, reject = false, inInitializer = false, refreshing = true;
+    bool                     cancelDuringShutdown = false, keepModule = false, immediateCancel = false;
+    std::string              replacement;
+    std::vector<std::string> arguments;
+    unsigned                 initialized = 0, shutdown = 0, released = 0, pulse = 0, networkPulse = 0, chatLoad = 0, consoleActivate = 0;
+    unsigned                 cleanup = 0;
 };
 static Scenario scene;
 
@@ -67,7 +71,7 @@ public:
     void UnloadModule()
     {
         Check(loaded && !scene.inInitializer, "module released while its initializer is running");
-        loaded = false;
+        loaded = scene.keepModule;
         ++scene.released;
     }
     const SString& GetLastErrorMessage() const
@@ -112,7 +116,7 @@ public:
     void             DoReliablePulse() {}
     void             Printf(const char*, ...) {}
     void             DeleteAll() {}
-    void             ClearScreenShotQueue() {}
+    void             ClearScreenShotQueue() { ++scene.cleanup; }
     void             SetInputVisible(bool) {}
     void             Clear() {}
     void             SetChatBoxVisible(bool) {}
@@ -138,14 +142,25 @@ using CMessageLoopHook = Services;
 class TestClient final : public CClientBase
 {
 public:
-    int ClientInitialize(const char*, CCoreInterface*) override
+    int ClientInitialize(const char* arguments, CCoreInterface*) override
     {
         ++scene.initialized;
+        scene.arguments.emplace_back(arguments);
+        const auto shutdown = scene.shutdown;
+        const auto released = scene.released;
         scene.inInitializer = true;
         if (scene.cancel)
             CModManager::GetSingleton().RequestUnload();
+        if (scene.immediateCancel)
+            CModManager::GetSingleton().Unload();
+        if (!scene.replacement.empty())
+        {
+            CModManager::GetSingleton().RequestLoad(scene.replacement.c_str());
+            scene.replacement.clear();
+            Check(scene.arguments.back() == arguments, "a queued replacement changed the running initializer's arguments");
+        }
         Check(!CModManager::GetSingleton().GetClient() && CModManager::GetSingleton().IsLoaded(), "client must stay unpublished during initialization");
-        Check(!scene.shutdown && !scene.released, "cancel unloaded the module on the initializer stack");
+        Check(scene.shutdown == shutdown && scene.released == released, "cancel unloaded the module on the initializer stack");
         scene.inInitializer = false;
         return scene.reject ? 1 : 0;
     }
@@ -153,6 +168,8 @@ public:
     {
         Check(!scene.inInitializer && CModManager::GetSingleton().IsLoaded(), "shutdown must follow initialization and precede DLL release");
         ++scene.shutdown;
+        if (scene.cancelDuringShutdown)
+            CModManager::GetSingleton().RequestUnload();
     }
     void PostFrameExecutionHandler() override { ++scene.pulse; }
     void PreFrameExecutionHandler() override {}
@@ -171,10 +188,69 @@ static CClientBase* __cdecl InitClient()
     return &client;
 }
 
+static void TestLoadRequests()
+{
+    for (const bool immediate : {true, false})
+    {
+        scene = {};
+        CModManager manager;
+        manager.RequestLoad("editor");
+        if (immediate)
+            manager.Unload();
+        else
+            manager.RequestUnload();
+        manager.DoPulsePostFrame();
+        Check(!scene.initialized && !manager.IsLoaded() && scene.networkPulse == 1, "a cancelled queued load still started the client");
+    }
+    for (const bool cancel : {false, true})
+    {
+        scene = {};
+        CModManager manager;
+        Check(manager.Load("local"), "local startup failed");
+        scene.cancelDuringShutdown = cancel;
+        manager.RequestLoad("editor");
+        manager.DoPulsePostFrame();
+        Check(scene.shutdown == 1 && scene.released == 1, "switching sessions did not retire the old client exactly once");
+        if (cancel)
+            Check(scene.initialized == 1 && !manager.GetClient() && scene.networkPulse == 1, "a replacement started after shutdown cancelled it");
+        else
+            Check(scene.arguments == std::vector<std::string>{"local", "editor"} && scene.pulse == 1 && scene.chatLoad == 2,
+                  "replacement missed its arguments or first frame");
+    }
+    scene = {};
+    {
+        CModManager manager;
+        scene.replacement = "editor";
+        Check(manager.Load("local"), "initial session failed");
+        manager.DoPulsePostFrame();
+        Check(scene.arguments == std::vector<std::string>{"local", "editor"} && scene.shutdown == 1 && scene.pulse == 1 && scene.chatLoad == 1,
+              "a replacement requested by client initialization was lost or activated the superseded client");
+    }
+    scene = {};
+    {
+        CModManager manager;
+        Check(manager.Load("local"), "initial session failed");
+        scene.keepModule = true;
+        Check(!manager.Load("editor") && !manager.GetClient() && manager.IsLoaded() && scene.initialized == 1,
+              "replacement used a module that failed to unload");
+        scene.keepModule = false;
+        Check(manager.Load("editor") && scene.initialized == 2 && scene.shutdown == 1 && scene.cleanup == 1,
+              "retained-module retry failed or repeated session cleanup");
+    }
+    scene = {};
+    {
+        CModManager manager;
+        scene.immediateCancel = true;
+        Check(manager.Load("local") && !manager.IsLoaded() && scene.cleanup == 1 && !scene.chatLoad && scene.refreshing,
+              "synchronous unload during initialization must wait for the callback to return");
+    }
+}
+
 int main()
 {
     try
     {
+        TestLoadRequests();
         for (const bool immediate : {true, false})
         {
             scene = {};
@@ -211,7 +287,8 @@ int main()
             manager.DoPulsePostFrame();
             Check(!manager.IsLoaded() && scene.shutdown == 1 && scene.released == 1 && scene.networkPulse == 1, "normal deferred stop failed");
         }
-        std::puts("Passed synchronous and queued init cancellation, first frame, failed load/init, retry and ordinary unload");
+        std::puts(
+            "Passed pending load cancellation, session replacement, shutdown and initializer requests, retained module retry, first frame and ordinary unload");
         return 0;
     }
     catch (const std::exception& error)

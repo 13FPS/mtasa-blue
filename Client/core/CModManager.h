@@ -39,10 +39,11 @@ public:
 
     bool Load(const char* arguments);
     void Unload();
+    bool IsLoadPending() const { return m_state == State::PendingStart; }
 
 private:
     bool Start();
-    bool TryStart();
+    bool TryStart(const std::string& arguments);
     void Stop();
     void TryStop();
 
@@ -55,6 +56,7 @@ private:
     };
 
     State         m_state{};
+    bool          m_inTransition{};
     CModuleLoader m_module;
     CClientBase*  m_client{};
     std::string   m_arguments;

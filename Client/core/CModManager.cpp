@@ -24,6 +24,30 @@
 template <>
 CModManager* CSingleton<CModManager>::m_pSingleton = NULL;
 
+namespace
+{
+    // Callbacks can queue another session, but must finish using the current
+    // client before Core unloads its module or resumes processing messages.
+    class ModTransition
+    {
+    public:
+        explicit ModTransition(bool& active) : m_active(active)
+        {
+            dassert(!m_active);
+            m_active = true;
+            CMessageLoopHook::GetSingleton().SetRefreshMsgQueueEnabled(false);
+        }
+        ~ModTransition()
+        {
+            m_active = false;
+            CMessageLoopHook::GetSingleton().SetRefreshMsgQueueEnabled(true);
+        }
+
+    private:
+        bool& m_active;
+    };
+}
+
 void CModManager::RequestLoad(const char* arguments)
 {
     m_state = State::PendingStart;
@@ -33,17 +57,15 @@ void CModManager::RequestLoad(const char* arguments)
 void CModManager::RequestUnload()
 {
     if (!IsLoaded())
+    {
+        m_state = State::Idle;
         return;
+    }
 
-    if (m_state == State::Idle)
-    {
-        m_state = State::PendingStop;
+    const bool notify = m_state == State::Idle && !m_inTransition;
+    m_state = State::PendingStop;
+    if (notify)
         CCore::GetSingletonPtr()->OnModUnload();
-    }
-    else if (m_state == State::PendingStart)
-    {
-        m_state = State::PendingStop;
-    }
 }
 
 bool CModManager::TriggerCommand(const char* commandName, size_t commandNameLength, const void* userdata, size_t userdataSize) const
@@ -109,47 +131,58 @@ void CModManager::DoPulsePostFrame()
 
 bool CModManager::Load(const char* arguments)
 {
+    if (m_inTransition)
+        return false;
     RequestLoad(arguments);
     return Start();
 }
 
 void CModManager::Unload()
 {
-    if (IsLoaded())
+    if (m_inTransition || !IsLoaded())
     {
-        m_state = State::PendingStop;
-        Stop();
+        RequestUnload();
+        return;
     }
+    m_state = State::PendingStop;
+    Stop();
 }
 
 bool CModManager::Start()
 {
     dassert(m_state == State::PendingStart);
-    dassert(!m_module.IsOk());
-    dassert(m_client == nullptr);
-
     if (IsLoaded())
-        Stop();
-
-    bool success = false;
-
-    CMessageLoopHook::GetSingleton().SetRefreshMsgQueueEnabled(false);
     {
-        success = TryStart();
+        Stop();
+        if (m_state != State::PendingStart || IsLoaded())
+        {
+            m_state = State::Idle;
+            return false;
+        }
     }
-    CMessageLoopHook::GetSingleton().SetRefreshMsgQueueEnabled(true);
+
+    // Consume this request before entering the client. Its argument buffer
+    // must stay valid even if ClientInitialize queues a different session.
+    std::string arguments;
+    arguments.swap(m_arguments);
+    m_state = State::Idle;
+    bool success;
+    {
+        ModTransition transition(m_inTransition);
+        success = TryStart(arguments);
+    }
 
     // Deathmatch can request a disconnect from ClientInitialize and still
     // return success. Retire it after its initializer has returned, before
     // the caller can pulse the client or deliver another callback to it.
-    if (success && m_state == State::PendingStop)
+    if (success && m_state != State::Idle)
         Stop();
-    else
+    else if (!IsLoaded() && m_state == State::PendingStop)
         m_state = State::Idle;
     return success;
 }
 
-bool CModManager::TryStart()
+bool CModManager::TryStart(const std::string& arguments)
 {
     // Ensure DllDirectory has not been changed
     SString dllSearchPath = GetSystemDllDirectory();
@@ -187,7 +220,7 @@ bool CModManager::TryStart()
 
     CClientBase* client = initClient();
 
-    if (client == nullptr || client->ClientInitialize(m_arguments.c_str(), CCore::GetSingletonPtr()) != 0)
+    if (client == nullptr || client->ClientInitialize(arguments.c_str(), CCore::GetSingletonPtr()) != 0)
     {
         CCore::GetSingleton().GetConsole()->Printf("Unable to initialize deathmatch's DLL (unable to init, bad version?)");
         m_module.UnloadModule();
@@ -198,7 +231,7 @@ bool CModManager::TryStart()
 
     // A successful initialization still needs ClientShutdown, but a client
     // that already requested retirement must not take over console/chat input.
-    if (m_state == State::PendingStop)
+    if (m_state != State::Idle)
         return true;
 
     // HACK: make the console input active if its visible
@@ -218,11 +251,10 @@ void CModManager::Stop()
     // A previous unload refusal can retain the DLL after ClientShutdown.
     // Retrying retirement must not require calling the client a second time.
 
-    CMessageLoopHook::GetSingleton().SetRefreshMsgQueueEnabled(false);
     {
+        ModTransition transition(m_inTransition);
         TryStop();
     }
-    CMessageLoopHook::GetSingleton().SetRefreshMsgQueueEnabled(true);
 
     if (m_state == State::PendingStop)
         m_state = State::Idle;
@@ -230,11 +262,15 @@ void CModManager::Stop()
 
 void CModManager::TryStop()
 {
-    if (m_client)
+    if (!m_client)
     {
-        m_client->ClientShutdown();
-        m_client = {};
+        // A failed release keeps the DLL loaded after the session has already
+        // shut down. Retrying the loader must not reset Core's services again.
+        m_module.UnloadModule();
+        return;
     }
+    m_client->ClientShutdown();
+    m_client = {};
 
     // Unregister the commands it had registered
     CCore::GetSingleton().GetCommands()->DeleteAll();

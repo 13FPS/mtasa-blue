@@ -83,6 +83,14 @@ namespace
     void ActualMatchingChecks()
     {
         CRenderWarePreparationDE preparation;
+        SShaderReplacementStats  stats{};
+        stats.uiNumReplacementRequests = 42;
+        stats.uiNumReplacementMatches = 17;
+        stats.channelStatsList.emplace(42, SMatchChannelStats{});
+        preparation.GetShaderReplacementStats(stats);
+        Check(!stats.uiNumReplacementRequests && !stats.uiNumReplacementMatches && !stats.uiTotalTextures && !stats.uiTotalShaders &&
+                  !stats.uiTotalEntitesRefed && stats.channelStatsList.empty(),
+              "an empty owner overwrites the entire previous stats sample");
         preparation.Initialize();
         auto* texture = preparation.GetNoTexture();
         auto& matching = preparation.Matching();
@@ -111,6 +119,13 @@ namespace
         Check(matching.GetShaderForTexAndEntity(texture, entity, TYPE_MASK_PED)->output.pBase == entityShader &&
                   matching.GetShaderForTexAndEntity(texture, unknown, TYPE_MASK_PED)->output.pBase == base,
               "actual entity-specific replacement and unknown-entity fallback preserve original matching identity");
+        preparation.GetShaderReplacementStats(stats);
+        Check(!stats.uiNumReplacementRequests && !stats.uiNumReplacementMatches && stats.uiTotalTextures == 1 && stats.uiTotalShaders == 5 &&
+                  stats.uiTotalEntitesRefed == 1 && !stats.channelStatsList.empty(),
+              "live registry counts include matching rules and the referenced entity while CPU queries produce zero renderer draw requests");
+        Check(std::any_of(stats.channelStatsList.begin(), stats.channelStatsList.end(),
+                          [](const auto& entry) { return entry.second.uiNumMatchedTextures == 1 && entry.second.uiNumShaderAndEntities > 0; }),
+              "the channel sample contains a rule that matched the registered texture");
         matching.RemoveClientEntityRefs(entity);
         Check(matching.GetShaderForTexAndEntity(texture, entity, TYPE_MASK_PED)->output.pBase == base,
               "actual entity reference removal restores the nonentity replacement");
@@ -120,6 +135,9 @@ namespace
               "actual shader removal invalidates replacement caches without destroying the owned no-texture record");
         Check(preparation.GetNoTexture() == texture && texture->pAssociatedTexNameInfo->usedByTexInfoList.size() == 1,
               "matching changes retain the real registry owner and its stable STexInfo association");
+        preparation.GetShaderReplacementStats(stats);
+        Check(stats.uiTotalTextures == 1 && !stats.uiTotalShaders && !stats.uiTotalEntitesRefed && stats.channelStatsList.empty(),
+              "removing the entity and shaders clears their previous channel sample and preserves the initialized texture");
         std::puts("Production actual shared shader texture matching fixture completed");
     }
     void SourcePrefixChecks()

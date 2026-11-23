@@ -117,13 +117,15 @@ try {
     $record.sourceHashes = @($sourceNames | Sort-Object -Unique | ForEach-Object {
         [ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}
     })
-    $provided = @()
+    # This override is defined inline. The C++ fixture verifies its declaring
+    # class so generated test methods cannot hide the production implementation.
+    $provided = @('GetShaderReplacementStats')
     foreach ($header in @('Client/game_de/CGameInitializationDE.h','Client/game_de/CGameDE.h','Client/game_de/CGameTimingDE.h','Client/game_de/CGameWeaponInfoDE.h')) {
         $text = [IO.File]::ReadAllText((Join-Path $taskRoot $header))
         $provided += @([regex]::Matches($text,'(?<name>\w+)\s*\([^;{}]*\)\s*(?:const\s*)?(?:noexcept\s*)?override\s*;') |
             ForEach-Object { $_.Groups['name'].Value })
     }
-    $testedMethods = @('Initialize')
+    $testedMethods = @('Initialize','GetShaderReplacementStats')
     foreach ($method in $testedMethods) { if ($provided -notcontains $method) { throw "Production SDK override is missing: $method" } }
     $gameMethods = @(InterfaceMethods 'Client/sdk/game/CGame.h' | Where-Object { $_.name -notin @('GetGarages','GetStreaming') -and $provided -notcontains $_.name })
     $generated = Join-Path $scratchRoot 'GameRenderPreparationFixture.generated.h'

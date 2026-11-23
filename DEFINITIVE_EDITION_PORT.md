@@ -16,7 +16,7 @@ headers present. Core, Deathmatch and Game DE linked with the corrected
 projects and the workspace's x64 import libraries.
 
 An x64 compiler check of the DE game class `CGameModelLodResetDE` identified
-79 `CGame` SDK methods that are still abstract on that class. They include
+78 `CGame` SDK methods that are still abstract on that class. They include
 `GetControllerConfigManager`, `GetSettings` and `GetModelInfo`. Core needs the
 first two to apply mouse controls, shadows and aspect ratio during startup.
 The DE controller snapshot exposes observed pad state. Applying mouse
@@ -28,6 +28,12 @@ the production audio implementation to read a sound effect and a radio track
 from a separately installed classic San Andreas audio directory. A second
 test used synthetic archives with known sample bytes. GTA DE's packaged
 audio and playback inside a running DE session remain unverified.
+
+The DE game class also supplies `GetShaderReplacementStats` from MTA's
+texture registry. It counts registered texture names, shaders and referenced
+entities, and reports how many textures match each channel. The two draw
+counters read zero because the DE renderer has no draw callback connected
+to this registry.
 
 Core now cancels a queued local game or map editor launch if an unload arrives
 before the next frame. When switching sessions, Core shuts down the old client

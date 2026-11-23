@@ -17,6 +17,7 @@ namespace mta::game_de
     {
     public:
         CRenderWarePreparationDE& GetRenderPreparation() noexcept { return renderPreparation; }
+        void                      GetShaderReplacementStats(SShaderReplacementStats& stats) override { renderPreparation.GetShaderReplacementStats(stats); }
 
     protected:
         using CGameInitializationDE::CGameInitializationDE;

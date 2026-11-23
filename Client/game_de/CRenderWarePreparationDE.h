@@ -31,6 +31,15 @@ namespace mta::game_de
         STexInfo*             GetNoTexture() const { return MapFindRef(dataTextures, FAKE_D3DTEXTURE_NO_TEXTURE); }
         CMatchChannelManager& Matching() noexcept { return matching; }
 
+        void GetShaderReplacementStats(SShaderReplacementStats& stats)
+        {
+            // These counters describe renderer draw lookups in the last completed
+            // interval. This CPU registry receives no draw lookups.
+            stats.uiNumReplacementRequests = 0;
+            stats.uiNumReplacementMatches = 0;
+            matching.GetShaderReplacementStats(stats);
+        }
+
     private:
         // Each node below is owned by these actual matching maps. This DE
         // owner deletes metadata only; the opaque shader/entity tags are

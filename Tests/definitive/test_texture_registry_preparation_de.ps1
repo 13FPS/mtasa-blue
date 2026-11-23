@@ -51,9 +51,12 @@ try {
     $record.sourceHashes=@($paths|Sort-Object -Unique|ForEach-Object{[ordered]@{path=$_;sha256=(Sha (Join-Path $taskRoot $_))}})
     $support=[IO.File]::ReadAllText((Join-Path $taskRoot 'Tests/definitive/TextureRegistrySStringSupport.cpp'))
     $actual=[IO.File]::ReadAllText((Join-Path $taskRoot 'Shared/sdk/SString.hpp'))
-    $selected=[regex]::Match($actual,'(?s)SString SString::ToLower\(\) const\s*\{.*?\r?\n\}').Value
-    if(-not $selected -or [regex]::Replace($support,'\s','').IndexOf([regex]::Replace($selected,'\s',''),[StringComparison]::Ordinal) -lt 0){
-        throw 'Fixture string link support is not the exact current actual SString::ToLower definition.'
+    $compactSupport=[regex]::Replace($support,'\s','')
+    foreach($method in @('ToLower','SubStr','Left')){
+        $selected=[regex]::Match($actual,"(?s)SString SString::" + $method + '\([^)]*\) const\s*\{.*?\r?\n\}').Value
+        if(-not $selected -or !$compactSupport.Contains([regex]::Replace($selected,'\s',''),[StringComparison]::Ordinal)){
+            throw "Fixture string definition differs from SString::$method in the SDK."
+        }
     }
     $vswhere=Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
     $discovery=RunOwned $vswhere @('-latest','-products','*','-requires','Microsoft.VisualStudio.Component.VC.Tools.x86.x64','-property','installationPath') $outputRoot 'vswhere' 10000

@@ -236,6 +236,7 @@ namespace
     static_assert(std::is_abstract_v<CGameRenderPreparationDE> && std::is_base_of_v<CGameInitializationDE, CGameRenderPreparationDE>);
     static_assert(!std::is_abstract_v<Game> && std::is_base_of_v<CGame, Game>);
     static_assert(std::is_same_v<decltype(&Game::Initialize), void (CGameInitializationDE::*)()>);
+    static_assert(std::is_same_v<decltype(&Game::GetShaderReplacementStats), void (CGameRenderPreparationDE::*)(SShaderReplacementStats&)>);
     struct Scenario
     {
         Context                      context;
@@ -249,18 +250,30 @@ namespace
     };
     void SuccessfulInitialization()
     {
-        Scenario scenario;
-        auto&    context = scenario.context;
+        unsigned                shaderIdentity = 0;
+        Scenario                scenario;
+        auto&                   context = scenario.context;
+        CGame*                  sdk = &scenario.game;
+        SShaderReplacementStats stats{};
+        sdk->GetShaderReplacementStats(stats);
+        Check(!stats.uiTotalTextures && !stats.uiTotalShaders, "the game SDK exposes an empty shader registry before initialization");
         Check(!scenario.game.GetRenderPreparation().GetNoTexture() && !context.count && !context.preflights,
               "construction owns empty CPU metadata without running later initialization or native effects");
         for (unsigned attempt = 0; attempt < 3; ++attempt)
         {
             context.ResetTrace();
-            CGame& sdk = scenario.game;
-            sdk.Initialize();
+            sdk->Initialize();
             context.CheckComplete();
             Check(context.preflights == attempt + 1, "every explicit Initialize retains the mandatory current owner admission");
         }
+        auto* shader = reinterpret_cast<CSHADERDUMMY*>(&shaderIdentity);
+        auto& matching = scenario.game.GetRenderPreparation().Matching();
+        matching.AppendAdditiveMatch(shader, nullptr, SStringX("*"), 1, false, TYPE_MASK_ALL, 1, false, true);
+        sdk->GetShaderReplacementStats(stats);
+        Check(stats.uiTotalTextures == 1 && stats.uiTotalShaders == 1, "the game SDK samples the registry initialized and modified by this game");
+        matching.RemoveShaderRefs(shader);
+        sdk->GetShaderReplacementStats(stats);
+        Check(stats.uiTotalTextures == 1 && !stats.uiTotalShaders, "a repeated game SDK sample reflects shader removal");
         Check(!scenario.reader.IsBound() && !scenario.layout.IsBound() && !scenario.state.IsBound(),
               "actual SDK fixture performs no native image reads or engine calls");
         std::puts("Actual owned renderer preparation Initialize SDK fixture completed");

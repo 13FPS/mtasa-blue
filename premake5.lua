@@ -159,6 +159,10 @@ workspace "MTASA"
 		-- retaining the x86 directory here can silently select the wrong ABI.
 		filter { "system:windows", "platforms:x64" }
 			libdirs { path.join(dxdir, "Lib/x64") }
+		filter { "system:windows", "platforms:x64", "configurations:Release" }
+			-- Use the Windows SDK's DXGI and D3D headers, with legacy D3DX as a fallback.
+			removeincludedirs { path.join(dxdir, "Include") }
+			externalincludedirs { path.join(dxdir, "Include") }
 		filter { "system:windows", "platforms:not x64" }
 			libdirs { path.join(dxdir, "Lib/x86") }
 	end

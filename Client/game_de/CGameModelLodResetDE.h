@@ -4,16 +4,17 @@
  * PURPOSE: Reset actual model distance defaults through the existing game owner
  ****************************************************************************/
 #pragma once
+#include "CGameFileAudioDE.h"
 #include "CGameModelTimeResetDE.h"
 namespace mta::game_de
 {
-    class CGameModelLodResetDE : public CGameModelTimeResetDE
+    class CGameModelLodResetDE : public CGameFileAudioDE<CGameModelTimeResetDE>
     {
     public:
         void ResetModelLodDistances() override;
 
     protected:
-        using CGameModelTimeResetDE::CGameModelTimeResetDE;
+        using CGameFileAudioDE<CGameModelTimeResetDE>::CGameFileAudioDE;
     };
     static_assert(std::is_abstract_v<CGameModelLodResetDE> && std::is_convertible_v<CGameModelLodResetDE*, CGame*>);
 }

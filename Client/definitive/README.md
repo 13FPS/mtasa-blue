@@ -46,6 +46,19 @@ Start GTA normally and open **Options → Controls → Invert Look** to see
 the imported value. This is a one-time import. Changing the value from a
 running MTA session still requires a DE controller implementation.
 
+### Sound effects and radio from a classic installation
+
+The DE game SDK accepts an optional `MTA_DE_AUDIO_ROOT` environment variable.
+Set it to an absolute directory containing compatible classic San Andreas
+`CONFIG`, `SFX` and `STREAMS` directories to select that source for sound
+effects and radio. The SDK reads this setting the first time the game object
+requests an audio container. With no source selected, those reads return
+unavailable. This command exercises both readers outside GTA.
+
+```powershell
+python Tests/definitive/test_game_file_audio_de.py --audio-root 'D:\Games\GTA San Andreas\audio'
+```
+
 ### Experimental launcher
 
 The experimental x64 MTA launcher now offers explicit `--de-launch` startup

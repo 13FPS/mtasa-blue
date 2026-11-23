@@ -102,7 +102,9 @@ namespace MtaGame
     }
     CAudioContainerFiles::CAudioContainerFiles(std::filesystem::path audioRoot) : m_audioRoot(std::move(audioRoot))
     {
-        LoadLookup();
+        // With no configured archive source, never search the process working directory.
+        if (!m_audioRoot.empty())
+            LoadLookup();
     }
     void CAudioContainerFiles::LoadLookup()
     {
@@ -198,6 +200,8 @@ namespace MtaGame
     }
     bool CAudioContainerFiles::ValidateContainer(eAudioLookupIndex lookupIndex)
     {
+        if (m_audioRoot.empty())
+            return false;
 #ifdef MTA_DEBUG
         (void)lookupIndex;
         return true;
@@ -228,6 +232,8 @@ namespace MtaGame
     }
     bool CAudioContainerFiles::GetRadioAudioData(eRadioStreamIndex streamIndex, int trackIndex, void*& memory, unsigned int& length)
     {
+        if (m_audioRoot.empty())
+            return false;
         const auto path = RadioPath(streamIndex);
         if (path.empty())
             return false;

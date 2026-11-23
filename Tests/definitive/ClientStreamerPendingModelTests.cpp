@@ -228,6 +228,29 @@ static void Test(const std::string& scenario)
     camera.position = origin;
     streamer.DoPulse(camera.position);
     CClientObject object(streamer);
+    if (scenario == "repair-broken" || scenario == "enable-respawn" || scenario == "break-while-loading")
+    {
+        if (scenario == "break-while-loading")
+        {
+            streamer.DoPulse(camera.position);
+            Require(manager.requests.HasRequested(&object) && model.references == 1, "expected a pending model before breaking the object");
+        }
+        object.m_bRespawnEnabled = false;
+        object.m_fHealth = 0.0f;
+        model.ready = true;
+        manager.PulseModels();
+        streamer.DoPulse(camera.position);
+        Require(!object.IsStreamedIn() && !object.m_pObject && object.events.empty() && !model.references,
+                "broken object respawned while respawn was disabled");
+        if (scenario == "enable-respawn")
+            object.m_bRespawnEnabled = true;
+        else
+            object.m_fHealth = 1000.0f;
+        streamer.DoPulse(camera.position);
+        Require(object.IsStreamedIn() && object.events == std::vector<std::string>{"onClientElementStreamIn"},
+                "eligible object missed its next stream-in after being broken");
+        return;
+    }
     if (scenario == "acquire-retry")
     {
         model.failAcquire = true;

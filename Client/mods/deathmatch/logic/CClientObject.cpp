@@ -237,8 +237,8 @@ void CClientObject::ModelRequestCallback(CModelInfo* pModelInfo)
     if (pModelInfo != m_pModelInfo)
         return;
 
-    // The model loading may take a while and there's a chance of object being moved to other dimension.
-    if (!IsVisibleInAllDimensions() && GetDimension() != m_pStreamer->GetDimension())
+    // The object can break or move to a different dimension while its model loads.
+    if ((!m_bRespawnEnabled && m_fHealth == 0.0f) || (!IsVisibleInAllDimensions() && GetDimension() != m_pStreamer->GetDimension()))
     {
         NotifyUnableToCreate();
         return;
@@ -453,9 +453,12 @@ void CClientObject::SetHealth(float fHealth)
 
 void CClientObject::StreamIn(bool bInstantly)
 {
-    // Don't stream the object in, if respawn is disabled and the object is broken
+    // A later repair or a change to the respawn setting must allow another stream-in.
     if (!m_bRespawnEnabled && m_fHealth == 0.0f)
+    {
+        NotifyUnableToCreate();
         return;
+    }
 
     // We need to load now?
     if (bInstantly)

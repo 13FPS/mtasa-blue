@@ -17,7 +17,7 @@ LOGIC = Path("Client/mods/deathmatch/logic")
 COMPONENTS = ("CClientStreamer", "CClientStreamSector", "CClientStreamSectorRow",
               "CClientStreamElement", "CClientModelRequestManager")
 SCENARIOS = ("camera-sector", "camera-before-streamer", "object-moves", "parent-streams-out", "forced", "hysteresis",
-             "explicit-request", "direct-stream-in", "acquire-retry")
+             "explicit-request", "direct-stream-in", "acquire-retry", "repair-broken", "enable-respawn", "break-while-loading")
 
 
 def main():

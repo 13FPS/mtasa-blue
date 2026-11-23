@@ -35,8 +35,18 @@ foreach ($name in $sourceNames) {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $saved) | Out-Null
     Copy-Item -LiteralPath $source -Destination $saved
 }
-$compileTlog=Join-Path $objectRoot 'Client Core.tlog/CL.command.1.tlog'
-$linkTlog=Join-Path $objectRoot 'Client Core.tlog/link.command.1.tlog'
+# MSBuild can shorten the project name in the trace directory. Select the
+# complete set belonging to Core so the fixture replays the build it was given.
+$coreTraces=@(Get-ChildItem -LiteralPath $objectRoot -Directory -Filter '*.tlog' | Where-Object {
+    $command=Join-Path $_.FullName 'CL.command.1.tlog'
+    (Test-Path -LiteralPath $command) -and (Test-Path -LiteralPath (Join-Path $_.FullName 'CL.read.1.tlog')) -and
+        (Test-Path -LiteralPath (Join-Path $_.FullName 'link.command.1.tlog')) -and
+        (Select-String -LiteralPath $command -Pattern '^\^.*\\CKEYBINDS\.CPP$' -Quiet)
+})
+if ($coreTraces.Count -gt 1) { throw 'More than one complete Core build was found in the object directory.' }
+$traceDirectory=if ($coreTraces.Count) { $coreTraces[0].FullName } else { Join-Path $objectRoot 'Client Core.tlog' }
+$compileTlog=Join-Path $traceDirectory 'CL.command.1.tlog'
+$linkTlog=Join-Path $traceDirectory 'link.command.1.tlog'
 $compileLines=@(Get-Content -LiteralPath $compileTlog)
 $compileIndex=-1
 for ($index=0;$index -lt $compileLines.Count-1;$index++) {
@@ -127,6 +137,14 @@ $developer=Join-Path $visualStudio 'Common7/Tools/VsDevCmd.bat'
 $environment= & $env:ComSpec /d /s /c ('call "{0}" -no_logo -arch=x64 -host_arch=x64 >nul && set' -f $developer)
 if ($LASTEXITCODE -ne 0) { throw 'Compiler environment initialization failed.' }
 foreach ($entry in $environment) { if ($entry -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($Matches[1],$Matches[2],'Process') } }
+# The external include path supplied by MSBuild is absent from CL.command.
+# Reuse the D3DX header actually read by Core, after the Windows SDK headers.
+$readTraces=Get-ChildItem -LiteralPath $traceDirectory -Filter 'CL.read.*.tlog'
+$d3dxHeaders=@($readTraces | Select-String -Pattern '\\D3DX9\.H$' | ForEach-Object { $_.Line } | Sort-Object -Unique)
+if ($d3dxHeaders.Count -gt 1) { throw 'Core recorded conflicting D3DX9 include directories.' }
+if ($d3dxHeaders.Count -and (Test-Path -LiteralPath $d3dxHeaders[0] -PathType Leaf)) {
+    $env:INCLUDE+=[IO.Path]::PathSeparator+(Split-Path -Parent $d3dxHeaders[0])
+}
 $compiler=Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64/cl.exe'
 $linker=Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64/link.exe'
 $fixtureObject=Join-Path $outputRoot 'MtaConfiguredInputTests.obj'

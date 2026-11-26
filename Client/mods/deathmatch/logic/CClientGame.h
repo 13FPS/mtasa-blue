@@ -562,7 +562,7 @@ private:
 
     void QuitPlayer(CClientPlayer* pPlayer, eQuitReason Reason);
 
-    void Event_OnIngame();
+    bool Event_OnIngame();
     void Event_OnIngameAndConnected();
 
     void SetupGlobalLuaEvents();
@@ -803,8 +803,14 @@ private:
     bool             m_bShowNametags;
     bool             m_bShowRadar;
 
-    // Status booleans
-    bool m_bGameLoaded;
+    enum class IngameStartup
+    {
+        Waiting,
+        Starting,
+        Ready,
+        Failed
+    };
+    IngameStartup m_ingameStartup = IngameStartup::Waiting;
     bool m_bTriggeredIngameAndConnected;
     bool m_bGracefulDisconnect;
 

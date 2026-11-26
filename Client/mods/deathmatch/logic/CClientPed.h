@@ -178,6 +178,7 @@ public:
     virtual eClientEntityType GetType() const { return CCLIENTPED; }
 
     CPlayerPed*    GetGamePlayer() noexcept { return m_pPlayerPed; }
+    bool           HasLocalModel() const;
     CEntity*       GetGameEntity() noexcept { return m_pPlayerPed; }
     const CEntity* GetGameEntity() const noexcept { return m_pPlayerPed; }
 
@@ -601,6 +602,7 @@ protected:
     void ReleaseLoadedModel();
     void RestoreTemporaryModel();
     void _CreateLocalModel();
+    void ReleaseLocalModel();
     void _DestroyModel();
     void _DestroyLocalModel();
     void _ChangeModel();

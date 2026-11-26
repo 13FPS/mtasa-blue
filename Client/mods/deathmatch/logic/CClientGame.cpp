@@ -104,7 +104,6 @@ CClientGame::CClientGame(bool bLocalPlay) : m_ServerInfo(new CServerInfo())
     m_bShowNametags = true;
     m_bWaitingForLocalConnect = false;
     m_bShowRadar = false;
-    m_bGameLoaded = false;
     m_bTriggeredIngameAndConnected = false;
     m_bGracefulDisconnect = false;
     m_pTargetedEntity = NULL;
@@ -446,7 +445,7 @@ CClientGame::~CClientGame()
     // Stop playing the continuous sounds
     // if the game was loaded. This is done by
     // playing these special IDS.
-    if (m_bGameLoaded)
+    if (m_ingameStartup == IngameStartup::Ready)
     {
         g_pGame->GetAudioEngine()->PlayFrontEndSound(35);
         g_pGame->GetAudioEngine()->PlayFrontEndSound(48);
@@ -1138,6 +1137,10 @@ void CClientGame::DoPulsePostFrame()
 
 void CClientGame::DoPulses()
 {
+    // Game startup and error dialogs can dispatch callbacks before the outer pulse returns.
+    if (m_ingameStartup == IngameStartup::Starting || m_ingameStartup == IngameStartup::Failed)
+        return;
+
     TIMING_CHECKPOINT("-CClientGame::DoPulsePostFrame");
 
     // TODO: (pxd) Useless, cleanup checkpoints on #4428
@@ -1302,14 +1305,21 @@ void CClientGame::DoPulses()
         m_pBlendedWeather->DoPulse();
 
         // If we weren't ingame last frame; call the on ingame event
-        if (!m_bGameLoaded)
+        if (m_ingameStartup == IngameStartup::Waiting)
         {
+            m_ingameStartup = IngameStartup::Starting;
             // Fix for gta not being focused sometimes
             SetActiveWindow(g_pCore->GetHookedWindow());
             SetFocus(g_pCore->GetHookedWindow());
 
-            m_bGameLoaded = true;
-            Event_OnIngame();
+            if (!Event_OnIngame())
+            {
+                m_ingameStartup = IngameStartup::Failed;
+                g_pCore->ShowMessageBox(_("Error") + _E("CD65"), _("Could not initialize the local player."), MB_BUTTON_OK | MB_ICON_ERROR);
+                g_pCore->GetModManager()->RequestUnload();
+                return;
+            }
+            m_ingameStartup = IngameStartup::Ready;
         }
 
         // Check if the player is hitting the enter vehicle button
@@ -1374,7 +1384,7 @@ void CClientGame::DoPulses()
     if (!m_bWaitingForLocalConnect)
     {
         // Trigger the ingame and connected event
-        if (!m_bTriggeredIngameAndConnected && m_pManager->IsGameLoaded() && g_pCore->IsConnected())
+        if (!m_bTriggeredIngameAndConnected && m_ingameStartup == IngameStartup::Ready && m_pManager->IsGameLoaded() && g_pCore->IsConnected())
         {
             m_bTriggeredIngameAndConnected = true;
             Event_OnIngameAndConnected();
@@ -3463,7 +3473,7 @@ void CClientGame::QuitPlayer(CClientPlayer* pPlayer, eQuitReason Reason)
     delete pPlayer;
 }
 
-void CClientGame::Event_OnIngame()
+bool CClientGame::Event_OnIngame()
 {
     // Unpause the game
     g_pGame->Pause(false);
@@ -3511,7 +3521,13 @@ void CClientGame::Event_OnIngame()
     m_pManager->GetModelManager()->RemoveAll();
 
     // Create a local player for us
-    m_pLocalPlayer = new CClientPlayer(m_pManager, m_LocalID, true);
+    auto* player = new CClientPlayer(m_pManager, m_LocalID, true);
+    if (!player->HasLocalModel() || !player->IsStreamedIn())
+    {
+        delete player;
+        return false;
+    }
+    m_pLocalPlayer = player;
 
     // Set our parent the root entity
     m_pLocalPlayer->SetParent(m_pRootEntity);
@@ -3535,6 +3551,7 @@ void CClientGame::Event_OnIngame()
 
     // Tell doggy we got the game running
     WatchDogCompletedSection("L1");
+    return true;
 }
 
 void CClientGame::Event_OnIngameAndConnected()

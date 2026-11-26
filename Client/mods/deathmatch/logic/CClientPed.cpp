@@ -299,11 +299,17 @@ void CClientPed::Init(CClientManager* pManager, unsigned long ulModelID, bool bI
 
 CClientPed::~CClientPed()
 {
+    // The pool may have reassociated the retained GTA ped with another client.
+    // Detach first so animation, vehicle and stat cleanup cannot use its wrapper.
+    if (m_bIsLocalPlayer && m_pPlayerPed && !HasLocalModel())
+        _DestroyLocalModel();
+
     // A hack to destroy custom animation by playing a default internal animation.
     // When IFP is unloaded by leaving the server, the pointer to its animations might
     // still be somewhere in use, and a crash can occur by calling its members.
     // So we switch to internal GTA animation to avoid the crash.
-    CStaticFunctionDefinitions::SetPedAnimation(*this, "ped", "idle_stance", -1, 250, true, false, false, false);
+    if (!m_bIsLocalPlayer || m_pPlayerPed)
+        CStaticFunctionDefinitions::SetPedAnimation(*this, "ped", "idle_stance", -1, 250, true, false, false, false);
 
     g_pClientGame->RemovePedPointerFromSet(this);
 
@@ -330,7 +336,7 @@ CClientPed::~CClientPed()
     RemoveAllProjectiles();
 
     // If this is the local player, give the player full health and put him at a safe location
-    if (m_bIsLocalPlayer)
+    if (m_bIsLocalPlayer && m_pPlayerPed)
     {
         SetHealth(GetMaxHealth());
         SetPosition(CVector(2488.562f, -1662.40f, 23.335f));
@@ -342,7 +348,7 @@ CClientPed::~CClientPed()
         SetHeadless(false);
         SetBleeding(false);
     }
-    else
+    else if (!m_bIsLocalPlayer)
     {
         // Remove our shotsync data
         g_pMultiplayer->RemoveRemoteDataStorage(m_pPlayerPed);
@@ -3872,46 +3878,57 @@ void CClientPed::_CreateModel()
 
 void CClientPed::_CreateLocalModel()
 {
-    // Init the local player and grab the pointers
-    g_pGame->InitLocalPlayer(this);
-    m_pPlayerPed = dynamic_cast<CPlayerPed*>(g_pGame->GetPools()->GetPedFromRef((DWORD)1));
-
-    if (m_pPlayerPed)
+    // Finish the blocking model request before attaching this client to GTA's existing ped.
+    if (!AcquireRequestedModel("CClientPed::_CreateLocalModel"))
     {
-        m_pTaskManager = m_pPlayerPed->GetPedIntelligence()->GetTaskManager();
-
-        // Put our pointer in its stored pointer
-        m_pPlayerPed->SetStoredPointer(this);
-
-        // Add a reference to the model we're using
-        if (!AcquireRequestedModel("CClientPed::_CreateLocalModel"))
-        {
-            NotifyUnableToCreate();
-            return;
-        }
-
-        // Make sure we are CJ
-        if (m_pPlayerPed->GetModelIndex() != m_ulModel)
-        {
-            m_pPlayerPed->SetModelIndex(m_ulModel);
-        }
-
-        m_pPlayerPed->SetLanding(false);
-
-        // Give him the default fighting style
-        m_pPlayerPed->SetFightingStyle(m_FightingStyle, 6);
-        m_pPlayerPed->SetMoveAnim(m_MoveAnim);
-        SetHasJetPack(m_bHasJetPack);
-
-        // Rebuild him so he gets his clothes
-        RebuildModel();
-
-        // Validate
-        m_pManager->RestoreEntity(this);
-
-        // Tell the streamer we created the player
-        NotifyCreate();
+        NotifyUnableToCreate();
+        return;
     }
+    auto* pools = g_pGame->GetPools();
+    if (!pools || !g_pGame->InitLocalPlayer(this))
+    {
+        ReleaseLoadedModel();
+        NotifyUnableToCreate();
+        return;
+    }
+
+    // Handle 1 is GTA's local ped in registry slot 0. A previous connection can leave
+    // its wrapper there, so the wrapper and its current client association must both match.
+    auto* player = dynamic_cast<CPlayerPed*>(pools->GetPedFromRef(1));
+    auto* row = pools->GetPed(size_t{0});
+    auto* intelligence = player && row && row->pEntity == player && row->pClientEntity == this ? player->GetPedIntelligence() : nullptr;
+    auto* tasks = intelligence ? intelligence->GetTaskManager() : nullptr;
+    if (!tasks)
+    {
+        if (row && row->pClientEntity == this)
+            pools->InvalidateLocalPlayerClientEntity();
+        ReleaseLoadedModel();
+        NotifyUnableToCreate();
+        return;
+    }
+
+    m_pPlayerPed = player;
+    m_pTaskManager = tasks;
+    m_pPlayerPed->SetStoredPointer(this);
+
+    if (m_pPlayerPed->GetModelIndex() != m_ulModel)
+        m_pPlayerPed->SetModelIndex(m_ulModel);
+
+    m_pPlayerPed->SetLanding(false);
+    m_pPlayerPed->SetFightingStyle(m_FightingStyle, 6);
+    m_pPlayerPed->SetMoveAnim(m_MoveAnim);
+    SetHasJetPack(m_bHasJetPack);
+    RebuildModel();
+    m_pManager->RestoreEntity(this);
+    NotifyCreate();
+}
+
+bool CClientPed::HasLocalModel() const
+{
+    if (!m_bIsLocalPlayer || !m_pPlayerPed || !m_pLoadedModelInfo)
+        return false;
+    auto* pools = g_pGame->GetPools();
+    return pools && pools->GetPedFromRef(1) == m_pPlayerPed && pools->GetPedClientEntity(m_pPlayerPed) == this;
 }
 
 void CClientPed::_DestroyModel()
@@ -3993,7 +4010,8 @@ void CClientPed::_DestroyLocalModel()
 {
     /* Eventually remove from vehicle
         MUST use internal-func, to save the the occupied-vehicle (streaming) */
-    CClientVehicle* pVehicle = GetRealOccupiedVehicle();
+    const bool ownsPlayer = HasLocalModel();
+    CClientVehicle* pVehicle = ownsPlayer ? GetRealOccupiedVehicle() : nullptr;
     if (!pVehicle)
     {
         pVehicle = GetOccupiedVehicle();
@@ -4004,19 +4022,22 @@ void CClientPed::_DestroyLocalModel()
     }
     if (pVehicle)
     {
-        CVehicle* pGameVehicle = pVehicle->GetGameVehicle();
-        if (pGameVehicle)
+        if (ownsPlayer)
         {
-            InternalRemoveFromVehicle(pGameVehicle);
+            if (CVehicle* pGameVehicle = pVehicle->GetGameVehicle())
+                InternalRemoveFromVehicle(pGameVehicle);
         }
 
         pVehicle->RemoveStreamReference();
     }
 
-    // Invalidate
+    // Vehicle exit and stream-reference callbacks can change the current owner.
+    if (!ownsPlayer || !HasLocalModel())
+    {
+        ReleaseLocalModel();
+        return;
+    }
     m_pManager->InvalidateEntity(this);
-
-    g_pGame->GetPools()->InvalidateLocalPlayerClientEntity();
 
     // Flush the tasks first, they cache anim associations that go with the clump on a model change
     m_pPlayerPed->SetInitialState();
@@ -4029,15 +4050,24 @@ void CClientPed::_DestroyLocalModel()
             m_pPlayerPed->SetModelIndex(0);
     }
 
-    // Remove reference to our previous model.
-    // Always release regardless of whether the default model was restored;
-    // the ped is being abandoned by MTA here, and GTA's native ped ref still protects
-    // the model from streaming eviction if SetModelIndex(0) was not possible.
-    ReleaseLoadedModel();
+    ReleaseLocalModel();
+}
 
-    // NULL our pointers, we don't destroy the local player
-    m_pPlayerPed = NULL;
-    m_pTaskManager = NULL;
+void CClientPed::ReleaseLocalModel()
+{
+    // The registry and the wrapper's stored client pointer can outlive GTA's handle.
+    // Retire this client's links even when the native ped can no longer be reset.
+    auto* pools = g_pGame->GetPools();
+    if (pools && pools->GetPedClientEntity(m_pPlayerPed) == this)
+    {
+        if (m_pPlayerPed->GetStoredPointer() == this)
+            m_pPlayerPed->SetStoredPointer(nullptr);
+        pools->InvalidateLocalPlayerClientEntity();
+    }
+    m_pManager->GetPedManager()->OnDestruction(this);
+    m_pPlayerPed = nullptr;
+    m_pTaskManager = nullptr;
+    ReleaseLoadedModel();
 }
 
 void CClientPed::_ChangeModel()
@@ -4285,7 +4315,10 @@ void CClientPed::StreamIn(bool bInstantly)
 {
     if (m_bIsLocalPlayer)
     {
-        NotifyCreate();
+        if (HasLocalModel())
+            NotifyCreate();
+        else
+            NotifyUnableToCreate();
         return;
     }
 #if 0

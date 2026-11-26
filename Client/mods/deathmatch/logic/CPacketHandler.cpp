@@ -340,7 +340,7 @@ void CPacketHandler::Packet_ServerJoined(NetBitStreamInterface& bitStream)
     g_pCore->RemoveMessageBox();
 
     // Are we ingame?
-    if (!g_pClientGame->m_bGameLoaded)
+    if (g_pClientGame->m_ingameStartup != CClientGame::IngameStartup::Ready)
     {
         RaiseProtocolError(2);
         return;

@@ -10,6 +10,13 @@ Remote gameplay also requires a DE multiplayer factory, multiplayer and
 renderer startup, and a compatible x64 client network module. Both documented
 Windows client network downloads checked for this port contain x86 DLLs.
 
+Deathmatch now waits for its local player to finish initialization before
+it sends the server its in-game notice. Previously, a missing local ped or
+a failed model request could still lead the client to announce that it had
+entered the game. If local-player creation fails after GTA reports that the
+world is loaded, the client shows an error and unloads the session. A new
+connection starts with a fresh player.
+
 MTA can now export a saved primary movement key to GTA before launch with
 [`sync-movement-binding.ps1`](Client/definitive/sync-movement-binding.ps1).
 In a Steam test, GTA's Controls screen first showed W/A/S/D and left Shift.

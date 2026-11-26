@@ -8,6 +8,8 @@
 // Included inside the owned host's anonymous namespace after its GUI helpers.
 // These paths belong to one disposable fixture; the default user profile is
 // deliberately never opted in while testing file transactions.
+constexpr unsigned kPersistenceProfileBindCount = 12;  // Six movements, fire, and five distinct command bindings.
+
 std::filesystem::path BindingFixturePath(const std::filesystem::path& root)
 {
     return root / L"binding-fixture/definitive/keybinds.xml";
@@ -128,7 +130,7 @@ void BindingPersistenceOwner(Owned& owned, const std::filesystem::path& root, bo
     };
     const auto before = RuntimeState(owned);
     Check(!owned.frontend && before[Runtime::RuntimePhase] == static_cast<std::uint32_t>(Runtime::Phase::Hidden) && before[Runtime::ConfigurationReadOnly] &&
-              !before[Runtime::ViewsAttached] && before[Runtime::BindCount] == 8,
+              !before[Runtime::ViewsAttached] && before[Runtime::BindCount] == kPersistenceProfileBindCount,
           "actual hidden runtime owns its configured bindings before any GUI view or local producer borrows them");
     if (!restarted)
     {
@@ -335,8 +337,8 @@ void BindingPersistenceSettings(Owned& owned, const std::filesystem::path& root,
     }
     const auto saved = ReadBindingFixture(file);
     CheckMovementFile(saved, restarted ? std::vector<const char*>{"i", "x", "b", "arrow_u", "n"} : std::vector<const char*>{"i"});
-    Check(state()[Bindings::BindCount] == (restarted ? 12u : 8u) && state()[Bindings::IgnoredBindings] == before[Bindings::IgnoredBindings] &&
-              state()[Bindings::IgnoredBindings] == (restarted ? 2u : 1u),
+    Check(state()[Bindings::BindCount] == kPersistenceProfileBindCount + (restarted ? 4u : 0u) &&
+              state()[Bindings::IgnoredBindings] == before[Bindings::IgnoredBindings] && state()[Bindings::IgnoredBindings] == (restarted ? 2u : 1u),
           "Apply preserves unrelated records and a legacy movement key outside the polling routes");
     open();
     inspect(applied);

@@ -363,14 +363,11 @@ void CCommandFuncs::Binds(const char* szParameters)
 
 void CCommandFuncs::CopyGTAControls(const char* szParameters)
 {
-    CKeyBindsInterface* pKeyBinds = CCore::GetSingleton().GetKeyBinds();
-
-    if (pKeyBinds)
-    {
-        pKeyBinds->RemoveAllGTAControls();
-        pKeyBinds->LoadControlsFromGTA();
+    auto* pKeyBinds = static_cast<CKeyBinds*>(CCore::GetSingleton().GetKeyBinds());
+    if (pKeyBinds && pKeyBinds->ImportGTAControls(CKeyBinds::ImportMode::ReplaceControls))
         CCore::GetSingleton().GetConsole()->Print(_("Bound all controls from GTA"));
-    }
+    else
+        CCore::GetSingleton().GetConsole()->Print(_("GTA control bindings are unavailable"));
 }
 
 void CCommandFuncs::HUD(const char* szParameters)

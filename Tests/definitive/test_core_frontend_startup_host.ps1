@@ -207,7 +207,17 @@ try {
                 # Unrelated real binds make loss during movement-only cloning
                 # observable without modifying the pinned repository asset.
                 $assetSource=Join-Path $caseRoot 'persistence-baseconfig.xml'
-                $fixture=(Get-Content -LiteralPath $entry.source -Raw).Replace('</binds>',"    <bind key=`"x`" control=`"fire`" />`n        <bind key=`"y`" command=`"host_preserve`" arguments=`"fixture`" state=`"down`" />`n    </binds>")
+                $extraBindings=@'
+        <bind key="x" control="fire" />
+        <bind key="y" command="host_preserve" arguments="fixture" resource="sample" default="g" />
+        <bind key="y" command="host_preserve" arguments="fixture" />
+        <bind key="y" command="host_preserve" arguments="second" />
+        <bind key="y" command="host_preserve" />
+        <bind key="Y" command="host_preserve" arguments="second" />
+        <bind key="y" command="host_preserve" arguments="second" state="up" />
+    </binds>
+'@
+                $fixture=(Get-Content -LiteralPath $entry.source -Raw).Replace('</binds>',$extraBindings)
                 [IO.File]::WriteAllText($assetSource,$fixture,[Text.UTF8Encoding]::new($false))
             }
             if($case -in @('runtime-interaction','runtime-locale-failure') -and $entry.path -eq 'mta/config/coreconfig.xml') {

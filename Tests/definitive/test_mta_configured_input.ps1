@@ -122,7 +122,11 @@ $configuration=@'
   <bind key="v" command="fixture_command" control="forwards" state="up" arguments="text"/>
   <bind key="k" command="" control="backwards"/>
   <bind key="h" command="fixture_resource" state="down" resource="res" default="h"/>
+  <bind key="j" command="fixture_command" arguments="alpha"/>
+  <bind key="j" command="fixture_command" arguments="beta"/>
+  <bind key="J" command="fixture_command" arguments="alpha"/>
   <bind key="j" command="fixture_command"/>
+  <bind key="j" command="Fixture_Command" arguments="beta"/>
   <bind key="not_a_key" control="forwards"/>
   <bind key="i" control="not_a_control"/>
   <ignore/>

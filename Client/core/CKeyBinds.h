@@ -18,6 +18,7 @@ class CKeyBinds;
 #include <windows.h>
 #include <string.h>
 #include <list>
+#include <string_view>
 
 #include <core/CCoreInterface.h>
 #include <core/CCommandsInterface.h>
@@ -183,6 +184,13 @@ public:
     void LoadDefaultBinds();
     void LoadDefaultCommands(bool bForce);
     void LoadControlsFromGTA();
+    enum class ImportMode
+    {
+        AppendControls,
+        ReplaceControls,
+        ResetDefaults
+    };
+    bool ImportGTAControls(ImportMode mode);
 
     void BindCommand(const char* szCmdLine);
     void UnbindCommand(const char* szCmdLine);
@@ -194,6 +202,8 @@ public:
 
 private:
     friend class CSettings;
+    void AddDefaultCommandsTo(CKeyBinds& target, bool force);
+    bool HasUserCommand(const char* key, const char* command, bool state, std::string_view arguments) const;
     struct ControlBindingOrder
     {
         SBindableGTAControl*             control;

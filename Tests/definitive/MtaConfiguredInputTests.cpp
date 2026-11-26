@@ -383,7 +383,7 @@ namespace
         {
             Scenario legacy(module);
             Check(legacy.keys.LoadFromXML(node), "actual classic loader accepts nonempty configured XML without CGame");
-            Check(legacy.keys.Count(KeyBindType::GTA_CONTROL) == 8 && legacy.keys.Count(KeyBindType::COMMAND) == 3,
+            Check(legacy.keys.Count(KeyBindType::GTA_CONTROL) == 8 && legacy.keys.Count(KeyBindType::COMMAND) == 6,
                   "classic parser retains configured deduplication and command precedence");
             auto* resource = legacy.keys.GetBindFromCommand("fixture_resource");
             Check(resource != nullptr, "classic parser retains the saved resource command");
@@ -396,8 +396,12 @@ namespace
             Check(empty && test.keys.LoadConfiguredBindsFromXML(empty->node) && test.keys.Count() == 0,
                   "configured-only empty XML remains empty without a CGame/default dependency");
             Check(test.keys.LoadConfiguredBindsFromXML(node), "actual configured-only parser ingests real saved XML");
-            Check(test.keys.Count(KeyBindType::GTA_CONTROL) == 8 && test.keys.Count(KeyBindType::COMMAND) == 3,
+            Check(test.keys.Count(KeyBindType::GTA_CONTROL) == 8 && test.keys.Count(KeyBindType::COMMAND) == 6,
                   "saved aliases, case-insensitive deduplication and ignored invalid records match classic loading");
+            for (const char* args : {"alpha", "beta", ""})
+                Check(test.keys.CommandExistsInContext("j", "fixture_command", BindingContext::USER, true, true, args),
+                      "each saved argument list, including an empty one, survives loading");
+            Check(test.keys.GetBindFromCommand("Fixture_Command", "beta", true, "j", true, true) != nullptr, "loading keeps the case-sensitive command name");
             Check(!test.keys.GTAControlExists("k", "backwards") && !test.keys.GTAControlExists("v", "forwards"),
                   "present command attributes take precedence over control attributes, including empty commands");
             auto* resource = test.keys.GetBindFromCommand("fixture_resource");

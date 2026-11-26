@@ -17,6 +17,7 @@
 #include <game/CTaskManager.h>
 #include <game/Task.h>
 #include <CControlBindState.h>
+#include <stdexcept>
 
 const SBindableKey g_bkKeys[] = {{"mouse1", VK_LBUTTON, GTA_KEY_LMOUSE, DATA_NONE, 0},
                                  {"mouse2", VK_RBUTTON, GTA_KEY_RMOUSE, DATA_NONE, 0},
@@ -2150,13 +2151,15 @@ void CKeyBinds::DoPostFramePulse()
     if (CLocalGUI::IsFaultDialogOpen())
         return;
 
-    SystemState::Enum systemState = CCore::GetSingleton().GetGame()->GetSystemState();
+    CGame* game = m_pCore ? m_pCore->GetGame() : nullptr;
+    if (!game)
+        return;
+    SystemState::Enum systemState = game->GetSystemState();
 
     if (m_bWaitingToLoadDefaults &&
         (systemState == SystemState::GS_FRONTEND || systemState == SystemState::GS_PLAYING_GAME))  // Are GTA controls actually initialized?
     {
         LoadDefaultBinds();
-        m_bWaitingToLoadDefaults = false;
     }
 
     if (systemState != SystemState::GS_PLAYING_GAME)
@@ -2336,7 +2339,7 @@ bool CKeyBinds::LoadConfiguredBindsFromXML(CXMLNode* pMainNode)
                                 }
 
                                 pAttribute = pNode->GetAttributes().Find("resource");
-                                if (pAttribute)
+                                if (pAttribute && !pAttribute->GetValue().empty())
                                 {
                                     strResource = pAttribute->GetValue();
 
@@ -2349,7 +2352,7 @@ bool CKeyBinds::LoadConfiguredBindsFromXML(CXMLNode* pMainNode)
                                     AddCommand(strKey.c_str(), strCommand.c_str(), szArgs, bState, strResource.c_str(), false, szOrigKey);
                                     SetCommandActive(strKey.c_str(), strCommand.c_str(), bState, szArgs, strResource.c_str(), false, true);
                                 }
-                                else if (!CommandExists(strKey.c_str(), strCommand.c_str(), true, bState))
+                                else if (!HasUserCommand(strKey.c_str(), strCommand.c_str(), bState, strArguments))
                                 {
                                     const char* szArgs = strArguments.empty() ? nullptr : strArguments.c_str();
                                     AddCommand(strKey.c_str(), strCommand.c_str(), szArgs, bState);
@@ -2390,12 +2393,16 @@ bool CKeyBinds::LoadFromXML(CXMLNode* pMainNode)
     const bool bSuccess = LoadConfiguredBindsFromXML(pMainNode);
     if (!pMainNode || pMainNode->GetSubNodeCount() == 0)
     {
-        const SystemState::Enum systemState = CCore::GetSingleton().GetGame()->GetSystemState();
-        if (systemState == SystemState::GS_FRONTEND || systemState == SystemState::GS_PLAYING_GAME)  // Are GTA controls actually initialized?
-            LoadDefaultBinds();
-        else
-            m_bWaitingToLoadDefaults = true;
+        m_bWaitingToLoadDefaults = true;
+        if (CGame* game = m_pCore ? m_pCore->GetGame() : nullptr)
+        {
+            const auto systemState = game->GetSystemState();
+            if (systemState == SystemState::GS_FRONTEND || systemState == SystemState::GS_PLAYING_GAME)
+                LoadDefaultBinds();
+        }
     }
+    else if (bSuccess)
+        m_bWaitingToLoadDefaults = false;
 
     return bSuccess;
 }
@@ -2469,70 +2476,83 @@ bool CKeyBinds::SaveToXML(CXMLNode* pMainNode)
 
 void CKeyBinds::LoadDefaultBinds()
 {
-    ClearCommandsAndControls();
-
-    LoadControlsFromGTA();
-    LoadDefaultCommands(true);
+    ImportGTAControls(ImportMode::ResetDefaults);
 }
 
 void CKeyBinds::LoadDefaultCommands(bool bForce)
 {
-    for (int i = 0; *g_dcbDefaultCommands[i].szKey != NULL; i++)
+    AddDefaultCommandsTo(*this, bForce);
+}
+
+void CKeyBinds::AddDefaultCommandsTo(CKeyBinds& target, bool force)
+{
+    for (const auto& entry : g_dcbDefaultCommands)
     {
-        const SDefaultCommandBind* temp = &g_dcbDefaultCommands[i];
-        if (bForce || !CommandExists(NULL, temp->szCommand, true, temp->bState, temp->szArguments))
-            AddCommand(temp->szKey, temp->szCommand, temp->szArguments, temp->bState);
+        if (!*entry.szKey)
+            break;
+        const bool exists = force ? HasUserCommand(entry.szKey, entry.szCommand, entry.bState, entry.szArguments)
+                                  : CommandExists(nullptr, entry.szCommand, true, entry.bState, entry.szArguments);
+        if (!exists)
+            target.AddCommand(entry.szKey, entry.szCommand, entry.szArguments, entry.bState);
     }
 }
 
 void CKeyBinds::LoadControlsFromGTA()
 {
-    for (int i = FIRE; i <= GROUP_CONTROL_BACK; i++)
+    ImportGTAControls(ImportMode::AppendControls);
+}
+
+bool CKeyBinds::ImportGTAControls(ImportMode mode)
+{
+    // Resolve every binding before replacing the live list. A backend can
+    // become unavailable between actions, and a later pulse can retry.
+    CKeyBinds staged(m_pCore);
+    try
     {
-        CGame* pGame = m_pCore->GetGame();
-        if (pGame)
+        CGame*                    game = m_pCore ? m_pCore->GetGame() : nullptr;
+        CControllerConfigManager* controller = game ? game->GetControllerConfigManager() : nullptr;
+        if (!controller)
+            return false;
+        for (int i = FIRE; i <= GROUP_CONTROL_BACK; ++i)
         {
-            SBindableGTAControl* pControl = GetBindableFromAction((eControllerAction)i);
-            if (pControl)
+            const auto action = static_cast<eControllerAction>(i);
+            auto*      control = GetBindableFromAction(action);
+            if (!control)
+                continue;
+            for (const auto device : {KEYBOARD, OPTIONAL_EXTRA, MOUSE, JOYSTICK})
             {
-                // Keyboard
-                int iKey = pGame->GetControllerConfigManager()->GetControllerKeyAssociatedWithAction((eControllerAction)i, KEYBOARD);
-                if (iKey != NO_KEY_DEFINED)
+                int key = controller->GetControllerKeyAssociatedWithAction(action, device);
+                if (device == JOYSTICK)
                 {
-                    const SBindableKey* pKey = GetBindableFromGTARelative(iKey);
-                    if (pKey)
-                        AddGTAControl(pKey, pControl);
+                    // GTA reports a one-based button number. Only the 32
+                    // joystick buttons in g_bkKeys have an MTA mapping.
+                    if (key < 1 || key > 32)
+                        continue;
+                    key = GTA_KEY_JOY(key);
                 }
-
-                // Optional Key
-                iKey = pGame->GetControllerConfigManager()->GetControllerKeyAssociatedWithAction((eControllerAction)i, OPTIONAL_EXTRA);
-                if (iKey != NO_KEY_DEFINED)
-                {
-                    const SBindableKey* pKey = GetBindableFromGTARelative(iKey);
-                    if (pKey)
-                        AddGTAControl(pKey, pControl);
-                }
-
-                // Mouse
-                iKey = pGame->GetControllerConfigManager()->GetControllerKeyAssociatedWithAction((eControllerAction)i, MOUSE);
-                if (iKey != NO_KEY_DEFINED)
-                {
-                    const SBindableKey* pKey = GetBindableFromGTARelative(iKey);
-                    if (pKey)
-                        AddGTAControl(pKey, pControl);
-                }
-
-                // Joystick
-                iKey = pGame->GetControllerConfigManager()->GetControllerKeyAssociatedWithAction((eControllerAction)i, JOYSTICK);
-                if (iKey)
-                {
-                    const SBindableKey* pKey = GetBindableFromGTARelative(GTA_KEY_JOY(iKey));
-                    if (pKey)
-                        AddGTAControl(pKey, pControl);
-                }
+                if (key == NO_KEY_DEFINED)
+                    continue;
+                if (const auto* binding = GetBindableFromGTARelative(key))
+                    staged.AddGTAControl(binding, control);
             }
         }
     }
+    catch (const std::runtime_error&)
+    {
+        return false;
+    }
+
+    if (mode == ImportMode::ResetDefaults)
+    {
+        AddDefaultCommandsTo(staged, true);
+        ClearCommandsAndControls();
+        m_bWaitingToLoadDefaults = false;
+    }
+    else if (mode == ImportMode::ReplaceControls)
+        RemoveAllGTAControls();
+
+    m_binds.splice(m_binds.end(), staged.m_binds);
+    return true;
 }
 
 void CKeyBinds::BindCommand(const char* szCmdLine)
@@ -2558,8 +2578,10 @@ void CKeyBinds::BindCommand(const char* szCmdLine)
     {
         if (strcmp(szKey, "defaults") == 0)
         {
-            LoadDefaultBinds();
-            pConsole->Print("* Bound all default commands and controls\n");
+            if (ImportGTAControls(ImportMode::ResetDefaults))
+                pConsole->Print("* Bound all default commands and controls\n");
+            else
+                pConsole->Print(_("GTA control bindings are unavailable"));
         }
         else if (szCommand)
         {
@@ -2595,7 +2617,7 @@ void CKeyBinds::BindCommand(const char* szCmdLine)
                     SString strKeyState("%s", bState ? "down" : "up");
                     SString strCommandAndArguments("%s%s%s", szCommand, szArguments ? " " : "", szArguments ? szArguments : "");
 
-                    if (!CommandExists(szKey, szCommand, true, bState, szArguments))
+                    if (!HasUserCommand(szKey, szCommand, bState, szArguments ? szArguments : ""))
                     {
                         if (AddCommand(szKey, szCommand, szArguments, bState))
                             pConsole->Printf("* Bound key '%s' '%s' to command '%s'", szKey, *strKeyState, *strCommandAndArguments);
@@ -2870,6 +2892,21 @@ bool CKeyBinds::TriggerKeyStrokeHandler(const SString& strKey, bool bState, bool
         return m_KeyStrokeHandler(strKey, bState, bIsConsoleInputKey);
     }
     return true;
+}
+
+bool CKeyBinds::HasUserCommand(const char* key, const char* command, bool state, std::string_view arguments) const
+{
+    // Empty arguments are a distinct saved command. The general lookup accepts wildcards.
+    for (const KeyBindPtr& bind : m_binds)
+    {
+        if (bind->isBeingDeleted || bind->type != KeyBindType::COMMAND || !bind->boundKey || stricmp(bind->boundKey->szKey, key))
+            continue;
+        const auto* commandBind = static_cast<const CCommandBind*>(bind.get());
+        if (commandBind->context == BindingContext::USER && commandBind->triggerState == state && commandBind->command == command &&
+            commandBind->arguments == arguments)
+            return true;
+    }
+    return false;
 }
 
 bool CKeyBinds::CommandExistsInContext(const char* key, const char* command, BindingContext context, bool checkState, bool state, const char* arguments,

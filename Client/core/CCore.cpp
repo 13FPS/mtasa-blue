@@ -57,6 +57,9 @@
 #include "DefinitiveGuiFrontendInputReference.h"
 #include "DefinitiveFrontendBindings.h"
 #include "DefinitiveFrontendBindingPersistence.h"
+#if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
+#include "DefinitiveRetailMovementBindings.h"
+#endif
 #include "DefinitivePersistentFrontend.h"
 #include "FrontendCursorLeaseOwner.h"
 #include "NetworkModuleStartup.h"
@@ -2133,10 +2136,67 @@ namespace
     // This generated file contains only the six controls owned by the retained
     // frontend. Base commands, other controls and application CVars remain in
     // the ordinary package configuration and are never written through here.
-    constexpr const char* frontendMovementControls[] = {"forwards", "backwards", "left", "right", "sprint", "walk"};
-    bool                  PersistedFrontendControl(const std::string& name)
+    constexpr DefinitiveRetailMovementBindings::Binding frontendMovementDefaults[] = {{"forwards", "w"}, {"backwards", "s"},   {"left", "a"},
+                                                                                      {"right", "d"},    {"sprint", "lshift"}, {"walk", "rshift"}};
+    bool                                                PersistedFrontendControl(const std::string& name)
     {
-        return std::any_of(std::begin(frontendMovementControls), std::end(frontendMovementControls), [&](const char* value) { return name == value; });
+        return std::any_of(std::begin(frontendMovementDefaults), std::end(frontendMovementDefaults),
+                           [&](const auto& binding) { return name == binding.control; });
+    }
+    fs::path FrontendRetailKeyboardPath()
+    {
+        constexpr auto overrideName = L"MTA_DE_KEYBOARD_MAPPINGS";
+        const auto     size = GetEnvironmentVariableW(overrideName, nullptr, 0);
+        if (size)
+        {
+            std::wstring value(size, L'\0');
+            const auto   length = GetEnvironmentVariableW(overrideName, value.data(), size);
+            if (!length || length >= size)
+                return {};
+            value.resize(length);
+            fs::path path(std::move(value));
+            return path.is_absolute() ? path : fs::path{};
+        }
+        if (GetLastError() != ERROR_ENVVAR_NOT_FOUND)
+            return {};
+        const fs::path documents(FromUTF8(SharedUtil::GetSystemPersonalPath()));
+        if (!documents.is_absolute())
+            return {};
+        return documents / L"Rockstar Games" / L"GTA San Andreas Definitive Edition" / L"KeyboardMappings.cfg";
+    }
+    bool HasExplicitFrontendMovement(CXMLNode* configured, CKeyBinds& target, const DefinitiveRetailMovementBindings::Binding& stock)
+    {
+        for (unsigned index = 0; configured && index < configured->GetSubNodeCount(); ++index)
+        {
+            auto* node = configured->GetSubNode(index);
+            if (!node || node->GetTagName() != "bind" || node->GetAttributes().Find("command") || stricmp(node->GetAttributeValue("control"), stock.control))
+                continue;
+            const auto key = node->GetAttributeValue("key");
+            if (target.GTAControlExists(key.c_str(), stock.control) && (key != stock.key || node->GetAttributeValue("retailFallback") != stock.key))
+                return true;
+        }
+        return false;
+    }
+    bool LoadFrontendConfiguredBindings(CKeyBinds& target, CXMLNode* configured)
+    {
+        if (configured && !target.LoadConfiguredBindsFromXML(configured))
+            return false;
+        const auto path = FrontendRetailKeyboardPath();
+        if (path.empty())
+            return true;
+        for (const auto& binding : DefinitiveRetailMovementBindings::Read(path))
+        {
+            const auto stock = std::find_if(std::begin(frontendMovementDefaults), std::end(frontendMovementDefaults),
+                                            [&](const auto& item) { return !strcmp(item.control, binding.control); });
+            if (stock == std::end(frontendMovementDefaults) || HasExplicitFrontendMovement(configured, target, *stock) ||
+                target.GTAControlExists(binding.key, binding.control))
+                continue;
+            if (!target.AddGTAControl(binding.key, binding.control))
+                return false;
+            if (strcmp(stock->key, binding.key))
+                target.RemoveGTAControl(stock->key, binding.control);
+        }
+        return true;
     }
     struct FrontendBindingDocument
     {
@@ -2815,7 +2875,7 @@ DefinitiveFrontend::Status CCore::EnableFrontendRuntimeServices() noexcept
         if (!root)
             throw std::runtime_error("Runtime bindings configuration has no root");
         auto* configured = root->FindSubNode(CONFIG_NODE_KEYBINDS);
-        if (configured && !resources.bindings->LoadConfiguredBindsFromXML(configured))
+        if (!LoadFrontendConfiguredBindings(*resources.bindings, configured))
             throw std::runtime_error("Runtime configured bindings could not be loaded");
         ++state[BindingLoads];
         if (!FlushFrontendRuntimeBindings())
@@ -3676,19 +3736,17 @@ DefinitiveFrontend::Status CCore::EnableFrontendBindings()
         }
         else
         {
-            // Configured records avoid GTA defaults, CGame and command dispatch.
+            // Read the same keyboard profile as a runtime-owned manager.
             m_pKeyBinds = new CKeyBinds(this);
             state[BindingsCreated] = 1;
             auto* root = m_pConfigFile->GetRootNode();
             if (!root)
                 throw std::runtime_error("Frontend bindings configuration has no root");
             auto* configured = root->FindSubNode(CONFIG_NODE_KEYBINDS);
-            if (configured && !m_pKeyBinds->LoadConfiguredBindsFromXML(configured))
+            if (!LoadFrontendConfiguredBindings(*m_pKeyBinds, configured))
                 throw std::runtime_error("Frontend configured bindings could not be loaded");
         }
         state[BindingsCreated] = 1;
-        // A missing configured list is an empty list, never admission to
-        // discover classic GTA defaults or start a gameplay input producer.
         state[ConfigurationLoaded] = 1;
         state[BindCount] = m_pKeyBinds->Count();
         state[Phase] = static_cast<std::uint32_t>(Lifecycle::Running);

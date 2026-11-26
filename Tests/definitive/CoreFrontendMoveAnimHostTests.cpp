@@ -101,6 +101,8 @@ int wmain(int argc, wchar_t** argv)
         Check(argc == 3 && sizeof(void*) == 8 && std::wstring(argv[2]) == L"runtime-moveanim", "one explicit owned x64 movement-route case supplied");
         const std::filesystem::path root(argv[1]);
         Check(root.is_absolute(), "owned fixture root is absolute");
+        Check(SetEnvironmentVariableW(L"MTA_DE_KEYBOARD_MAPPINGS", (root / L"KeyboardMappings.cfg").c_str()) != FALSE,
+              "movement fixture selects its own keyboard mapping path");
         Owned owned;
         InitializeWarp(owned);
         owned.localWindow = CreateWindowExW(0, L"STATIC", L"MTA owned movement-route test", WS_OVERLAPPEDWINDOW, 0, 0, 640, 480, nullptr, nullptr,

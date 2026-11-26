@@ -76,6 +76,7 @@ namespace
     bool                     localInputAdmissionVerified = false, localInputWrongImageVerified = false;
     bool                     bindingPersistenceVerified = false, bindingPersistenceRestartVerified = false;
     bool                     bindingPersistenceSaveFailureVerified = false, bindingPersistenceAdmissionVerified = false;
+    std::string              initialRuntimeForward;
     Runtime::Snapshot        runtimeTerminal{};
     ClockReference::Snapshot clockSnapshot{};
     bool                     CancelClock()
@@ -494,7 +495,8 @@ namespace
                << ",\"actualSessionBindingsSettingsVerified\":" << (settingsVerified ? "true" : "false")
                << ",\"settingsCaptureRetainedForCleanup\":" << (settingsCaptureRetainedForCleanup ? "true" : "false")
                << ",\"runtimeApiVersion\":1,\"runtimeFields\":64,\"runtimeCase\":" << (runtimeCase ? "true" : "false")
-               << ",\"runtimeRetentionVerified\":" << (runtimeRetentionVerified ? "true" : "false")
+               << ",\"runtimeRetentionVerified\":" << (runtimeRetentionVerified ? "true" : "false") << ",\"initialRuntimeForward\":\"" << initialRuntimeForward
+               << "\""
                << ",\"runtimeFailureCleanupVerified\":" << (runtimeFailureCleanupVerified ? "true" : "false")
                << ",\"localInputApiVersion\":1,\"localInputFields\":32,\"localInputAdmissionVerified\":" << (localInputAdmissionVerified ? "true" : "false")
                << ",\"localInputWrongImageVerified\":" << (localInputWrongImageVerified ? "true" : "false") << ",\"localInputNativeMovementVerified\":false"
@@ -905,7 +907,7 @@ namespace
               "hidden runtime retains exactly one real XML/CVars/bindings owner with neutral view aliases");
     }
 
-    std::uintptr_t RuntimeSettings(Owned& owned, bool secondView, std::uintptr_t previousIdentity)
+    std::uintptr_t RuntimeSettings(Owned& owned, bool secondView, std::uintptr_t previousIdentity, const char* expectedForward)
     {
         auto& observed = *owned.observed;
         auto* grid = observed.settingsGrid;
@@ -961,6 +963,28 @@ namespace
         int row = forwards();
         if (!secondView)
         {
+            const std::array<const char*, 6> controls{"forwards", "backwards", "left", "right", "sprint", "walk"};
+            const std::array<const char*, 6> keys{expectedForward, "s", "a", "d", "lshift", "rshift"};
+            std::array<bool, 6>              found{};
+            for (int index = 0; index < grid->GetRowCount(); ++index)
+            {
+                if (static_cast<KeyBindType>(reinterpret_cast<std::intptr_t>(grid->GetItemData(index, 1))) != KeyBindType::GTA_CONTROL)
+                    continue;
+                auto* bind = static_cast<CGTAControlBind*>(grid->GetItemData(index, 2));
+                Check(bind && bind->control && bind->boundKey, "first runtime Settings view borrows configured movement records");
+                const auto control =
+                    std::find_if(controls.begin(), controls.end(), [&](const char* name) { return !std::strcmp(bind->control->szControl, name); });
+                Check(control != controls.end(), "first runtime Settings view shows only the six frontend movement controls");
+                const auto slot = static_cast<std::size_t>(control - controls.begin());
+                std::printf("Initial movement %s: primary=%s, expected=%s\n", *control, bind->boundKey->szKey, keys[slot]);
+                Check(!found[slot] && std::string(bind->boundKey->szKey) == keys[slot] && grid->GetItemText(index, 2) == std::string(keys[slot]) &&
+                          !grid->GetItemData(index, 3) && !grid->GetItemData(index, 4),
+                      "initial runtime Settings primary and underlying MTA movement key match the expected profile without stale alternatives");
+                found[slot] = true;
+            }
+            Check(std::all_of(found.begin(), found.end(), [](bool value) { return value; }),
+                  "first runtime Settings view contains all six initial movement keys");
+            initialRuntimeForward = static_cast<CGTAControlBind*>(grid->GetItemData(row, 2))->boundKey->szKey;
             capture(row, 'J');
             capture(row, 'I', 3);
             capture(row, 'K', 4);
@@ -1018,7 +1042,7 @@ namespace
 #include "CoreFrontendBindingPersistenceHost.h"
 
     void RuntimeSessionCase(Owned& owned, const std::filesystem::path& root, const std::wstring& mode, Startup::Snapshot& startup, Frontend::Snapshot& frontend,
-                            bool persistenceRestart = false)
+                            const char* expectedForward, bool persistenceRestart = false)
     {
         const bool persistence = mode == L"runtime-persistence";
         const bool interaction = mode == L"runtime-interaction";
@@ -1311,7 +1335,7 @@ namespace
                 if (persistence)
                     BindingPersistenceSettings(owned, root, view, persistenceRestart);
                 else
-                    identity = RuntimeSettings(owned, view == 2, identity);
+                    identity = RuntimeSettings(owned, view == 2, identity, expectedForward);
                 Save(root / (view == 1 ? L"runtime-first-view.bmp" : L"runtime-second-view.bmp"), Raster(owned));
                 Check(owned.shutdown(owned.frontend) == Frontend::Status::Ok, "runtime hide retires actual widgets and their active settings capture");
                 frontend = owned.State();
@@ -1459,14 +1483,23 @@ int wmain(int argc, wchar_t** argv)
     setvbuf(stderr, nullptr, _IONBF, 0);
     try
     {
-        Check(argc == 3 && sizeof(void*) == 8, "owned x64 frontend startup root and case supplied");
+        Check((argc == 3 || argc == 4) && sizeof(void*) == 8, "owned x64 frontend startup root, case and optional keyboard fixture supplied");
         const std::filesystem::path root(argv[1]);
         const std::wstring          mode(argv[2]);
+        const std::wstring          keyboardMode = argc == 4 ? argv[3] : L"";
+        Check(keyboardMode.empty() || (mode == L"runtime" && (keyboardMode == L"retail-k" || keyboardMode == L"retail-k-documents")),
+              "explicit keyboard mapping workload selected");
         Check(root.is_absolute() && (mode == L"normal" || mode == L"gated" || mode == L"frontend-failure" || mode == L"backend-failure" || mode == L"runtime" ||
                                      mode == L"runtime-persistence" || mode == L"runtime-frontend-failure" || mode == L"runtime-backend-failure" ||
                                      mode == L"runtime-interaction" || mode == L"runtime-locale-failure" || mode == L"presentation-policy"),
               "explicit completed-Core lifecycle case selected");
         Check(!std::filesystem::exists(root / L"server"), "owned frontend has no local-server startup assets");
+        if (keyboardMode == L"retail-k-documents")
+            Check(!GetEnvironmentVariableW(L"MTA_DE_KEYBOARD_MAPPINGS", nullptr, 0) && GetLastError() == ERROR_ENVVAR_NOT_FOUND,
+                  "opt-in Documents lookup starts without a keyboard mapping override");
+        else
+            Check(SetEnvironmentVariableW(L"MTA_DE_KEYBOARD_MAPPINGS", (root / L"KeyboardMappings.cfg").c_str()) != FALSE,
+                  "ordinary host selects its own case-local keyboard mapping path before Core loads");
         Owned owned;
         InitializeWarp(owned);
         owned.core = LoadLibraryExW((root / L"core.dll").c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -1571,7 +1604,7 @@ int wmain(int argc, wchar_t** argv)
             Frontend::Snapshot frontend{};
             if (mode == L"runtime-persistence")
                 BindingPersistenceHistoricalOwner(owned, root);
-            RuntimeSessionCase(owned, root, mode, startup, frontend);
+            RuntimeSessionCase(owned, root, mode, startup, frontend, keyboardMode.empty() ? "w" : "k");
             if (mode == L"runtime-persistence")
             {
                 const auto file = BindingFixturePath(root);
@@ -1580,7 +1613,7 @@ int wmain(int argc, wchar_t** argv)
                 Check(owned.localWindow && DestroyWindow(owned.localWindow), "retire the first owned local HWND before creating a fresh Core runtime");
                 owned.localWindow = nullptr;
                 owned.observed.reset();
-                RuntimeSessionCase(owned, root, mode, startup, frontend, true);
+                RuntimeSessionCase(owned, root, mode, startup, frontend, "w", true);
                 Check(bindingPersistenceRestartVerified, "a newly constructed Core reloads disk bindings and retains edits across both Settings views");
                 CheckMovementFile(ReadBindingFixture(file), {"i", "x", "b", "arrow_u", "n"});
             }

@@ -2182,6 +2182,8 @@ int wmain(int argc, wchar_t** argv)
     {
         Check(sizeof(void*) == 8 && argc >= 3, "x64 fixture requires owned root and mode");
         const auto root = std::filesystem::absolute(argv[1]);
+        Check(SetEnvironmentVariableW(L"MTA_DE_KEYBOARD_MAPPINGS", (root / L"KeyboardMappings.cfg").c_str()) != FALSE,
+              "worker fixture selects its own keyboard mapping path");
         wchar_t    executable[32768]{};
         GetModuleFileNameW(nullptr, executable, 32768);
         Check(std::filesystem::path(executable).parent_path() == root, "worker anchor must be the owned host adjacent to Core");

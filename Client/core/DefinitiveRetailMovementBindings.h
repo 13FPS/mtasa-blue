@@ -1,0 +1,136 @@
+/*****************************************************************************
+ * PROJECT: Multi Theft Auto
+ * LICENSE: See LICENSE in the repository root
+ * PURPOSE: Read on-foot keyboard bindings saved by the retail DE controls menu
+ *****************************************************************************/
+#pragma once
+
+#include <array>
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace DefinitiveRetailMovementBindings
+{
+    struct Binding
+    {
+        const char* control;
+        const char* key;
+    };
+
+    inline constexpr std::size_t MaxFileBytes = 64 * 1024;
+
+    namespace Detail
+    {
+        struct Action
+        {
+            std::string_view mapping;
+            std::string_view direction;
+            const char*      control;
+        };
+
+        inline constexpr std::array<Action, 5> Actions = {{{"HID_MAPPING_PED_MOVE_Y", "1", "forwards"},
+                                                           {"HID_MAPPING_PED_MOVE_Y", "0", "backwards"},
+                                                           {"HID_MAPPING_PED_MOVE_X", "1", "left"},
+                                                           {"HID_MAPPING_PED_MOVE_X", "0", "right"},
+                                                           {"HID_MAPPING_SPRINT", "0", "sprint"}}};
+
+        // IDs verified against named keys in the retail controls menu and its saved file.
+        inline const char* KeyName(std::string_view id)
+        {
+            struct Key
+            {
+                std::string_view id;
+                const char*      name;
+            };
+            static constexpr Key keys[] = {{"29", "w"},     {"42", "a"},       {"43", "s"},       {"44", "d"},       {"49", "k"},      {"54", "lshift"},
+                                           {"68", "space"}, {"79", "arrow_u"}, {"80", "arrow_d"}, {"81", "arrow_l"}, {"82", "arrow_r"}};
+            for (const auto& key : keys)
+                if (key.id == id)
+                    return key.name;
+            return nullptr;
+        }
+
+        inline std::string_view NextWord(std::string_view& line)
+        {
+            constexpr std::string_view whitespace = " \t\r";
+            const auto                 start = line.find_first_not_of(whitespace);
+            if (start == std::string_view::npos)
+            {
+                line = {};
+                return {};
+            }
+            line.remove_prefix(start);
+            const auto end = line.find_first_of(whitespace);
+            const auto word = line.substr(0, end);
+            line.remove_prefix(word.size());
+            return word;
+        }
+    }
+
+    inline std::vector<Binding> Parse(std::string_view contents)
+    {
+        if (contents.size() > MaxFileBytes || contents.find('\0') != std::string_view::npos)
+            return {};
+
+        struct Slot
+        {
+            std::string_view id;
+            bool             ambiguous{};
+        };
+        std::array<Slot, Detail::Actions.size()> slots{};
+        while (!contents.empty())
+        {
+            const auto end = contents.find('\n');
+            auto       line = contents.substr(0, end);
+            contents = end == std::string_view::npos ? std::string_view{} : contents.substr(end + 1);
+
+            const auto id = Detail::NextWord(line);
+            const auto mapping = Detail::NextWord(line);
+            const auto direction = Detail::NextWord(line);
+            const auto device = Detail::NextWord(line);
+            if (device != "-1" || !Detail::NextWord(line).empty())
+                continue;
+
+            for (std::size_t i = 0; i < slots.size(); ++i)
+            {
+                const auto& action = Detail::Actions[i];
+                if (mapping != action.mapping || direction != action.direction)
+                    continue;
+                // The file does not label primary/alternate slots. A conflicting pair has no unambiguous priority.
+                auto& slot = slots[i];
+                if (!slot.id.empty() && slot.id != id)
+                    slot.ambiguous = true;
+                slot.id = id;
+                break;
+            }
+        }
+
+        std::vector<Binding> bindings;
+        for (std::size_t i = 0; i < slots.size(); ++i)
+        {
+            if (slots[i].ambiguous)
+                continue;
+            if (const char* key = Detail::KeyName(slots[i].id))
+                bindings.push_back({Detail::Actions[i].control, key});
+        }
+        return bindings;
+    }
+
+    inline std::vector<Binding> Read(const std::filesystem::path& path)
+    {
+        std::ifstream file(path, std::ios::binary | std::ios::ate);
+        if (!file)
+            return {};
+        const std::streamoff size = file.tellg();
+        if (size <= 0 || size > static_cast<std::streamoff>(MaxFileBytes))
+            return {};
+        std::string contents(static_cast<std::size_t>(size), '\0');
+        file.seekg(0);
+        if (!file.read(contents.data(), static_cast<std::streamsize>(size)) || file.peek() != std::ifstream::traits_type::eof() || file.bad())
+            return {};
+        return Parse(contents);
+    }
+}

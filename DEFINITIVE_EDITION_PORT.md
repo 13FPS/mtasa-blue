@@ -9,6 +9,21 @@ before loading gameplay modules because the DE adapter returns no `CGame`.
 Remote gameplay also requires a DE multiplayer factory, multiplayer and
 renderer startup, and a compatible x64 client network module.
 
+The DE frontend reads on-foot directions and sprint from `KeyboardMappings.cfg`
+in the game's folder under Documents. Retail GTA created this file when Move
+Forward was changed from W to K. On a second Steam launch, GTA read the saved
+K binding for Move Forward and W for vehicle acceleration. The four arrow
+keys were also checked against the on-foot Controls menu. With the same
+game-created K file, the previous MTA Core showed W in Settings. The rebuilt
+Core found the file in redirected Documents and its Settings screen showed K.
+
+An explicit MTA binding takes precedence over a retail mapping for that
+action. A saved MTA movement profile takes precedence for all six frontend
+controls, including keys the player cleared. The importer recognizes W, A, S,
+D, K, Space, left Shift and all four arrow keys. An unrecognized or ambiguous
+assignment leaves the MTA binding in place. Runtime changes to GTA's own
+controller settings still require a writable game interface.
+
 Core now reads the model cache's streaming budget from the active
 multiplayer SDK. Previously it read a fixed classic-game address and compared
 bytes against KiB thresholds. A 64 MiB budget now selects nine ped models

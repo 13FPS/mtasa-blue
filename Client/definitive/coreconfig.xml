@@ -1,14 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- This explicit diagnostic configuration exercises MTA's existing configured
-     bind loader without introducing unrelated defaults or modifying user binds.
-     Right Shift keeps walk eligible while the bounded poll skips ambiguous Alt. -->
+<!-- The DE frontend may replace these stock keys with the corresponding
+     keyboard mappings saved by GTA. Ordinary user bind records take priority. -->
 <mainconfig>
     <binds>
-        <bind key="w" control="forwards" />
-        <bind key="s" control="backwards" />
-        <bind key="a" control="left" />
-        <bind key="d" control="right" />
-        <bind key="lshift" control="sprint" />
-        <bind key="rshift" control="walk" />
+        <bind key="w" control="forwards" retailFallback="w" />
+        <bind key="s" control="backwards" retailFallback="s" />
+        <bind key="a" control="left" retailFallback="a" />
+        <bind key="d" control="right" retailFallback="d" />
+        <bind key="lshift" control="sprint" retailFallback="lshift" />
+        <bind key="rshift" control="walk" retailFallback="rshift" />
     </binds>
 </mainconfig>

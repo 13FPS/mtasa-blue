@@ -607,6 +607,8 @@ int wmain(int argc, wchar_t** argv)
         const std::filesystem::path root(argv[1]);
         const std::wstring          mode(argv[2]);
         Check(root.is_absolute() && root.filename() == L"de-online", "explicit disposable adapter asset layout");
+        Check(SetEnvironmentVariableW(L"MTA_DE_KEYBOARD_MAPPINGS", (root / L"KeyboardMappings.cfg").c_str()) != FALSE,
+              "console fixture selects its own keyboard mapping path");
         Check(mode == L"normal" || mode == L"cancel" || mode == L"focus" || mode == L"gated" || mode == L"cpu-busy" || mode == L"partial-start" ||
                   mode == L"throw-start" || mode == L"startup-failure" || mode == L"message-failure" || mode == L"message-throw" || mode == L"child-destroy" ||
                   mode == L"startup-focus" || mode == L"background-focus",

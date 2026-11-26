@@ -9,6 +9,8 @@ param(
     [Parameter(Mandatory)][string]$XmllDll,
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedXmllSha256,
     [string]$Unifont='Build/gui-asset-cache/unifont-16.0.04.ttf',
+    # Optional captured K/S/A/D + Left Shift profile for the same fixture as CI.
+    [string]$RetailKeyboardFixture,
     [switch]$BindingPersistenceOnly,
     [switch]$BindingSettingsOnly,
     [switch]$InteractionServicesOnly,
@@ -42,7 +44,7 @@ $sourceNames=@('Tests/definitive/CoreFrontendStartupHostTests.cpp','Tests/defini
     'Client/core/CVersionUpdater.cpp','Client/core/CVersionUpdater.h','Client/core/ServerBrowser/CServerCache.cpp','Client/core/ServerBrowser/CServerCache.h',
     'Client/definitive/coreconfig.xml','Client/gui/Main.cpp','Client/gui/CGUI_Impl.cpp','Client/gui/D3D12GuiRenderer.cpp')
 $sourceNames+=@('Client/sdk/game/CGamePresentationPolicy.h','Client/game_de/NativePresentationPolicyOwner.h','Client/game_de/NativePresentationPolicyOwner.cpp',
-    'Client/game_de/NativePresentationPolicyAccess.h','Client/game_de/CGamePresentationPolicyDE.h')
+    'Client/game_de/NativePresentationPolicyAccess.h','Client/game_de/CGamePresentationPolicyDE.h','Client/core/DefinitiveRetailMovementBindings.h')
 $sourceNames+=@(Get-ChildItem -LiteralPath (Join-Path $taskRoot 'Client/sdk/gui') -File -Filter '*.h' | ForEach-Object { [IO.Path]::GetRelativePath($taskRoot,$_.FullName) })
 $certificates=@();$selectedArtifacts=@();$sourceHashes=@();$artifacts=@();$assets=@();$windowsFonts=@();$systemDlls=@();$runs=@()
 $compileExit=$null;$testExit=$null;$testCount=0;$timedOut=$false;$failure=$null;$compilerRecord=$null
@@ -187,10 +189,22 @@ try {
     if ($compileExit -ne 0) { throw 'Owned frontend host compilation failed.' }
     if ((Sha $hostPath) -eq '63e633bb51c35fe35ca98f503b62e7ddb8403abe4c9d501cfa9162892453846f') { throw 'Disposable host unexpectedly matches the real game.' }
     $testExit=0
+    if ($RetailKeyboardFixture) {
+        $keyboardSource=(Resolve-Path -LiteralPath $RetailKeyboardFixture).Path
+        Assert-NoLinks $keyboardSource
+    } else {
+        $keyboardSource=Join-Path $outputRoot 'forward-k.cfg'
+        [IO.File]::WriteAllText($keyboardSource,"49 HID_MAPPING_PED_MOVE_Y 1 -1`r`n",[Text.Encoding]::ASCII)
+    }
     foreach ($case in $caseNames) {
         $caseRoot=Join-Path $outputRoot ('case-'+$case)
         $assetRoot=Join-Path $caseRoot 'Win64/CLEO/de-online'
         [IO.Directory]::CreateDirectory((Join-Path $assetRoot 'mta/logs')) | Out-Null
+        if ($case -in @('runtime','runtime-interaction')) {
+            $keyboardPath=Join-Path $assetRoot 'KeyboardMappings.cfg'
+            Copy-Item -LiteralPath $keyboardSource -Destination $keyboardPath
+            $assets+=@([ordered]@{source=$keyboardSource;staged=$keyboardPath;sha256=(Sha $keyboardSource);case=$case})
+        }
         foreach ($entry in $selectedArtifacts) {
             if (($case -in @('frontend-failure','runtime-frontend-failure') -and $entry.name -eq 'xmll.dll') -or
                 ($case -in @('backend-failure','runtime-backend-failure') -and $entry.name -eq 'game_de.dll')) { continue }
@@ -226,7 +240,16 @@ try {
                 # rollback before any GUI, logger or command borrower exists.
                 $assetSource=Join-Path $caseRoot 'interaction-baseconfig.xml'
                 $fixture=(Get-Content -LiteralPath $entry.source -Raw).Replace('</mainconfig>',"    <settings><locale>de_DE</locale></settings>`n</mainconfig>")
-                [IO.File]::WriteAllText($assetSource,$fixture,[Text.UTF8Encoding]::new($false))
+                if ($case -eq 'runtime-interaction') {
+                    # An unmarked user choice of W must override the same retail K used by the runtime case.
+                    [xml]$document=$fixture
+                    $forward=$document.SelectSingleNode('/mainconfig/binds/bind[@control="forwards"][@key="w"][@retailFallback="w"]')
+                    if ($null -eq $forward) { throw 'Expected the marked factory forward binding.' }
+                    $forward.RemoveAttribute('retailFallback')
+                    $document.Save($assetSource)
+                } else {
+                    [IO.File]::WriteAllText($assetSource,$fixture,[Text.UTF8Encoding]::new($false))
+                }
             }
             Copy-Item -LiteralPath $assetSource -Destination $staged
             $assets+=@([ordered]@{source=$assetSource;staged=$staged;sha256=(Sha $assetSource);case=$case})
@@ -237,7 +260,9 @@ try {
         Copy-Item -LiteralPath $hostPath -Destination $executable
         $artifacts+=@([ordered]@{source=$hostPath;staged=$executable;sha256=(Sha $hostPath);bytes=(Get-Item -LiteralPath $hostPath).Length;case=$case})
         $stdout=Join-Path $caseRoot 'stdout.log';$stderr=Join-Path $caseRoot 'stderr.log'
-        $process=Start-Process -FilePath $executable -ArgumentList ('"'+$assetRoot+'" '+$case) -WorkingDirectory (Split-Path -Path $executable -Parent) -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        $arguments='"'+$assetRoot+'" '+$case
+        if ($case -eq 'runtime') { $arguments+=' retail-k' }
+        $process=Start-Process -FilePath $executable -ArgumentList $arguments -WorkingDirectory (Split-Path -Path $executable -Parent) -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
         # Only this exact newly launched disposable process can be terminated.
         $runTimedOut=-not $process.WaitForExit(45000)
         if ($runTimedOut) { $timedOut=$true;$process.Kill();$process.WaitForExit() }
@@ -252,6 +277,10 @@ try {
             # Retained runtime proof comes from the actual two-view host. A
             # successful legacy GUI case cannot stand in for that ownership.
             $hostResult=Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json -DateKind String
+            if (($case -eq 'runtime' -and $hostResult.initialRuntimeForward -cne 'k') -or
+                ($case -eq 'runtime-interaction' -and $hostResult.initialRuntimeForward -cne 'w')) {
+                throw "Initial retail or explicit MTA forward movement key differs in $case."
+            }
             $runtimeCase=$case.StartsWith('runtime',[StringComparison]::Ordinal)
             $successfulRuntime=$case -in @('runtime','runtime-persistence','runtime-interaction')
             if ($case -eq 'presentation-policy' -and ($hostResult.success -ne $true -or $hostResult.checks -ne $count -or

@@ -7,7 +7,17 @@ client and DE backend all built in Release/x64. MTA's menu, Settings, console,
 key bindings, walking and sprinting have run inside DE. Core currently stops
 before loading gameplay modules because the DE adapter returns no `CGame`.
 Remote gameplay also requires a DE multiplayer factory, multiplayer and
-renderer startup, and a compatible x64 client network module.
+renderer startup, and a compatible x64 client network module. Both documented
+Windows client network downloads checked for this port contain x86 DLLs.
+
+MTA can now export a saved primary movement key to GTA before launch with
+[`sync-movement-binding.ps1`](Client/definitive/sync-movement-binding.ps1).
+In a Steam test, GTA's Controls screen first showed W/A/S/D and left Shift.
+After GTA closed, exporting all five controls from an MTA Settings save
+changed five key codes in the 107-row retail file. On a fresh launch, GTA
+showed I/J/K/L for on-foot movement, U for sprint, and W/A/S/D for driving.
+In a single-player save, CJ responded to all four direction keys. The sprint
+assignment was visible in Controls. Sprint speed was not measured.
 
 The DE frontend reads on-foot directions and sprint from `KeyboardMappings.cfg`
 in the game's folder under Documents. Retail GTA created this file when Move
@@ -20,7 +30,7 @@ Core found the file in redirected Documents and its Settings screen showed K.
 An explicit MTA binding takes precedence over a retail mapping for that
 action. A saved MTA movement profile takes precedence for all six frontend
 controls, including keys the player cleared. The importer recognizes W, A, S,
-D, K, Space, left Shift and all four arrow keys. An unrecognized or ambiguous
+D, I, J, K, L, U, Space, left Shift and all four arrow keys. An unrecognized or ambiguous
 assignment leaves the MTA binding in place. Runtime changes to GTA's own
 controller settings still require a writable game interface.
 

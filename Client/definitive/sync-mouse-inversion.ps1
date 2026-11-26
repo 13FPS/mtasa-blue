@@ -69,46 +69,6 @@ $current = $fields[0].Groups['value']
 if ($current.Value -ieq $desired) { return }
 if (!$PSCmdlet.ShouldProcess($path, "Set $gameField to $desired")) { return }
 
-# Keep the original bytes around the token, including any BOM and line endings.
 $index = $body.Index + $data.Index + $members.Index + $current.Index
-$end = $bytes.Length - $encoding.GetByteCount($text.Substring($index + $current.Length))
-$start = $end - $encoding.GetByteCount($current.Value)
-$oldToken = $encoding.GetBytes($current.Value)
-if ($start -lt 0 -or [Convert]::ToBase64String($bytes, $start, $oldToken.Length) -cne [Convert]::ToBase64String($oldToken)) {
-    throw "Could not identify the encoded $gameField value."
-}
-$temp = Join-Path ([IO.Path]::GetDirectoryName($path)) ('.mta-control-' + [guid]::NewGuid().ToString('N') + '.tmp')
-try {
-    $output = [IO.File]::Open($temp, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
-    try {
-        $output.Write($bytes, 0, $start)
-        $replacement = $encoding.GetBytes($desired)
-        $output.Write($replacement, 0, $replacement.Length)
-        $output.Write($bytes, $end, $bytes.Length - $end)
-        $output.Flush($true)
-    } finally {
-        $output.Dispose()
-    }
-    # Serialize the final comparison and replacement across imports. A second
-    # preference computed from old settings must retry against the new file.
-    $commitLock = [Threading.Mutex]::new($false, 'MTA.DE.ControlPreferenceCommit')
-    $acquired = $false
-    try {
-        try {
-            $acquired = $commitLock.WaitOne(10000)
-        } catch [Threading.AbandonedMutexException] {
-            $acquired = $true
-        }
-        if (!$acquired) { throw 'Another MTA settings import is busy. Retry using the current file.' }
-        if (Get-Process -Name SanAndreas -ErrorAction SilentlyContinue) { throw 'Close GTA San Andreas Definitive Edition before applying the preference.' }
-        if ([Convert]::ToBase64String([IO.File]::ReadAllBytes($path)) -cne [Convert]::ToBase64String($bytes)) {
-            throw 'GTA settings changed during the update. Retry using the current file.'
-        }
-        [IO.File]::Replace($temp, $path, [System.Management.Automation.Language.NullString]::Value)
-    } finally {
-        if ($acquired) { $commitLock.ReleaseMutex() }
-        $commitLock.Dispose()
-    }
-} finally {
-    if ([IO.File]::Exists($temp)) { [IO.File]::Delete($temp) }
-}
+& (Join-Path $PSScriptRoot 'Write-DefinitiveSettingsToken.ps1') -Path $path -Bytes $bytes -Encoding $encoding -Text $text `
+    -Index $index -OldToken $current.Value -Replacement $desired

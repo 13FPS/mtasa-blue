@@ -39,6 +39,10 @@ int main(int argc, char** argv)
                 {{"forwards", "arrow_u"}, {"backwards", "arrow_d"}, {"left", "arrow_l"}, {"right", "arrow_r"}});
     ok &= Check("custom keys and repeated row", Retail::Parse("49 HID_MAPPING_PED_MOVE_Y 1 -1\n49 HID_MAPPING_PED_MOVE_Y 1 -1\n68 HID_MAPPING_SPRINT 0 -1\n"),
                 {{"forwards", "k"}, {"sprint", "space"}});
+    ok &= Check("retail custom movement layout",
+                Retail::Parse("34 HID_MAPPING_SPRINT 0 -1\n48 HID_MAPPING_PED_MOVE_X 1 -1\n50 HID_MAPPING_PED_MOVE_X 0 -1\n"
+                              "49 HID_MAPPING_PED_MOVE_Y 0 -1\n35 HID_MAPPING_PED_MOVE_Y 1 -1\n"),
+                {{"forwards", "i"}, {"backwards", "k"}, {"left", "j"}, {"right", "l"}, {"sprint", "u"}});
     ok &= Check("unknown keys, directions, actions and devices",
                 Retail::Parse("9999 HID_MAPPING_PED_MOVE_Y 1 -1\n42 HID_MAPPING_PED_MOVE_X 2 -1\n54 HID_MAPPING_SPRINT 1 -1\n"
                               "42 HID_MAPPING_PED_MOVE_X 1 0\n127 HID_MAPPING_SPRINT 0 2\n43 HID_MAPPING_WALK 0 -1\n"),

@@ -45,7 +45,8 @@ namespace DefinitiveRetailMovementBindings
                 std::string_view id;
                 const char*      name;
             };
-            static constexpr Key keys[] = {{"29", "w"},     {"42", "a"},       {"43", "s"},       {"44", "d"},       {"49", "k"},      {"54", "lshift"},
+            static constexpr Key keys[] = {{"29", "w"},     {"34", "u"},       {"35", "i"},       {"42", "a"},       {"43", "s"},
+                                           {"44", "d"},     {"48", "j"},       {"49", "k"},       {"50", "l"},       {"54", "lshift"},
                                            {"68", "space"}, {"79", "arrow_u"}, {"80", "arrow_d"}, {"81", "arrow_l"}, {"82", "arrow_r"}};
             for (const auto& key : keys)
                 if (key.id == id)

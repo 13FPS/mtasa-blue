@@ -54,6 +54,28 @@ in the same GTA file. The selected MTA setting must contain `0` or `1`.
 ./Client/definitive/sync-mouse-inversion.ps1 -CoreConfig 'C:\Program Files (x86)\MTA San Andreas 1.6\MTA\config\coreconfig.xml' -Preference ControllerVibration
 ```
 
+### Export one MTA movement key to GTA
+
+Save the movement bindings in MTA Settings. GTA creates `KeyboardMappings.cfg`
+in its Documents folder when you change a key in **Options → Controls → Adjust
+Control Layout**. Close GTA before running the export. This example previews
+the primary **Move Backward** key saved by MTA 1.7.
+
+```powershell
+$profile = Join-Path $env:ProgramData 'MTA San Andreas All/1.7/definitive/keybinds.xml'
+./Client/definitive/sync-movement-binding.ps1 -MtaKeybinds $profile -Control backwards -WhatIf
+```
+
+Omit `-WhatIf` to apply the edit. Use `-KeyboardMappings` to select another
+existing GTA keyboard file. Each invocation updates one control. Supported
+controls are `forwards`, `backwards`, `left`, `right` and `sprint`. Supported
+keys are A, D, I, J, K, L, S, U, W, Space, left Shift and the four arrow keys.
+
+The command uses the first saved MTA key for the selected control. An unbound
+control, unsupported primary key, ambiguous GTA row or conflicting on-foot key
+stops the export. Keys can be shared across independent contexts such as driving
+and rhythm minigames. GTA reads the edited keyboard layout at its next launch.
+
 ### Sound effects and radio from a classic installation
 
 The DE game SDK accepts an optional `MTA_DE_AUDIO_ROOT` environment variable.

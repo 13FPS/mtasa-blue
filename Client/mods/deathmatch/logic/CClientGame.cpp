@@ -11,6 +11,7 @@
 
 #include "StdInc.h"
 #include <net/SyncStructures.h>
+#include <core/CStreamingMemorySettings.h>
 #include <game/C3DMarkers.h>
 #include <game/CAnimBlendAssocGroup.h>
 #include <game/CAnimBlendStaticAssociation.h>
@@ -956,20 +957,24 @@ void CClientGame::DoPulsePostFrame()
                                                DT_NOCLIP | DT_CENTER);
         }
 
-        // Adjust the streaming memory size cvar [if needed]
-        if (!g_pCore->IsUsingCustomStreamingMemorySize())
+        size_t streamingMemorySizeBytes;
+        if (g_pCore->IsUsingCustomStreamingMemorySize())
+            streamingMemorySizeBytes = g_pCore->GetStreamingMemory();
+        else
         {
-            unsigned int uiStreamingMemoryPrev;
-            g_pCore->GetCVars()->Get("streaming_memory", uiStreamingMemoryPrev);
-            uint uiStreamingMemory = SharedUtil::Clamp(g_pCore->GetMinStreamingMemory(), uiStreamingMemoryPrev, g_pCore->GetMaxStreamingMemory());
-            if (uiStreamingMemory != uiStreamingMemoryPrev)
-                g_pCore->GetCVars()->Set("streaming_memory", uiStreamingMemory);
+            auto&      vars = *g_pCore->GetCVars();
+            const auto budget = StreamingMemorySettings::Read(vars, g_pCore->GetMinStreamingMemory(), g_pCore->GetMaxStreamingMemory());
+            if (budget.needsRepair)
+                vars.Set("streaming_memory", budget.mib);
+            streamingMemorySizeBytes = budget.mib * StreamingMemorySettings::BytesPerMiB;
         }
 
-        const auto streamingMemorySizeBytes = g_pCore->GetStreamingMemory();
-        if (g_pMultiplayer->GetLimits()->GetStreamingMemory() != streamingMemorySizeBytes)
+        if (streamingMemorySizeBytes > 0 && streamingMemorySizeBytes <= StreamingMemorySettings::MaxBytes)
         {
-            g_pMultiplayer->GetLimits()->SetStreamingMemory(streamingMemorySizeBytes);
+            auto*     limits = g_pMultiplayer ? g_pMultiplayer->GetLimits() : nullptr;
+            const int bytes = static_cast<int>(streamingMemorySizeBytes);
+            if (limits && limits->GetStreamingMemory() != bytes)
+                limits->SetStreamingMemory(bytes);
         }
 
 // If we're in debug mode and are supposed to show task data, do it

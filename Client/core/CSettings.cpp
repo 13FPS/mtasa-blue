@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <vector>
 #include <core/CClientCommands.h>
+#include <core/CStreamingMemorySettings.h>
 #include <game/CGame.h>
 #include <game/CSettings.h>
 #include "CSteamClient.h"
@@ -2438,10 +2439,10 @@ void CSettings::UpdateVideoTab()
     UpdateFullScreenComboBoxEnabled();
 
     // Streaming memory
-    unsigned int uiStreamingMemory = 0;
-    CVARS_GET("streaming_memory", uiStreamingMemory);
-    uiStreamingMemory = SharedUtil::Clamp(g_pCore->GetMinStreamingMemory(), uiStreamingMemory, g_pCore->GetMaxStreamingMemory());
-    float fPos = SharedUtil::Unlerp(g_pCore->GetMinStreamingMemory(), uiStreamingMemory, g_pCore->GetMaxStreamingMemory());
+    const auto minMemory = g_pCore->GetMinStreamingMemory();
+    const auto maxMemory = g_pCore->GetMaxStreamingMemory();
+    const auto budget = StreamingMemorySettings::Read(*g_pCore->GetCVars(), minMemory, maxMemory);
+    float      fPos = SharedUtil::Unlerp(minMemory, budget.mib, maxMemory);
     m_pStreamingMemory->SetScrollPosition(fPos);
 
     // Player map alpha

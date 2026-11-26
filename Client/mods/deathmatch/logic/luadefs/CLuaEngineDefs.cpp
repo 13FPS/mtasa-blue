@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <core/CStreamingMemorySettings.h>
 #include <game/CColPoint.h>
 #include <game/CObjectGroupPhysicalProperties.h>
 #include <game/CStreaming.h>
@@ -44,6 +45,8 @@ void EngineStreamingSetMemorySize(size_t sizeBytes)
     {
         throw std::invalid_argument{"Memory size must be > 0"};
     }
+    if (sizeBytes > StreamingMemorySettings::MaxBytes)
+        throw std::invalid_argument{"Memory size exceeds the supported signed 32-bit byte limit"};
     g_pCore->SetCustomStreamingMemory(sizeBytes);
 }
 

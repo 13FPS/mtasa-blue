@@ -1,6 +1,6 @@
 # GTA San Andreas Definitive Edition: findings and port tracker
 
-## Current port status (2026-11-23)
+## Current port status (2026-11-26)
 
 **Full multiplayer on DE is still unavailable.** The real MTA Core, Deathmatch
 client and DE backend all built in Release/x64. MTA's menu, Settings, console,
@@ -8,6 +8,26 @@ key bindings, walking and sprinting have run inside DE. Core currently stops
 before loading gameplay modules because the DE adapter returns no `CGame`.
 Remote gameplay also requires a DE multiplayer factory, multiplayer and
 renderer startup, and a compatible x64 client network module.
+
+Core now reads the model cache's streaming budget from the active
+multiplayer SDK. Previously it read a fixed classic-game address and compared
+bytes against KiB thresholds. A 64 MiB budget now selects nine ped models
+and seven vehicle models. A 128 MiB budget selects 36 and 56. Setting both
+cache limits explicitly avoids the budget query altogether.
+
+When importing default controls, Core reads all four controller input slots
+before replacing any bindings. A missing controller or an interrupted read
+preserves the existing bindings. A saved profile loaded during startup
+cancels a pending default import. User commands with different arguments
+also survive a settings save and reload, including when a resource uses the
+same key and command name. With the same test profile, the previous Core DLL
+loaded nine of twelve bindings. The rebuilt DLL loaded all twelve in the
+Windows MTA frontend and retained them after applying Settings and restarting.
+
+Core and Deathmatch read the streaming-memory setting in MiB and pass bytes
+to the backend. Once the hardware range is available, Deathmatch repairs a
+missing or malformed budget using the hardware default. A script requesting
+more bytes than the backend's signed integer can represent receives an error.
 
 The opted-in Windows Release/x64 projects now use Windows SDK headers for
 DXGI and Direct3D, while the June 2010 SDK supplies D3DX9. The previous

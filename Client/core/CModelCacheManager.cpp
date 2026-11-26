@@ -8,6 +8,8 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <algorithm>
+#include <limits>
 #include <optional>
 #include <game/CStreaming.h>
 #include <game/CModelInfo.h>
@@ -242,11 +244,11 @@ void CModelCacheManagerImpl::SetCustomLimits(std::optional<size_t> numVehicles, 
 {
     if (m_IsUsingCustomPedCacheLimit = numPeds.has_value())
     {
-        m_uiMaxCachedPedModels = *numPeds;
+        m_uiMaxCachedPedModels = static_cast<uint>(std::min<size_t>(*numPeds, std::numeric_limits<uint>::max()));
     }
     if (m_IsUsingCustomVehicleCacheLimit = numVehicles.has_value())
     {
-        m_uiMaxCachedVehicleModels = *numVehicles;
+        m_uiMaxCachedVehicleModels = static_cast<uint>(std::min<size_t>(*numVehicles, std::numeric_limits<uint>::max()));
     }
 }
 
@@ -261,6 +263,9 @@ void CModelCacheManagerImpl::DoPulse()
 
     PreLoad();
 
+    if (m_IsUsingCustomPedCacheLimit && m_IsUsingCustomVehicleCacheLimit)
+        return;
+
     // Adjust cache numbers depending on amount of streaming memory allocated
     //
     //  64MB streaming = 2+1 MB for peds & vehicles          9 peds + 7 veh
@@ -268,16 +273,20 @@ void CModelCacheManagerImpl::DoPulse()
     //  128MB streaming = 8+8 MB for peds & vehicles        36 peds + 56 veh
     //  256MB streaming = 16+8 MB for peds & vehicles       72 peds + 56 veh
     //
-    const auto iStreamingMemoryAvailableKB = *(int*)0x08A5A80;
+    // The active multiplayer backend reports its applied budget in bytes.
+    // Until limits are available, the first point gives the smallest cache.
+    auto*       multiplayer = CCore::GetSingleton().GetMultiplayer();
+    auto*       limits = multiplayer ? multiplayer->GetLimits() : nullptr;
+    const float streamingMemoryMiB = limits ? limits->GetStreamingMemory() / (1024.0f * 1024.0f) : 0.0f;
     if (!m_IsUsingCustomPedCacheLimit)
     {
-        SSamplePoint<float> pedPoints[] = {{65536, 9}, {98304, 18}, {131072, 36}, {262144, 72}};
-        m_uiMaxCachedPedModels = (int)EvalSamplePosition<float>(pedPoints, NUMELMS(pedPoints), (float)iStreamingMemoryAvailableKB);
+        constexpr SSamplePoint<float> pedPoints[] = {{64, 9}, {96, 18}, {128, 36}, {256, 72}};
+        m_uiMaxCachedPedModels = static_cast<uint>(EvalSamplePosition<float>(pedPoints, NUMELMS(pedPoints), streamingMemoryMiB));
     }
     if (!m_IsUsingCustomVehicleCacheLimit)
     {
-        SSamplePoint<float> vehPoints[] = {{65536, 7}, {98304, 28}, {131072, 56}, {262144, 56}};
-        m_uiMaxCachedVehicleModels = (int)EvalSamplePosition<float>(vehPoints, NUMELMS(vehPoints), (float)iStreamingMemoryAvailableKB);
+        constexpr SSamplePoint<float> vehPoints[] = {{64, 7}, {96, 28}, {128, 56}, {256, 56}};
+        m_uiMaxCachedVehicleModels = static_cast<uint>(EvalSamplePosition<float>(vehPoints, NUMELMS(vehPoints), streamingMemoryMiB));
     }
 }
 

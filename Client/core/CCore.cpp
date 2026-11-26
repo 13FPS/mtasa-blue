@@ -60,6 +60,7 @@
 #include "DefinitivePersistentFrontend.h"
 #include "FrontendCursorLeaseOwner.h"
 #include "NetworkModuleStartup.h"
+#include <core/CStreamingMemorySettings.h>
 #include <type_traits>
 
 using SharedUtil::CalcMTASAPath;
@@ -6412,7 +6413,7 @@ void CCore::OnPreHUDRender()
 void CCore::CalculateStreamingMemoryRange()
 {
     // Only need to do this once
-    if (m_fMinStreamingMemory != 0)
+    if (m_fMaxStreamingMemory != 0 || !g_pDeviceState)
         return;
 
     // Get system info
@@ -6802,8 +6803,10 @@ bool CCore::IsUsingCustomStreamingMemorySize()
 // Streaming memory size used [In Bytes]
 size_t CCore::GetStreamingMemory()
 {
-    return IsUsingCustomStreamingMemorySize() ? m_CustomStreamingMemoryLimitBytes
-                                              : CVARS_GET_VALUE<size_t>("streaming_memory") * 1024 * 1024;  // MB to B conversion
+    if (IsUsingCustomStreamingMemorySize())
+        return m_CustomStreamingMemoryLimitBytes;
+    const auto budget = StreamingMemorySettings::Read(m_ClientVariables, GetMinStreamingMemory(), GetMaxStreamingMemory());
+    return budget.mib * StreamingMemorySettings::BytesPerMiB;
 }
 
 // Discord rich presence

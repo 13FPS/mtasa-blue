@@ -22,7 +22,8 @@ SCENARIOS = ("camera-sector", "camera-before-streamer", "object-moves", "parent-
              "object-recreate-success", "object-model-allocation",
              "object-delayed-allocation", "object-delayed-broken", "object-delayed-success",
              "vehicle-initial-limit", "vehicle-initial-allocation", "vehicle-recreate-limit", "vehicle-model-allocation",
-             "vehicle-train-allocation", "vehicle-recreate-success")
+             "vehicle-train-allocation", "vehicle-recreate-success",
+             "grid-start", "grid-start-neighbor", "grid-extra-x", "grid-extra-y", "grid-extra-positive")
 
 
 def main():

@@ -32,9 +32,7 @@ T* DynamicCast(U* object)
 #define DECLARE_CLASS(derived, base) \
     struct ClassInitStub \
     { \
-        explicit ClassInitStub(void*) \
-        { \
-        } \
+        explicit ClassInitStub(void*) {} \
     } ClassInit;
 
 struct CVector2D
@@ -368,13 +366,49 @@ static void TestRecreation(const std::string& scenario)
     entity.onEvent = {};
 }
 
+static void TestGrid(const std::string& scenario)
+{
+    CClientStreamer streamer([] { return false; }, 80, 300, 300);
+    CClientObject   object(streamer);
+    CVector         position{};
+    if (scenario == "grid-start-neighbor")
+        position = {-1, -1, 0};
+    else if (scenario == "grid-extra-x")
+        position.fX = -6300;
+    else if (scenario == "grid-extra-y")
+        position.fY = -6300;
+    else if (scenario == "grid-extra-positive")
+        position = {6300, 6300, 0};
+
+    object.UpdateStreamPosition(position);
+    auto* row = object.GetStreamRow();
+    auto* sector = object.GetStreamSector();
+    Require(row->DoesContain(position) && sector->DoesContain(position), "assigned grid cell does not contain the object");
+    auto sectorCount = row->CountSectors();
+    object.UpdateStreamPosition(position);
+    Require(object.GetStreamSector() == sector && row->CountSectors() == sectorCount, "stationary update allocated a duplicate sector");
+
+    if (scenario.rfind("grid-extra-", 0) == 0)
+        manager.camera.position = position;
+    CVector far = {900, 0, 0};
+    game.model.ready = true;
+    streamer.DoPulse(manager.camera.position);
+    Require(streamer.IsActiveElement(&object) && object.IsStreamedIn() && game.model.references == 1, "first pulse missed nearby object");
+    streamer.DoPulse(far);
+    CClientTime::now += 101;
+    streamer.DoPulse(manager.camera.position);
+    Require(object.events == std::vector<std::string>{"onClientElementStreamIn", "onClientElementStreamOut", "onClientElementStreamIn"} &&
+                game.model.references == 1 && streamer.CountActiveElements() == 1,
+            "leaving and returning did not stream the object exactly once");
+}
+
 static void Test(const std::string& scenario)
 {
     CClientStreamer streamer([] { return false; }, 80, 200, 200);
     Camera&         camera = manager.camera;
     CModelInfo&     model = game.model;
     const CVector   origin{}, far{800, 0, 0};
-    // The streamer activates the neighboring sectors on its first sector transition.
+    // Exercise these cases after returning to the initial neighborhood.
     camera.position = far;
     streamer.DoPulse(camera.position);
     camera.position = origin;
@@ -497,7 +531,9 @@ int main(int argc, char** argv)
     try
     {
         const std::string scenario = argv[1];
-        if (scenario.rfind("vehicle-", 0) == 0)
+        if (scenario.rfind("grid-", 0) == 0)
+            TestGrid(scenario);
+        else if (scenario.rfind("vehicle-", 0) == 0)
             TestRecreation<CClientVehicle>(scenario);
         else if (scenario.rfind("object-", 0) == 0 && scenario != "object-moves")
             TestRecreation<CClientObject>(scenario);

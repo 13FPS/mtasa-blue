@@ -9,6 +9,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <cmath>
 #include <cstdint>
 using std::list;
 
@@ -34,8 +35,15 @@ CClientStreamer::CClientStreamer(StreamerLimitReachedFunction* pLimitReachedFunc
 
     // Find our row and sector
     m_pRow = FindOrCreateRow(m_vecPosition);
-    m_pSector = NULL;
-    OnEnterSector(m_pRow->FindOrCreateSector(m_vecPosition));
+    m_pSector = m_pRow->FindOrCreateSector(m_vecPosition);
+    // Sector transitions update only what changed. Mark the initial neighborhood
+    // active now so nearby elements are considered even with a stationary camera.
+    m_pSector->SetActivated(true);
+    CClientStreamSector* surrounding[8];
+    m_pSector->GetSurroundingSectors(surrounding);
+    for (auto* sector : surrounding)
+        if (sector)
+            sector->SetActivated(true);
 }
 
 CClientStreamer::~CClientStreamer()
@@ -245,16 +253,15 @@ CClientStreamSectorRow* CClientStreamer::FindOrCreateRow(CVector& vecPosition, C
     }
 
     // Search through our extra rows using map lookup
-    float fBottom = float((int)(vecPosition.fY / m_fRowSize)) * m_fRowSize;
-    if (vecPosition.fY < 0.0f)
-        fBottom -= m_fRowSize;
-    int iRowIndex = (int)(fBottom / m_fRowSize);
+    // The lower boundary belongs to the row, including at exact negative multiples.
+    const int iRowIndex = static_cast<int>(std::floor(vecPosition.fY / m_fRowSize));
 
     auto it = m_ExtraRows.find(iRowIndex);
     if (it != m_ExtraRows.end())
         return it->second;
 
     // We need a new row, align it with the others
+    const float fBottom = iRowIndex * m_fRowSize;
     pRow = new CClientStreamSectorRow(fBottom, fBottom + m_fRowSize, m_fSectorSize, m_fRowSize);
     ConnectRow(pRow);
     pRow->SetExtra(true);
@@ -277,10 +284,7 @@ CClientStreamSectorRow* CClientStreamer::FindRow(float fY)
     }
 
     // Search through our extra rows using map lookup
-    float fBottom = float((int)(fY / m_fRowSize)) * m_fRowSize;
-    if (fY < 0.0f)
-        fBottom -= m_fRowSize;
-    int iRowIndex = (int)(fBottom / m_fRowSize);
+    const int iRowIndex = static_cast<int>(std::floor(fY / m_fRowSize));
 
     auto it = m_ExtraRows.find(iRowIndex);
     if (it != m_ExtraRows.end())

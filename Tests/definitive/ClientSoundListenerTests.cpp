@@ -17,15 +17,18 @@
 #include <cstdio>
 #include <stdexcept>
 #include <optional>
-#include <mutex>
+#include <atomic>
+#include <thread>
 #include <string_view>
 #include <variant>
 
+using SharedUtil::CCriticalSection;
 using SharedUtil::Clamp;
 using SharedUtil::Lerp;
 using SharedUtil::MapContains;
 using SharedUtil::UnlerpClamped;
 using std::list;
+#include "WindowsCriticalSection.generated.inl"
 
 namespace
 {
@@ -44,13 +47,12 @@ namespace
 
     // Destruction follows removal of the worker's callback ID. No worker
     // holds the block during these three result-ownership cases.
-    using CCriticalSection = std::mutex;
 #include "SoundWorkerState.generated.inl"
 
-    void CheckUnclaimedStream()
+    void CheckUnclaimedStream(const char* url)
     {
         BASS_CHANNELINFO info{};
-        HSTREAM          pending = BASS_StreamCreate(44100, 2, BASS_STREAM_AUTOFREE, STREAMPROC_PUSH, nullptr);
+        HSTREAM          pending = BASS_StreamCreateURL(url, 0, BASS_STREAM_AUTOFREE, nullptr, nullptr);
         Check(pending && BASS_ChannelGetInfo(pending, &info), "Pending channel creation failed");
         auto* result = new SSoundThreadVariables;
         result->pSound = pending;
@@ -58,7 +60,7 @@ namespace
         delete result;
         Check(!BASS_ChannelGetInfo(pending, &info) && BASS_ErrorGetCode() == BASS_ERROR_HANDLE, "Dropping an unclaimed stream leaked the BASS channel");
 
-        HSTREAM claimed = BASS_StreamCreate(44100, 2, BASS_STREAM_AUTOFREE, STREAMPROC_PUSH, nullptr);
+        HSTREAM claimed = BASS_StreamCreateURL(url, 0, BASS_STREAM_AUTOFREE, nullptr, nullptr);
         Check(claimed != 0, "Claimed channel creation failed");
         result = new SSoundThreadVariables;
         result->pSound = claimed;
@@ -299,8 +301,21 @@ namespace
         void                    DoPulse();
         void                    UpdateVolume() { ++volumeUpdates; }
         void                    UpdateDistanceStreaming(const CVector& listener);
-        void                    ProcessStopQueues() { ++stopUpdates; }
-        bool                    IsDistanceStreamedIn(CClientSound*) const { Unexpected(); }
+        void                    ProcessStopQueues()
+        {
+            ++stopUpdates;
+            ProcessStopQueues(false);
+        }
+        void ProcessStopQueues(bool);
+        void QueueChannelStop(DWORD);
+        struct CElapsedTime
+        {
+            int Get() const { Unexpected(); }
+        };
+        CCriticalSection                    m_CS;
+        std::vector<DWORD>                  m_ChannelStopQueue;
+        std::map<CBassAudio*, CElapsedTime> m_AudioStopQueue;
+        bool                                IsDistanceStreamedIn(CClientSound*) const { Unexpected(); }
     };
 
     void CClientSound::DistanceStreamIn()
@@ -368,11 +383,42 @@ namespace
         Check(BASS_StreamFree(channel), "Could not release pause test channel");
     }
 
-    void Run()
+    void CheckQueuedChannels()
+    {
+        CClientSoundManager      manager{};
+        std::array<HSTREAM, 128> channels{};
+        for (auto& channel : channels)
+        {
+            channel = BASS_StreamCreate(44100, 2, BASS_STREAM_AUTOFREE, STREAMPROC_PUSH, nullptr);
+            Check(channel != 0, "Could not create stop queue channel");
+        }
+        std::atomic<bool> done{false};
+        std::thread       worker(
+            [&]
+            {
+                for (auto channel : channels)
+                    manager.QueueChannelStop(channel);
+                done = true;
+            });
+        do
+        {
+            manager.ProcessStopQueues(false);
+            std::this_thread::yield();
+        } while (!done);
+        worker.join();
+        manager.ProcessStopQueues(true);
+        BASS_CHANNELINFO info{};
+        for (auto channel : channels)
+            Check(!BASS_ChannelGetInfo(channel, &info) && BASS_ErrorGetCode() == BASS_ERROR_HANDLE, "Stop queue lost an unpublished channel");
+        std::puts("Worker and client pulse retired 128 queued BASS channels");
+    }
+
+    void Run(const char* url)
     {
         Check(HIWORD(BASS_GetVersion()) == BASSVERSION, "BASS DLL and import header differ");
         Check(BASS_Init(0, 44100, 0, nullptr, nullptr) && BASS_GetDevice() == 0, "BASS no-sound device unavailable");
-        CheckUnclaimedStream();
+        CheckUnclaimedStream(url);
+        CheckQueuedChannels();
         CheckPausePlayback(false);
         CheckPausePlayback(true);
         std::puts("Lua pause/resume passed for pending, playing and re-paused 2D and 3D channels");
@@ -499,11 +545,12 @@ namespace
     }
 }
 
-int main()
+int main(int argc, char** argv)
 {
     try
     {
-        Run();
+        Check(argc == 2, "Expected a local audio URL");
+        Run(argv[1]);
         return 0;
     }
     catch (const std::exception& error)

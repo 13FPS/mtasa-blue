@@ -422,9 +422,8 @@ void CClientSoundManager::QueueChannelStop(DWORD pSound)
     // Always not main thread
     dassert(!IsMainThread());
 
-    m_CS.Lock();
+    SharedUtil::CAutoCSLock lock(m_CS);
     m_ChannelStopQueue.push_back(pSound);
-    m_CS.Unlock();
 }
 
 //
@@ -442,18 +441,14 @@ void CClientSoundManager::QueueAudioStop(CBassAudio* pAudio)
 //
 void CClientSoundManager::ProcessStopQueues(bool bFlush)
 {
-    if (!m_ChannelStopQueue.empty())
+    std::vector<DWORD> channelStopList;
     {
-        m_CS.Lock();
-        std::vector<DWORD> channelStopList = m_ChannelStopQueue;
-        m_ChannelStopQueue.clear();
-        m_CS.Unlock();
-
-        for (unsigned int i = 0; i < channelStopList.size(); i++)
-        {
-            BASS_ChannelStop(channelStopList[i]);
-        }
+        // A worker can append while the main thread starts this pulse.
+        SharedUtil::CAutoCSLock lock(m_CS);
+        channelStopList.swap(m_ChannelStopQueue);
     }
+    for (DWORD channel : channelStopList)
+        BASS_ChannelStop(channel);
 
     for (std::map<CBassAudio*, CElapsedTime>::iterator iter = m_AudioStopQueue.begin(); iter != m_AudioStopQueue.end();)
     {

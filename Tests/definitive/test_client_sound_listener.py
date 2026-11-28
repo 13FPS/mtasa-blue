@@ -1,6 +1,8 @@
 """Run Deathmatch's camera-listener pulse using the x64 or Win32 BASS no-sound device."""
 import argparse
 import hashlib
+import http.server
+import io
 import json
 import os
 from pathlib import Path
@@ -8,6 +10,8 @@ import shutil
 import struct
 import subprocess
 import tempfile
+import threading
+import wave
 from uuid import uuid4
 
 
@@ -15,6 +19,35 @@ ROOT = Path(__file__).resolve().parents[2]
 LOGIC = ROOT / "Client/mods/deathmatch/logic"
 SDK = ROOT / "Shared/sdk"
 HOST = Path(__file__).with_name("ClientSoundListenerTests.cpp")
+
+
+def run_with_local_audio(executable, **kwargs):
+    data = io.BytesIO()
+    with wave.open(data, "wb") as audio:
+        audio.setparams((1, 2, 22050, 0, "NONE", ""))
+        audio.writeframes(bytes(44100))
+    payload = data.getvalue()
+
+    class AudioHandler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/wav")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *args):
+            pass
+
+    with http.server.ThreadingHTTPServer(("127.0.0.1", 0), AudioHandler) as server:
+        worker = threading.Thread(target=server.serve_forever, args=(0.05,))
+        worker.start()
+        try:
+            url = f"http://127.0.0.1:{server.server_port}/sample.wav"
+            return subprocess.run([*executable, url], **kwargs)
+        finally:
+            server.shutdown()
+            worker.join()
 
 
 def pe_architecture(path):
@@ -61,7 +94,8 @@ def main():
             (LOGIC / "CBassAudio.cpp", ["void CBassAudio::SetPaused(", "void CBassAudio::Process3D(", "void CBassAudio::DoPulse("]),
             (LOGIC / "CClientSound.cpp", ["void CClientSound::SetPaused(", "bool CClientSound::IsPaused(", "void CClientSound::Process3D("]),
             (LOGIC / "luadefs/CLuaAudioDefs.cpp", ["bool CLuaAudioDefs::SetSoundPaused("]),
-            (LOGIC / "CClientSoundManager.cpp", ["void CClientSoundManager::DoPulse()", "void CClientSoundManager::UpdateDistanceStreaming("]),
+            (LOGIC / "CClientSoundManager.cpp", ["void CClientSoundManager::DoPulse()", "void CClientSoundManager::UpdateDistanceStreaming(",
+                                                 "void CClientSoundManager::QueueChannelStop(", "void CClientSoundManager::ProcessStopQueues("]),
         ):
             source = read(path).decode("utf-8-sig").replace("\r\n", "\n")
             if path.name == "CClientCamera.cpp":
@@ -74,6 +108,12 @@ def main():
                 record["methods"][signature] = hashlib.sha256(body.encode()).hexdigest()
         header = read(LOGIC / "CBassAudio.h").decode("utf-8-sig")
         worker_state = header[header.index("struct SSoundThreadVariables"):header.index("class CBassAudio")]
+        misc = read(SDK / "SharedUtil.Misc.hpp").decode("utf-8-sig").replace("\r\n", "\n")
+        locks = []
+        for signature in ("SharedUtil::CCriticalSection::CCriticalSection()", "SharedUtil::CCriticalSection::~CCriticalSection()",
+                          "void SharedUtil::CCriticalSection::Lock()", "void SharedUtil::CCriticalSection::Unlock()"):
+            start = misc.index(signature)
+            locks.append(misc[start:misc.index("\n}", start) + 2])
         cutoff = next(line for line in header.splitlines() if line.startswith("#define CUT_OFF "))
         for path in (HOST, Path(__file__).resolve(), dll, lib, ROOT / "vendor/bass/bass.h",
                      SDK / "CMatrix.h", SDK / "CVector.h", SDK / "CVector4D.h", SDK / "CSphere.h", SDK / "SharedUtil.Map.h", SDK / "SharedUtil.Misc.h", SDK / "SString.hpp"):
@@ -86,6 +126,7 @@ def main():
             work = Path(tmp)
             (work / "ListenerMethods.generated.inl").write_text(cutoff + "\n\n" + "\n\n".join(methods) + "\n", encoding="utf-8")
             (work / "SoundWorkerState.generated.inl").write_text(worker_state, encoding="utf-8")
+            (work / "WindowsCriticalSection.generated.inl").write_text("\n\n".join(locks), encoding="utf-8")
             shutil.copy2(dll, work / "bass.dll")
             cmd = ["cl", "/nologo", "/EHsc", "/O2", "/MT", "/std:c++17", "/DNOMINMAX", "/DWIN32", "/D_CRT_SECURE_NO_WARNINGS",
                    "/I" + str(work), "/I" + str(SDK), "/I" + str(ROOT / "vendor/bass"), str(HOST), str(lib), "/Fe:listener.exe"]
@@ -100,7 +141,8 @@ def main():
                     if record["architecture"] != arch:
                         raise ValueError(f"Listener executable machine {record['architecture']} does not match requested {arch}")
                 with (output / (label + ".log")).open("wb") as log:
-                    result = subprocess.run(command, cwd=work, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=90)
+                    run = run_with_local_audio if label == "run" else subprocess.run
+                    result = run(command, cwd=work, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=90)
                 record[label] = result.returncode
                 result.check_returncode()
         for path, expected in record["inputs"].items():

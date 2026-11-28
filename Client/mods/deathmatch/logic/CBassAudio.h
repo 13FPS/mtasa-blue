@@ -30,10 +30,21 @@ struct SSoundEventInfo
 struct SSoundThreadVariables
 {
     ZERO_ON_NEW
+    SSoundThreadVariables() = default;
+    SSoundThreadVariables(const SSoundThreadVariables&) = delete;
+    SSoundThreadVariables& operator=(const SSoundThreadVariables&) = delete;
+    ~SSoundThreadVariables()
+    {
+        // Destroy unregisters the worker before deleting this block. Until the
+        // client pulse consumes its result, no CBassAudio owns this channel.
+        if (bStreamCreateResult && pSound)
+            BASS_StreamFree(pSound);
+    }
+
     SString            strURL;
     long               lFlags;
-    DWORD              pSound;
-    bool               bStreamCreateResult;
+    DWORD              pSound = 0;
+    bool               bStreamCreateResult = false;
     std::list<double>  onClientSoundFinishedDownloadQueue;
     std::list<float>   onClientBPMQueue;
     std::list<double>  onClientBeatQueue;

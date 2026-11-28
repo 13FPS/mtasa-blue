@@ -45,6 +45,9 @@ def main():
             env.pop("CL", None)
             env.pop("_CL_", None)
             camera = source(LOGIC + "CClientCamera.cpp")
+            helpers = camera[camera.index("namespace\n{"):camera.index("    inline CMatrix& ScratchMatrix()")]
+            degrees = method(source("Shared/mods/deathmatch/logic/Utils.h"), "inline float ConvertDegreesToRadiansNoWrap(float")
+            (work / "FixedCameraMath.inl").write_text(degrees + "\n" + helpers + "}\n", encoding="utf-8")
             classic = source("Client/game_sa/CCameraSA.cpp")
             (work / "ClassicTransition.inl").write_text(method(classic, "bool CCameraSA::GetTransitionMatrix("), encoding="utf-8")
             fov = method(camera, "float CClientCamera::GetAccurateFOV() const")
@@ -61,8 +64,10 @@ def main():
             if '{"getCameraMatrix", ArgumentParserWarn<false, GetCameraMatrix>}' not in lua:
                 raise ValueError("Lua no longer registers the selected function")
             functions = source(LOGIC + "CStaticFunctionDefinitions.cpp")
-            methods = ("bool CClientCamera::IsInCameraTransition() const", "CMatrix CClientCamera::GetGtaMatrix() const",
-                       "void CClientCamera::PersistViewModes()",
+            gta_matrix = "bool CClientCamera::GetGtaMatrix(" if "bool CClientCamera::GetGtaMatrix(" in camera else "CMatrix CClientCamera::GetGtaMatrix() const"
+            methods = ("bool CClientCamera::IsInCameraTransition() const", gta_matrix, "bool CClientCamera::GetMatrix(",
+                       "const CMatrix& CClientCamera::AcquirePulseMatrix() const", "void CClientCamera::InvalidateCachedTransforms() const",
+                       "void CClientCamera::PersistViewModes()", "void CClientCamera::SetFixedTarget(",
                        "void CClientCamera::SetCameraVehicleViewMode(", "void CClientCamera::SetCameraPedViewMode(",
                        "eVehicleCamMode CClientCamera::GetCameraVehicleViewMode()", "ePedCamMode CClientCamera::GetCameraPedViewMode()")
             if args.source_commit and "CMatrix CClientCamera::GetInterpolatedCameraMatrix() const" in camera:

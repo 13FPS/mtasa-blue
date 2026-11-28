@@ -13,6 +13,7 @@
 #include <CMatrix.h>
 #include <game/CCamera.h>
 #include <cmath>
+#include <optional>
 #include "CClientCommon.h"
 #include "CClientEntity.h"
 
@@ -102,7 +103,7 @@ private:
     static bool StaticProcessFixedCamera(CCam* pCam);
     bool        ProcessFixedCamera(CCam* pCam);
     void        SetFocus(CVector* vecTarget, bool bSmoothTransition);
-    CMatrix     GetGtaMatrix() const;
+    bool        GetGtaMatrix(CMatrix& matrix) const;
     void        SetGtaMatrix(const CMatrix& matInNew, CCam* pCam = NULL) const;
 
     void           SetFocusToLocalPlayerImpl();
@@ -134,11 +135,12 @@ private:
 
     mutable CMatrix m_cachedPulseMatrix;
     mutable CVector m_cachedPulseEuler;
-    mutable bool    m_hasCachedPulseMatrix;
-    mutable bool    m_hasCachedPulseEuler;
-    CVector         m_lastCenterOfWorldPos;
-    float           m_lastCenterOfWorldRot;
-    bool            m_hasCenterOfWorld;
+    // A disengaged value means this pulse has yet to sample the camera.
+    mutable std::optional<bool> m_pulseMatrixAvailable;
+    mutable bool                m_hasCachedPulseEuler;
+    CVector                     m_lastCenterOfWorldPos;
+    float                       m_lastCenterOfWorldRot;
+    bool                        m_hasCenterOfWorld;
 
     bool         m_viewModesRestored{false};
     std::uint8_t m_lastVehicleViewMode{0};

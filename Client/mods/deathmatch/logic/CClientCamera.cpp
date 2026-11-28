@@ -135,7 +135,6 @@ CClientCamera::CClientCamera(CClientManager* pManager) : ClassInit(this), CClien
         g_pMultiplayer->SetProcessCamHandler(CClientCamera::StaticProcessFixedCamera);
 
     m_FixedCameraMode = EFixedCameraMode::ROTATION;
-    m_hasCachedPulseMatrix = false;
     m_hasCachedPulseEuler = false;
     m_lastCenterOfWorldPos = CVector();
     m_lastCenterOfWorldRot = 0.0f;
@@ -301,10 +300,12 @@ void CClientCamera::DoPulse()
 bool CClientCamera::GetMatrix(CMatrix& Matrix) const
 {
     if (m_bFixed)
+    {
         Matrix = m_matFixedMatrix;
-    else
-        Matrix = AcquirePulseMatrix();
-    return true;
+        return true;
+    }
+    Matrix = AcquirePulseMatrix();
+    return *m_pulseMatrixAvailable;
 }
 
 bool CClientCamera::SetMatrix(const CMatrix& Matrix)
@@ -926,32 +927,35 @@ bool CClientCamera::ProcessFixedCamera(CCam* pCam)
 //
 // Return matrix being used by GTA right now
 //
-CMatrix CClientCamera::GetGtaMatrix() const
+bool CClientCamera::GetGtaMatrix(CMatrix& matrix) const
 {
-    if (!m_pCamera)
-        return CMatrix();
-
     // The matrix query observes the transition and pose together. If there is
     // no usable transition pose, use the current camera row for this frame.
-    CMatrix matResult;
-    if (m_pCamera->GetTransitionMatrix(matResult))
-        return matResult;
+    if (m_pCamera && m_pCamera->GetTransitionMatrix(matrix))
+        return true;
 
-    CCam* pCam = m_pCamera->GetCam(m_pCamera->GetActiveCam());
-    if (!pCam)
-        return CMatrix();
-
+    CCam* pCam = m_pCamera ? m_pCamera->GetCam(m_pCamera->GetActiveCam()) : nullptr;
+    if (pCam)
+    {
 #if !defined(_WIN64)
-    // Classic also repairs invalid camera state while reading its global matrix.
-    m_pCamera->GetMatrix(&matResult);
+        // Classic also repairs invalid camera state while reading its global matrix.
+        m_pCamera->GetMatrix(&matrix);
 #endif
-    // Front and up determine right in OrthoNormalize. The active SDK row
-    // therefore supplies the complete pose for the 64-bit client.
-    matResult.vFront = *pCam->GetFront();
-    matResult.vUp = *pCam->GetUp();
-    matResult.vPos = *pCam->GetSource();
-    matResult.OrthoNormalize(CMatrix::AXIS_FRONT, CMatrix::AXIS_UP);
-    return matResult;
+        const CVector* front = pCam->GetFront();
+        const CVector* up = pCam->GetUp();
+        const CVector* source = pCam->GetSource();
+        if (front && up && source && front->IsValid() && up->IsValid() && source->IsValid())
+        {
+            matrix.vFront = *front;
+            matrix.vUp = *up;
+            matrix.vPos = *source;
+            matrix.OrthoNormalize(CMatrix::AXIS_FRONT, CMatrix::AXIS_UP);
+            return true;
+        }
+    }
+    // Some camera getters return a value even before the game has a pose.
+    matrix = CMatrix();
+    return false;
 }
 
 //
@@ -982,7 +986,7 @@ void CClientCamera::SetGtaMatrix(const CMatrix& matInNew, CCam* pCam) const
 
 void CClientCamera::InvalidateCachedTransforms() const
 {
-    m_hasCachedPulseMatrix = false;
+    m_pulseMatrixAvailable.reset();
     m_hasCachedPulseEuler = false;
 }
 
@@ -1036,11 +1040,8 @@ void CClientCamera::UpdateCenterOfWorldFromFixedMatrix()
 
 const CMatrix& CClientCamera::AcquirePulseMatrix() const
 {
-    if (!m_hasCachedPulseMatrix)
-    {
-        m_cachedPulseMatrix = GetGtaMatrix();
-        m_hasCachedPulseMatrix = true;
-    }
+    if (!m_pulseMatrixAvailable.has_value())
+        m_pulseMatrixAvailable = GetGtaMatrix(m_cachedPulseMatrix);
     return m_cachedPulseMatrix;
 }
 

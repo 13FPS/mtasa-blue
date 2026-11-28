@@ -19,6 +19,7 @@ enum eBone
 #include <game/CCamera.h>
 #include <CLuaMultiReturn.h>
 #include "CameraTransitionPoseChecks.h"
+#include "FixedCameraMath.inl"
 
 namespace classic_transition
 {
@@ -78,10 +79,11 @@ static void Call(char op)
 struct Row : CCam
 {
     mutable CVector front{0, 0, 2}, up{0, 3, 1}, source{17, -3, 5};
+    bool            suppliesFront = true;
     CVector*        GetFront() const override
     {
         Call('D');
-        return &front;
+        return suppliesFront ? &front : nullptr;
     }
     CVector* GetUp() const override
     {
@@ -186,27 +188,48 @@ struct Settings
 static Game*     g_pGame = nullptr;
 static Settings* g_pCore = nullptr;
 
+enum class EFixedCameraMode
+{
+    TARGET
+};
+
 struct CClientCamera
 {
-    CCamera*        m_pCamera = nullptr;
-    bool            m_viewModesRestored = false;
-    std::uint8_t    m_lastVehicleViewMode = 0, m_lastPedViewMode = 0;
-    void            PersistViewModes();
-    void            SetCameraVehicleViewMode(eVehicleCamMode);
-    void            SetCameraPedViewMode(ePedCamMode);
-    eVehicleCamMode GetCameraVehicleViewMode();
-    ePedCamMode     GetCameraPedViewMode();
-    CMatrix         GetGtaMatrix() const;
-    CMatrix         GetInterpolatedCameraMatrix() const;
-    bool            IsInCameraTransition() const;
-    float           GetAccurateFOV() const;
-    void            GetPosition(CVector& p) const { p = CVector(1, 2, 3); }
-    void            GetFixedTarget(CVector& p, float* roll) const
+    CCamera*                    m_pCamera = nullptr;
+    bool                        m_viewModesRestored = false;
+    std::uint8_t                m_lastVehicleViewMode = 0, m_lastPedViewMode = 0;
+    void                        PersistViewModes();
+    void                        SetCameraVehicleViewMode(eVehicleCamMode);
+    void                        SetCameraPedViewMode(ePedCamMode);
+    eVehicleCamMode             GetCameraVehicleViewMode();
+    ePedCamMode                 GetCameraPedViewMode();
+    CMatrix                     GetGtaMatrix() const;
+    bool                        GetGtaMatrix(CMatrix&) const;
+    const CMatrix&              AcquirePulseMatrix() const;
+    void                        InvalidateCachedTransforms() const;
+    mutable std::optional<bool> m_pulseMatrixAvailable;
+    mutable CMatrix             m_cachedPulseMatrix;
+    mutable bool                m_hasCachedPulseEuler = false;
+    mutable bool                m_hasCachedPulseMatrix = false;  // Historical sources use a single cache flag.
+    bool                        m_bFixed = false;
+    CMatrix                     m_matFixedMatrix;
+    CVector                     m_vecFixedTarget;
+    float                       m_fRoll = 0;
+    EFixedCameraMode            m_FixedCameraMode{};
+    bool                        IsInFixedMode() const { return m_bFixed; }
+    void                        ToggleCameraFixedMode(bool enabled) { m_bFixed = enabled; }
+    void                        UpdateCenterOfWorldFromFixedMatrix() {}
+    void                        SetFixedTarget(const CVector&, float);
+    CMatrix                     GetInterpolatedCameraMatrix() const;
+    bool                        IsInCameraTransition() const;
+    float                       GetAccurateFOV() const;
+    void                        GetPosition(CVector& p) const { p = CVector(1, 2, 3); }
+    void                        GetFixedTarget(CVector& p, float* roll) const
     {
         p = CVector(4, 5, 6);
         *roll = 7;
     }
-    bool GetMatrix(CMatrix&) const { std::abort(); }
+    bool GetMatrix(CMatrix&) const;
 };
 struct CStaticFunctionDefinitions
 {
@@ -235,6 +258,9 @@ static void CheckStartupAndPose()
     CClientCamera client;
     Camera        camera;
     g_pCore = &settings;
+    CMatrix matrix(CVector(91, 72, 53));
+    if (client.GetMatrix(matrix) || matrix.To4x4Array() != CMatrix().To4x4Array())
+        throw std::runtime_error("absent game camera reported a pose");
     client.PersistViewModes();
     g_pGame = &game;
     game.state = SystemState::GS_PLAYING_GAME;
@@ -256,7 +282,11 @@ static void CheckStartupAndPose()
     if (settings.saves != 1 || settings.vehicle != "2" || settings.ped != "3")
         throw std::runtime_error("live view change was not persisted exactly once");
     calls.clear();
-    const CMatrix matrix = client.GetGtaMatrix();
+    if (client.GetMatrix(matrix) || !calls.empty())
+        throw std::runtime_error("missing pose was not cached for this pulse");
+    client.InvalidateCachedTransforms();
+    if (!client.GetMatrix(matrix))
+        throw std::runtime_error("active row was not available after invalidating the pulse");
 #if defined(_WIN64)
     const std::string poseCalls = "BACDUS";
 #else
@@ -267,18 +297,23 @@ static void CheckStartupAndPose()
         throw std::runtime_error("incorrect active camera pose: " + calls);
     camera.transition = true;
     calls.clear();
-    if (client.GetGtaMatrix().vPos != CVector(8, 4, 2) || calls != "B")
+    if (!client.GetMatrix(matrix) || matrix.vPos != CVector(17, -3, 5) || !calls.empty())
+        throw std::runtime_error("valid pose was not cached for this pulse");
+    client.InvalidateCachedTransforms();
+    if (!client.GetMatrix(matrix) || matrix.vPos != CVector(8, 4, 2) || calls != "B")
         throw std::runtime_error("transition matrix dispatch changed");
     camera.transitionPoseAvailable = false;
     calls.clear();
-    if (client.GetGtaMatrix().vPos != matrix.vPos || calls != poseCalls)
+    client.InvalidateCachedTransforms();
+    if (!client.GetMatrix(matrix) || matrix.vPos != CVector(17, -3, 5) || calls != poseCalls)
         throw std::runtime_error("missing transition pose lost the active row");
     refuse = 'B';
     calls.clear();
+    client.InvalidateCachedTransforms();
     bool propagated = false;
     try
     {
-        client.GetGtaMatrix();
+        client.GetMatrix(matrix);
     }
     catch (const std::runtime_error& error)
     {
@@ -290,8 +325,37 @@ static void CheckStartupAndPose()
     camera.transition = false;
     camera.selector = 255;
     calls.clear();
-    if (client.GetGtaMatrix().vPos != CVector() || calls != "BAC")
+    if (client.GetMatrix(matrix) || matrix.To4x4Array() != CMatrix().To4x4Array() || calls != "BAC")
         throw std::runtime_error("absent row produced a pose");
+    camera.selector = 0;
+    camera.rows[0].suppliesFront = false;
+    client.InvalidateCachedTransforms();
+    if (client.GetMatrix(matrix) || matrix.To4x4Array() != CMatrix().To4x4Array())
+        throw std::runtime_error("incomplete row produced a pose");
+    camera.rows[0].suppliesFront = true;
+    camera.rows[0].source.fX = std::numeric_limits<float>::quiet_NaN();
+    client.InvalidateCachedTransforms();
+    if (client.GetMatrix(matrix) || matrix.To4x4Array() != CMatrix().To4x4Array())
+        throw std::runtime_error("nonfinite row produced a pose");
+    client.m_bFixed = true;
+    client.m_matFixedMatrix = CMatrix(CVector(11, 12, 13));
+    client.m_matFixedMatrix.vRight = CVector(-1, 0, 0);
+    calls.clear();
+    if (!client.GetMatrix(matrix) || matrix.To4x4Array() != client.m_matFixedMatrix.To4x4Array() || !calls.empty())
+        throw std::runtime_error("fixed camera did not preserve its supplied matrix");
+    for (const auto direction : {CVector(0, 1, 0), CVector(0.00001f, 0, 1), CVector(0, 0, -1)})
+    {
+        for (float roll : {0.f, 45.f, 90.f, 180.f, -35.f})
+        {
+            client.SetFixedTarget(client.m_matFixedMatrix.vPos + direction, roll);
+            if (!client.GetMatrix(matrix))
+                throw std::runtime_error("fixed target did not provide a matrix");
+            CVector right = matrix.vFront;
+            right.CrossProduct(&matrix.vUp);
+            if ((right - matrix.vRight).Length() > 0.0001f || std::abs(right.Length() - 1.0f) > 0.0001f)
+                throw std::runtime_error("fixed camera basis changed handedness");
+        }
+    }
     g_pGame = nullptr;
     g_pCore = nullptr;
     std::puts("Passed late camera publication, view persistence and active/transition pose checks");

@@ -79,6 +79,9 @@ def main():
     for helper in ("HasLocalModel", "ReleaseLocalModel"):
         if f"CClientPed::{helper}(" in ped:
             parts.append(method(ped, "CClientPed", helper))
+    for helper in ("RetainRequestedModel", "ReleaseModelReference", "ResolveUnconfirmedSkin"):
+        if f"CClientPed::{helper}(" in ped:
+            parts.append(method(ped, "CClientPed", helper))
     parts += [method(ped, "CClientPed", name) for name in ("AcquireRequestedModel", "ReleaseLoadedModel", "_CreateLocalModel",
                                                           "_DestroyLocalModel", "StreamIn", "NotifyCreate")]
     parts += [method(stream, "CClientStreamElement", name) for name in ("InternalStreamIn", "InternalStreamOut", "NotifyUnableToCreate")]

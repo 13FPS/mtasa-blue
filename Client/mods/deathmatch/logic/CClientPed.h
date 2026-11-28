@@ -11,6 +11,7 @@
 class CClientPed;
 
 #pragma once
+#include <exception>
 
 #include "CAntiCheatModule.h"
 #include "CClientCommon.h"
@@ -599,6 +600,9 @@ protected:
 
     void _CreateModel();
     bool AcquireRequestedModel(const char* tag);
+    bool RetainRequestedModel(const char* tag, CModelInfo*& info, std::shared_ptr<CClientModel>& registration);
+    static void ReleaseModelReference(CModelInfo* model, std::exception_ptr& failure);
+    void ResolveUnconfirmedSkin(bool installed);
     void ReleaseLoadedModel();
     void RestoreTemporaryModel();
     void _CreateLocalModel();
@@ -832,6 +836,14 @@ public:
 
     std::shared_ptr<CClientModel> m_clientModel;
     std::shared_ptr<CClientModel> m_loadedClientModel;
+    // A setter can fail after installing the skin. Keep both model references
+    // if its owner cannot report the active ID immediately.
+    CModelInfo*                   m_pUnconfirmedSkin = nullptr;
+    std::shared_ptr<CClientModel> m_unconfirmedClientModel;
+    CPlayerPed*                   m_pUnconfirmedSkinOwner = nullptr;
+    unsigned long                 m_unconfirmedSkinId = 0;
+    bool                          m_settingLocalSkin = false;
+    bool                          m_destroyingPed = false;
 
     bool m_hasSyncedAnim{};
     bool m_animationOverridedByClient{};

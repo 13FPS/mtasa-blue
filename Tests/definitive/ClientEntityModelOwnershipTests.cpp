@@ -2,11 +2,13 @@
 // registry. A retired registration may die only after native refs are released.
 #include <cstdint>
 #include <cstdio>
+#include <exception>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <map>
 #include <memory>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 static int  checks;
@@ -23,12 +25,16 @@ constexpr int BLOCKING = 1;
 struct CModelInfo
 {
     bool ready = true;
-    int  refs = 0;
+    int  refs = 0, releaseCalls = 0;
+    const char* releaseFailure = nullptr;
     void ModelAddRef(int, const char*) { ++refs; }
     void RemoveRef()
     {
         Check(refs > 0, "balanced native model ref");
         --refs;
+        ++releaseCalls;
+        if (releaseFailure)
+            throw std::runtime_error(releaseFailure);
     }
     void* GetRwObject() { return ready ? this : nullptr; }
     bool  IsLoaded() const { return ready; }
@@ -124,6 +130,7 @@ struct EntityStreaming
     bool                        IsVisibleInAllDimensions() const { return false; }
     int                         GetDimension() const { return dimension; }
     void                        NotifyUnableToCreate() {}
+    void                        InternalStreamOut() { streamedIn = false; }
 };
 struct CClientObjectManager
 {
@@ -135,6 +142,7 @@ struct CClientPlayerManager
 };
 struct CClientObject : EntityStreaming
 {
+    void*                 m_pObject = nullptr;
     Manager*              m_pManager = &manager;
     Handle                m_clientModel;
     unsigned short        m_usModel = 400;
@@ -226,21 +234,42 @@ struct CClientVehicle : EntityStreaming
 struct Player
 {
     unsigned long         id = 400;
-    std::function<void()> onSwitch;
-    unsigned long         GetModelIndex() const { return id; }
+    std::function<void()> onSwitch, afterSwitch, collectSatchels, onRead;
+    bool                  refuseRead = false;
+    unsigned long GetModelIndex() const
+    {
+        if (onRead)
+            onRead();
+        if (refuseRead)
+            throw std::runtime_error("model readback refused");
+        return id;
+    }
     void                  SetModelIndex(unsigned long value)
     {
         if (onSwitch)
             onSwitch();
         id = value;
+        if (afterSwitch)
+            afterSwitch();
     }
-    void GetAttachedSatchels(std::vector<SSatchelsData>&) {}
+    void GetAttachedSatchels(std::vector<SSatchelsData>&)
+    {
+        if (collectSatchels)
+            collectSatchels();
+    }
     void GetFightingStyle() {}
     void RebuildPlayer() {}
 };
 struct Multiplayer
 {
-    void SetAutomaticVehicleStartupOnPedEnter(bool) {}
+    bool automatic = true;
+    bool refuseRestore = false;
+    void SetAutomaticVehicleStartupOnPedEnter(bool enabled)
+    {
+        automatic = enabled;
+        if (enabled && refuseRestore)
+            throw std::runtime_error("vehicle restore refused");
+    }
 } multiplayer;
 auto* g_pMultiplayer = &multiplayer;
 struct Clothes
@@ -288,6 +317,17 @@ struct CClientPed
             actor.id = m_ulModel;
         }
     }
+    bool ownsActor = true;
+    bool HasLocalModel() const { return m_pPlayerPed && ownsActor; }
+    Player* m_pUnconfirmedSkinOwner = nullptr;
+    CModelInfo* m_pUnconfirmedSkin = nullptr;
+    Handle m_unconfirmedClientModel;
+    unsigned long m_unconfirmedSkinId = 0;
+    bool m_settingLocalSkin = false;
+    bool RetainRequestedModel(const char*, CModelInfo*&, Handle&);
+    bool m_destroyingPed = false;
+    static void ReleaseModelReference(CModelInfo*, std::exception_ptr&);
+    void ResolveUnconfirmedSkin(bool);
     bool AcquireRequestedModel(const char*);
     void ReleaseLoadedModel();
     void RestoreTemporaryModel();
@@ -296,6 +336,7 @@ struct CClientPed
     void ModelRequestCallback(CModelInfo*);
     void ReCreateGameEntity();
 };
+static void OutputDebugLine(const char* line) { std::fprintf(stderr, "%s\n", line); }
 #include "EntityModelOwnership.generated.inl"
 
 template <typename Entity, typename SetModel>
@@ -337,6 +378,81 @@ int main(int argc, char** argv)
             CClientVehicle vehicle;
             vehicle.m_pVehicle = nullptr;
             CheckStreamingCompletion(vehicle, [&](unsigned short id) { vehicle.SetModelBlocking(id, 0, 0); });
+        }
+        else if (std::strcmp(argv[1], "release-refusal") == 0 || std::strcmp(argv[1], "restore-refusal") == 0 ||
+                 std::strcmp(argv[1], "two-releases") == 0 || std::strcmp(argv[1], "destruction-releases") == 0)
+        {
+            std::set_terminate([] { std::fputs("FAIL: cleanup terminated the process\n", stderr); std::_Exit(86); });
+            CClientPed p;
+            auto* old = game.GetModelInfo(1000);
+            auto* next = game.GetModelInfo(1001);
+            p.SetModel(1000);
+            requester.ready = false;
+            p.SetModel(1001);
+            p.m_destroyingPed = std::strcmp(argv[1], "destruction-releases") == 0;
+            const bool teardown = p.m_destroyingPed || std::strcmp(argv[1], "two-releases") == 0;
+            if (teardown)
+            {
+                p.actor.afterSwitch = [&] {
+                    p.actor.refuseRead = true;
+                    throw std::runtime_error("initial setter failure");
+                };
+                try { p.ModelRequestCallback(next); } catch (const std::runtime_error&) {}
+                old->releaseFailure = "old release failed";
+                next->releaseFailure = "unconfirmed release failed";
+            }
+            else
+            {
+                p.actor.collectSatchels = [] { throw std::runtime_error("preparation failed"); };
+                next->releaseFailure = std::strcmp(argv[1], "release-refusal") == 0 ? "candidate release failed" : nullptr;
+                multiplayer.refuseRestore = !next->releaseFailure;
+            }
+            std::string error;
+            try
+            {
+                if (teardown)
+                    p.ReleaseLoadedModel();
+                else
+                    p.ModelRequestCallback(next);
+            }
+            catch (const std::runtime_error& ex) { error = ex.what(); }
+            if (p.m_destroyingPed)
+                Check(error.empty(), "a release refusal during destruction leaves no escaping exception");
+            else
+                Check(error == (teardown ? "unconfirmed release failed" : "preparation failed"), "cleanup preserves the first refusal");
+            Check(next->releaseCalls == 1 && old->releaseCalls == (teardown ? 1 : 0) && multiplayer.automatic,
+                  "each acquired reference is released once and every remaining cleanup is attempted");
+            old->releaseFailure = next->releaseFailure = nullptr;
+            multiplayer.refuseRestore = false;
+            p.ReleaseLoadedModel();
+            Check(old->releaseCalls == 1 && next->releaseCalls == 1, "cleanup retry never replays an accepted decrement");
+        }
+        else if (std::strcmp(argv[1], "early-release") == 0 || std::strcmp(argv[1], "final-restore") == 0)
+        {
+            std::set_terminate([] { std::fputs("FAIL: cleanup terminated the process\n", stderr); std::_Exit(86); });
+            CClientPed p;
+            auto* old = game.GetModelInfo(1000);
+            auto* next = game.GetModelInfo(1001);
+            p.SetModel(1000);
+            requester.ready = false;
+            p.SetModel(1001);
+            const bool early = std::strcmp(argv[1], "early-release") == 0;
+            if (early)
+            {
+                p.actor.collectSatchels = [&] { p.ownsActor = false; };
+                next->releaseFailure = "candidate release failed";
+            }
+            else
+                multiplayer.refuseRestore = true;
+            std::string error;
+            try { p.ModelRequestCallback(next); }
+            catch (const std::runtime_error& ex) { error = ex.what(); }
+            Check(error == (early ? "candidate release failed" : "vehicle restore refused"), "a solitary cleanup refusal reaches the caller");
+            Check(p.m_pLoadedModelInfo == (early ? old : next) && old->refs == int(early) && next->refs == int(!early) && multiplayer.automatic,
+                  "cleanup keeps the accepted model and releases only the unused reference");
+            next->releaseFailure = nullptr;
+            multiplayer.refuseRestore = false;
+            p.ReleaseLoadedModel();
         }
         else
             return 2;
@@ -386,6 +502,151 @@ int main(int argc, char** argv)
         v.SetModelBlocking(400, 0, 0);
         game.GetModelInfo(b)->ready = true;
         Check(refused.expired(), "replacing a failed vehicle selection releases its registration");
+    }
+    for (int failure : {0, 1, 2})
+    {
+        CClientPed p;
+        auto       old = manager.Register(a), next = manager.Register(b);
+        requester.ready = true;
+        p.SetModel(a);
+        requester.ready = false;
+        p.SetModel(b);
+        manager.active.erase(a);
+        manager.active.erase(b);
+        const auto refuse = [] { throw std::runtime_error("model change refused"); };
+        if (failure == 0)
+            p.actor.collectSatchels = refuse;
+        else if (failure == 1)
+            p.actor.onSwitch = refuse;
+        else
+            p.actor.afterSwitch = refuse;
+
+        bool threw = false;
+        try
+        {
+            p.ModelRequestCallback(game.GetModelInfo(b));
+        }
+        catch (const std::runtime_error&)
+        {
+            threw = true;
+        }
+        Check(threw && multiplayer.automatic, "a skin-change exception restores automatic vehicle startup");
+        const bool installed = failure == 2;
+        Check(p.actor.id == (installed ? b : a) && p.m_pLoadedModelInfo == game.GetModelInfo(p.actor.id),
+              "native skin and owned model match after a before/after-install refusal");
+        Check(game.GetModelInfo(a)->refs == (installed ? 0 : 1) && game.GetModelInfo(b)->refs == (installed ? 1 : 0) &&
+                  old.expired() == installed && !next.expired(),
+              "the skin still in use keeps its own model and each unused reference is released");
+        p.actor.collectSatchels = {};
+        p.actor.onSwitch = {};
+        p.actor.afterSwitch = {};
+        p.ModelRequestCallback(game.GetModelInfo(b));
+        Check(p.actor.id == b && game.GetModelInfo(b)->refs == 1, "retry installs the selected model exactly once");
+        p.ReleaseLoadedModel();
+        requester.ready = true;
+    }
+    {
+        CClientPed p;
+        auto       old = manager.Register(a), next = manager.Register(b);
+        requester.ready = true;
+        p.SetModel(a);
+        bool changed = false;
+        p.actor.onSwitch = [&] {
+            if (!changed)
+            {
+                changed = true;
+                p.SetModel(400);
+                Check(!multiplayer.automatic, "a nested selection leaves vehicle startup suppressed in the outer change");
+            }
+        };
+        p.SetModel(b);
+        Check(changed && p.actor.id == 400 && p.m_pLoadedModelInfo == game.GetModelInfo(400) &&
+                  game.GetModelInfo(a)->refs == 0 && game.GetModelInfo(b)->refs == 0 && multiplayer.automatic,
+              "a queued skin change commits its own ID after the outer provider returns");
+        manager.active.erase(a);
+        manager.active.erase(b);
+        p.ReleaseLoadedModel();
+    }
+    {
+        CClientPed p;
+        auto       old = manager.Register(a), next = manager.Register(b);
+        requester.ready = true;
+        p.SetModel(a);
+        requester.ready = false;
+        p.SetModel(b);
+        manager.active.erase(a);
+        manager.active.erase(b);
+        bool nested = false;
+        p.actor.afterSwitch = [&] {
+            p.actor.onRead = [&] {
+                if (!nested)
+                {
+                    nested = true;
+                    p.ModelRequestCallback(game.GetModelInfo(b));
+                }
+            };
+            throw std::runtime_error("setter refused after installing");
+        };
+        try
+        {
+            p.ModelRequestCallback(game.GetModelInfo(b));
+        }
+        catch (const std::runtime_error&)
+        {
+        }
+        Check(nested && old.expired() && game.GetModelInfo(b)->refs == 1 && p.m_pLoadedModelInfo == game.GetModelInfo(b),
+              "a nested readback reconciles the model exactly once");
+        p.actor.afterSwitch = {};
+        p.actor.onRead = {};
+        p.ReleaseLoadedModel();
+        requester.ready = true;
+    }
+    for (bool retire : {false, true})
+    {
+        CClientPed p;
+        auto       old = manager.Register(a), next = manager.Register(b);
+        requester.ready = true;
+        p.SetModel(a);
+        requester.ready = false;
+        p.SetModel(b);
+        manager.active.erase(a);
+        manager.active.erase(b);
+        p.actor.afterSwitch = [&] {
+            if (retire)
+                p.ownsActor = false;
+            else
+                p.actor.refuseRead = true;
+            throw std::runtime_error("settling skin failed");
+        };
+        try
+        {
+            p.ModelRequestCallback(game.GetModelInfo(b));
+            Check(false, "setter refusal must reach the caller");
+        }
+        catch (const std::runtime_error& error)
+        {
+            Check(std::strcmp(error.what(), "settling skin failed") == 0, "the original setter error survives a refused readback");
+        }
+        Check(multiplayer.automatic && !old.expired() && !next.expired() &&
+                  game.GetModelInfo(a)->refs == 1 && game.GetModelInfo(b)->refs == 1,
+              "unobserved installation keeps both model references until its outcome is known");
+        p.actor.afterSwitch = {};
+        p.actor.refuseRead = false;
+        if (!retire)
+        {
+            p.ModelRequestCallback(game.GetModelInfo(b));
+            Check(p.m_pLoadedModelInfo == game.GetModelInfo(b) && old.expired() && game.GetModelInfo(b)->refs == 1,
+                  "retry reconciles an already-installed model before its same-ID early return");
+        }
+        else
+        {
+            p.ModelRequestCallback(game.GetModelInfo(b));
+            Check(p.m_pLoadedModelInfo == game.GetModelInfo(a) && game.GetModelInfo(b)->refs == 1,
+                  "a foreign actor cannot commit or discard the uncertain model");
+        }
+        p.ReleaseLoadedModel();
+        Check(game.GetModelInfo(a)->refs == 0 && game.GetModelInfo(b)->refs == 0, "teardown releases all outstanding model references once");
+        requester.ready = true;
     }
     {
         CClientPed p;

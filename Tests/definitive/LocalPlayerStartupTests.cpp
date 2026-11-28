@@ -3,10 +3,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <exception>
 #include <functional>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 using DWORD = unsigned long;
@@ -277,6 +279,7 @@ struct CStaticFunctionDefinitions
 {
     template<typename... Types> static void SetPedAnimation(CClientPed&, Types...) { ++scenario.animations; }
 };
+using CClientModel = int;
 struct CClientPed : CClientStreamElement
 {
     CPlayerPed* m_pPlayerPed = nullptr;
@@ -320,6 +323,13 @@ struct CClientPed : CClientStreamElement
         ReleaseLoadedModel();
         pedManager.OnDestruction(this);
     }
+    CPlayerPed* m_pUnconfirmedSkinOwner = nullptr;
+    CModelInfo* m_pUnconfirmedSkin = nullptr;
+    std::shared_ptr<CClientModel> m_unconfirmedClientModel;
+    bool RetainRequestedModel(const char*, CModelInfo*&, std::shared_ptr<CClientModel>&);
+    bool m_destroyingPed = false;
+    static void ReleaseModelReference(CModelInfo*, std::exception_ptr&);
+    void ResolveUnconfirmedSkin(bool);
     bool AcquireRequestedModel(const char*);
     void ReleaseLoadedModel();
     void SetHasJetPack(bool) {}
@@ -371,6 +381,7 @@ struct CPacketHandler
     void EnterJoined();
 };
 
+static void OutputDebugLine(const char* line) { std::fprintf(stderr, "%s\n", line); }
 #include "production.inl"
 
 static void CheckPed(const std::string& name)

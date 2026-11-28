@@ -300,6 +300,7 @@ void CClientPed::Init(CClientManager* pManager, unsigned long ulModelID, bool bI
 
 CClientPed::~CClientPed()
 {
+    m_destroyingPed = true;
     // The pool may have reassociated the retained GTA ped with another client.
     // Detach first so animation, vehicle and stat cleanup cannot use its wrapper.
     if (m_bIsLocalPlayer && m_pPlayerPed && !HasLocalModel())
@@ -392,6 +393,10 @@ CClientPed::~CClientPed()
             _DestroyModel();
         }
     }
+
+    // A skin switch can outlive a reentrant detachment of the local wrapper.
+    if (m_pUnconfirmedSkin)
+        ReleaseLoadedModel();
 
     // Delete our clothes
     delete m_pClothes;
@@ -3726,6 +3731,11 @@ void CClientPed::UpdateKeysync(bool bCleanup)
 
 bool CClientPed::AcquireRequestedModel(const char* tag)
 {
+    return RetainRequestedModel(tag, m_pLoadedModelInfo, m_loadedClientModel);
+}
+
+bool CClientPed::RetainRequestedModel(const char* tag, CModelInfo*& info, std::shared_ptr<CClientModel>& owner)
+{
     auto* requested = m_pModelInfo;
     auto  registration = m_clientModel;
     if (!requested)
@@ -3738,27 +3748,69 @@ bool CClientPed::AcquireRequestedModel(const char* tag)
     }
     catch (...)
     {
-        requested->RemoveRef();
-        throw;
+        auto failure = std::current_exception();
+        ReleaseModelReference(requested, failure);
+        std::rethrow_exception(failure);
     }
     if (!hasRenderObject || m_pModelInfo != requested || m_clientModel != registration)
     {
         requested->RemoveRef();
         return false;
     }
-    m_pLoadedModelInfo = requested;
-    m_loadedClientModel = std::move(registration);
+    info = requested;
+    owner = std::move(registration);
     return true;
+}
+
+void CClientPed::ReleaseModelReference(CModelInfo* model, std::exception_ptr& failure)
+{
+    if (!model)
+        return;
+    try
+    {
+        model->RemoveRef();
+    }
+    catch (...)
+    {
+        if (!failure)
+            failure = std::current_exception();
+        else
+            OutputDebugLine("[Models] An additional model reference failed to release during ped cleanup");
+    }
+}
+
+void CClientPed::ResolveUnconfirmedSkin(bool installed)
+{
+    if (!m_pUnconfirmedSkin)
+        return;
+    if (installed)
+    {
+        std::swap(m_pLoadedModelInfo, m_pUnconfirmedSkin);
+        m_loadedClientModel.swap(m_unconfirmedClientModel);
+    }
+    auto* released = std::exchange(m_pUnconfirmedSkin, nullptr);
+    auto  registration = std::move(m_unconfirmedClientModel);
+    m_pUnconfirmedSkinOwner = nullptr;
+    if (released)
+        released->RemoveRef();
 }
 
 void CClientPed::ReleaseLoadedModel()
 {
-    if (m_pLoadedModelInfo)
+    auto* unconfirmed = std::exchange(m_pUnconfirmedSkin, nullptr);
+    auto  unconfirmedRegistration = std::move(m_unconfirmedClientModel);
+    m_pUnconfirmedSkinOwner = nullptr;
+    auto* released = std::exchange(m_pLoadedModelInfo, nullptr);
+    auto  registration = std::move(m_loadedClientModel);
+    std::exception_ptr failure;
+    ReleaseModelReference(unconfirmed, failure);
+    ReleaseModelReference(released, failure);
+    if (failure)
     {
-        m_pLoadedModelInfo->RemoveRef();
-        m_pLoadedModelInfo = nullptr;
+        if (!m_destroyingPed)
+            std::rethrow_exception(failure);
+        OutputDebugLine("[Models] A model reference failed to release during ped destruction");
     }
-    m_loadedClientModel.reset();
 }
 
 void CClientPed::_CreateModel()
@@ -4120,22 +4172,37 @@ void CClientPed::ReleaseLocalModel()
 
 void CClientPed::_ChangeModel()
 {
-    // Different model than before?
-    if (m_pPlayerPed->GetModelIndex() != m_ulModel)
-    {
-        CModelInfo* pLoadedModel = nullptr;
-        // The current native ped keeps using its old model until SetModelIndex below.
-        std::shared_ptr<CClientModel> previousRegistration;
-        if (m_bIsLocalPlayer)
-        {
-            // Remember the model we had loaded and store the new model we're going to load
-            pLoadedModel = m_pLoadedModelInfo;
-            previousRegistration = m_loadedClientModel;
-            if (!AcquireRequestedModel("CClientPed::_ChangeModel"))
-                return;
-        }
+    if (!m_pPlayerPed || m_settingLocalSkin || (m_bIsLocalPlayer && !HasLocalModel()))
+        return;
+    auto* const player = m_pPlayerPed;
+    if (m_pUnconfirmedSkin && m_pUnconfirmedSkinOwner != player)
+        return;
+    const auto currentModel = player->GetModelIndex();
+    if (m_pUnconfirmedSkin)
+        ResolveUnconfirmedSkin(currentModel == m_unconfirmedSkinId);
 
-        g_pMultiplayer->SetAutomaticVehicleStartupOnPedEnter(false);
+    if (currentModel == m_ulModel)
+        return;
+
+    const auto                    requestedId = m_ulModel;
+    std::shared_ptr<CClientModel> requestedRegistration;
+    CModelInfo*                   requested = nullptr;
+    if (m_bIsLocalPlayer && !RetainRequestedModel("CClientPed::_ChangeModel", requested, requestedRegistration))
+        return;
+    CModelInfo* pendingRelease = requested;
+    auto stillOwnsPlayer = [&] { return m_pPlayerPed == player && HasLocalModel(); };
+
+    // Only the outermost skin change restores vehicle startup. Both restoration
+    // and model release call virtual SDK methods that can report failure.
+    static unsigned int suppressionDepth = 0;
+    bool suppressing = false;
+    auto apply = [&]
+    {
+        if (m_bIsLocalPlayer && !stillOwnsPlayer())
+            return;
+        suppressing = true;
+        if (suppressionDepth++ == 0)
+            g_pMultiplayer->SetAutomaticVehicleStartupOnPedEnter(false);
 
         // We need to reset visual stats when changing from CJ model
         if (m_pPlayerPed->GetModelIndex() == 0)
@@ -4182,8 +4249,69 @@ void CClientPed::_ChangeModel()
             // Takes care of clothes/task issues
             Respawn(NULL, true, false);
 
-            // Set the new player model and restore the interior
-            m_pPlayerPed->SetModelIndex(m_ulModel);
+            if (!stillOwnsPlayer() || m_ulModel != requestedId || m_pModelInfo != requested || m_clientModel != requestedRegistration)
+                return;
+
+            // The actor keeps the current skin until SetModelIndex reaches its
+            // install step. The call may still refuse while finishing setup.
+            auto finishSetting = [&]
+            {
+                m_settingLocalSkin = false;
+                m_pUnconfirmedSkin = std::exchange(pendingRelease, nullptr);
+                m_unconfirmedClientModel = requestedRegistration;
+                m_unconfirmedSkinId = requestedId;
+                m_pUnconfirmedSkinOwner = player;
+            };
+            auto resolveSetting = [&](bool installed)
+            {
+                if (m_pUnconfirmedSkin != requested || m_pUnconfirmedSkinOwner != player || m_unconfirmedClientModel != requestedRegistration)
+                    return false;
+                ResolveUnconfirmedSkin(installed);
+                return true;
+            };
+            m_settingLocalSkin = true;
+            try
+            {
+                player->SetModelIndex(requestedId);
+            }
+            catch (...)
+            {
+                finishSetting();
+                bool observed = false, installed = false;
+                try
+                {
+                    if (stillOwnsPlayer())
+                    {
+                        installed = player->GetModelIndex() == requestedId;
+                        observed = stillOwnsPlayer();
+                    }
+                }
+                catch (...)
+                {
+                    // Preserve the setter error. Reconcile on observation or release both on teardown.
+                }
+                if (observed)
+                {
+                    try
+                    {
+                        resolveSetting(installed);
+                    }
+                    catch (...)
+                    {
+                        OutputDebugLine("[Models] A model reference also failed to release after the skin setter refused");
+                    }
+                }
+                throw;
+            }
+            finishSetting();
+            if (!stillOwnsPlayer() || !resolveSetting(true))
+                return;
+            if (m_ulModel != requestedId)
+            {
+                if (m_pModelInfo && m_pModelInfo->IsLoaded())
+                    _ChangeModel();
+                return;
+            }
 
             // Rebuild the player after a skin change
             if (m_ulModel == 0)
@@ -4193,12 +4321,6 @@ void CClientPed::_ChangeModel()
                 m_pClothes->AddAllToModel();
                 m_pPlayerPed->RebuildPlayer();
             }
-
-            // Remove reference to the old model we used
-            if (pLoadedModel)
-                pLoadedModel->RemoveRef();
-            pLoadedModel = NULL;
-            previousRegistration.reset();
 
             // Warp into it again
             if (pVehicle)
@@ -4247,9 +4369,34 @@ void CClientPed::_ChangeModel()
             pSatchel->SetAttachedOffsets(*satchelData.vecAttachedOffsets, *satchelData.vecAttachedRotation);
             pSatchel->InternalAttachTo(this);
         }
+    };
 
-        g_pMultiplayer->SetAutomaticVehicleStartupOnPedEnter(true);
+    std::exception_ptr failure;
+    try
+    {
+        apply();
     }
+    catch (...)
+    {
+        failure = std::current_exception();
+    }
+    if (suppressing && --suppressionDepth == 0)
+    {
+        try
+        {
+            g_pMultiplayer->SetAutomaticVehicleStartupOnPedEnter(true);
+        }
+        catch (...)
+        {
+            if (!failure)
+                failure = std::current_exception();
+            else
+                OutputDebugLine("[Models] Vehicle startup restoration also failed during a skin change");
+        }
+    }
+    ReleaseModelReference(pendingRelease, failure);
+    if (failure)
+        std::rethrow_exception(failure);
 }
 
 void CClientPed::ReCreateModel()

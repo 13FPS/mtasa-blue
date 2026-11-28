@@ -15,7 +15,7 @@ LOGIC = Path("Client/mods/deathmatch/logic")
 METHODS = {
     "CClientObject": ["SetModel", "StreamIn", "ModelRequestCallback"],
     "CClientVehicle": ["SetModelBlocking", "StreamIn", "ModelRequestCallback"],
-    "CClientPed": ["SetModel", "RestoreTemporaryModel", "AcquireRequestedModel", "ReleaseLoadedModel",
+    "CClientPed": ["SetModel", "RestoreTemporaryModel", "AcquireRequestedModel", "RetainRequestedModel", "ReleaseModelReference", "ResolveUnconfirmedSkin", "ReleaseLoadedModel",
                    "_ChangeModel", "ModelRequestCallback", "ReCreateGameEntity"],
 }
 
@@ -48,6 +48,8 @@ def main():
                         fallbacks = {"RestoreTemporaryModel": "void CClientPed::RestoreTemporaryModel(){}",
                                      "AcquireRequestedModel": "bool CClientPed::AcquireRequestedModel(const char*){return false;}",
                                      "ReleaseLoadedModel": "void CClientPed::ReleaseLoadedModel(){}"}
+                        if commit and method in ("ResolveUnconfirmedSkin", "RetainRequestedModel", "ReleaseModelReference"):
+                            continue
                         if not commit or method not in fallbacks:
                             raise RuntimeError(f"Missing {cls}::{method}")
                         pieces.append(fallbacks[method])
@@ -79,7 +81,8 @@ def main():
             if cp.returncode == 0:
                 result["cases"] = {}
                 with (output / "execute.log").open("wb") as log:
-                    for case in ("ownership", "object-completion", "vehicle-completion"):
+                    for case in ("ownership", "object-completion", "vehicle-completion", "release-refusal", "restore-refusal",
+                                 "two-releases", "destruction-releases", "early-release", "final-restore"):
                         args = [str(exe)] if case == "ownership" else [str(exe), case]
                         cp = subprocess.run(args, cwd=w, env=env, capture_output=True, timeout=120)
                         log.write(case.encode() + b"\n" + cp.stdout + cp.stderr)

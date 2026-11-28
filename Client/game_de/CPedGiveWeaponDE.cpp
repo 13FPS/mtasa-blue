@@ -7,11 +7,18 @@
 #include <game/CGame.h>
 #include <game/CModelInfo.h>
 #include <game/CPedGiveWeaponPolicy.h>
+#include <game/CProjectileInfo.h>
 #include <game/CWeapon.h>
 #include <stdexcept>
 #include <string>
 namespace mta::game_de
 {
+    bool CPedGiveWeaponDE::AddProjectile(eWeaponType weaponType, CVector origin, float force, CVector* target, CEntity* targetEntity)
+    {
+        CProjectileInfo* projectiles = weaponGame.GetProjectileInfo();
+        return projectiles && projectiles->AddProjectile(this, weaponType, origin, force, target, targetEntity);
+    }
+
     CWeapon* CPedGiveWeaponDE::GetWeapon(eWeaponType weaponType) const
     {
         if (static_cast<std::uint32_t>(weaponType) >= WEAPONTYPE_LAST_WEAPONTYPE)

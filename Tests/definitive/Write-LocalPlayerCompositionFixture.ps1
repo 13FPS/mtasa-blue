@@ -12,10 +12,10 @@ function Write-LocalPlayerCompositionFixture([string]$RepositoryRoot,[string]$Ou
     $class=$text.Substring($begin)
     $lines=@($class -split '\r?\n' | Where-Object {$_ -match '\s+override\b'})
     $pedRejectors=@($lines | Where-Object {
-        $_ -notmatch '\b(?:GetInterface|GetRpClump|GetOccupiedSeat|SetOccupiedSeat)\s*\(' -and
+        $_ -notmatch '\b(?:GetInterface|GetRpClump|GetOccupiedSeat|SetOccupiedSeat|ClearWeapons|AddProjectile)\s*\(' -and
         $_ -notmatch '\bGetWeapon\s*\(eWeaponType\b' -and $_ -notmatch '\b(?:GetVoice|SetVoice)\s*\(std::int16_t\b'
     })
-    if($lines.Count -ne 101 -or $pedRejectors.Count -ne 94){throw 'Expected 94 remaining ped and backend overrides from the rebuild fixture.'}
+    if($lines.Count -ne 101 -or $pedRejectors.Count -ne 92){throw 'Expected 92 remaining ped and backend overrides from the rebuild fixture.'}
     $player=[IO.File]::ReadAllText((Join-Path $RepositoryRoot 'Client/sdk/game/CPlayerPed.h'))
     $playerRejectors=@(foreach($match in [regex]::Matches($player,'virtual\s+(?<signature>[^;{}]+?)\s*=\s*0\s*;')) {
         $signature=[regex]::Replace($match.Groups['signature'].Value,'\s+',' ').Trim()
@@ -24,14 +24,21 @@ function Write-LocalPlayerCompositionFixture([string]$RepositoryRoot,[string]$Ou
     if($playerRejectors.Count -ne 3){throw 'Strict remaining player surface changed.'}
     $rejectors=@($pedRejectors)+@($playerRejectors)
     $declarations=@($rejectors | ForEach-Object {([regex]::Replace($_,'\s+override\b.*$',' override;')).Replace('protected:','').Trim()})
-    if($declarations.Count -ne 97){throw 'Expected 95 SDK methods and two backend hooks.'}
-    $playerMethods=@($rejectors | Where-Object {$_ -notmatch '\bGetPedSound\s*\('})
-    $body=@($prefix,
+    if($declarations.Count -ne 95){throw 'Expected 93 SDK methods and two backend hooks.'}
+    $playerMethods=@($rejectors | Where-Object {$_ -notmatch '\bGetPedSound\s*\(' -and $_ -notmatch '\bGetWeapon\s*\(eWeaponSlot\b'})
+    $weaponHeader=[IO.File]::ReadAllText((Join-Path $RepositoryRoot 'Client/sdk/game/CWeapon.h'))
+    $rejectingWeaponMethods=@(foreach($match in [regex]::Matches($weaponHeader,'virtual\s+(?<signature>[^;{}]+?)\s*=\s*0\s*;')) {
+        $signature=[regex]::Replace($match.Groups['signature'].Value,'\s+',' ').Trim()
+        if($signature -notmatch '\b(?:SetAmmoInClip|SetAmmoTotal|Remove)\s*\('){$signature+' override {Unqualified("Weapon");}'}
+    })
+    $body=@($prefix,'class WeaponBase : public CWeapon {public:')+@($rejectingWeaponMethods)+@('};',
         'class Player final : public mta::game_de::CPlayerPedCompositionDE { public:',
         'Player(mta::game_de::NativeGameTimingAccess& owner,const mta::game_de::NativePedReferenceToken& token,CGame& game,mta::game_de::CPoolsDE& pools,CWanted* wanted,std::uint32_t wrapperType,unsigned* destroyed=nullptr) : CPlayerPedCompositionDE(owner,token,game,pools,wanted,wrapperType),destructionCount(destroyed) {}',
         '~Player() override {if(destructionCount)++*destructionCount;}',
         'const mta::game_de::NativePedReferenceToken* FixtureTokenAddress() const noexcept {return &ReferenceToken();}',
         'void FixtureCustomMoveAnim(int value) noexcept {m_iCustomMoveAnim=value;}',
+        'std::array<CWeapon*,WEAPONSLOT_MAX> slots{};',
+        'CWeapon* GetWeapon(eWeaponSlot slot) const noexcept override {return slots.at(static_cast<std::size_t>(slot));}',
         'CPedSound* sound=nullptr;',
         'CPedSound* GetPedSound() const noexcept override {return sound;}')+@($playerMethods)+@(
         'private:unsigned* destructionCount;','};',
@@ -59,7 +66,7 @@ function Write-LocalPlayerCompositionFixture([string]$RepositoryRoot,[string]$Ou
     $body=@('#pragma once','#if defined(_MSC_VER)','#pragma warning(push)','#pragma warning(disable : 4100 4250)','#endif')+$body+@('#if defined(_MSC_VER)','#pragma warning(pop)','#endif')
     [IO.File]::WriteAllLines($OutputPath,$body,[Text.UTF8Encoding]::new($false))
     [ordered]@{path=$OutputPath;sha256=(Get-FileHash -LiteralPath $OutputPath -Algorithm SHA256).Hash.ToLowerInvariant();
-        inheritedSdkSignatures=75;rejectingPedSdkSignatures=91;fixturePedSoundProviders=1;rejectingPlayerSdkSignatures=3;rejectingBackendHooks=2;
-        pureOmissionProbes=97;historicalTestsExecuted=$false;productionFactoryPublished=$false;
+        inheritedSdkSignatures=77;rejectingPedSdkSignatures=88;fixturePedSoundProviders=1;fixtureWeaponSlotProviders=1;rejectingPlayerSdkSignatures=3;rejectingBackendHooks=2;
+        pureOmissionProbes=95;historicalTestsExecuted=$false;productionFactoryPublished=$false;
         parentRebuild=$parent;parentPools=$poolReceipt}
 }

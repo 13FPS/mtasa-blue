@@ -17,7 +17,7 @@ foreach($name in @('TEMP','TMP','VCToolsInstallDir','INCLUDE','LIB','LIBPATH','P
 $markers=@('localPlayerCompositionSdkTested','localPlayerCompositionSingleBaseTested','localPlayerCompositionOwnerTested','localPlayerCompositionDispatchTested','localPlayerCompositionPureSurfaceTested')
 $record=[ordered]@{schema='mta_local_player_composition_sdk_tests_v1';directory=$outputRoot;success=$false;recordedAt=[DateTimeOffset]::Now.ToString('o');
     sourceHashes=@();sourcesUnchanged=$true;generatedFixture=$null;results=@();failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;
-    scope='Actual maximal abstract ped/player composition, exact same-owner constructor, one shared SDK identity, representative inherited dispatch and 97 pure omission probes. Old implementation definitions link without their historical main/cases. Explicit doubles only.';
+    scope='Actual maximal abstract ped/player composition, exact same-owner constructor, one shared SDK identity, representative inherited dispatch and 95 pure omission probes. Old implementation definitions link without their historical main/cases. Explicit doubles only.';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;completeCGameReady=$false;completePedReady=$false;fullMtaReady=$false;productionFactoryPublished=$false}
 foreach($marker in $markers){$record[$marker]=$false}
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -132,9 +132,9 @@ try {
         $result['localPlayerCompositionSingleBaseTested']=$stdout.Contains('Actual local player composition single base fixture completed')
         $result['localPlayerCompositionOwnerTested']=$stdout.Contains('Actual local player composition owner admission fixture completed')
         $result['localPlayerCompositionDispatchTested']=$stdout.Contains('Actual local player composition inherited dispatch fixture completed')
-        $result['localPlayerCompositionPureSurfaceTested']=$stdout.Contains('All 95 local player SDK methods and two backend hooks remain abstract')
+        $result['localPlayerCompositionPureSurfaceTested']=$stdout.Contains('All 93 local player SDK methods and two backend hooks remain abstract')
         $bits=if($architecture -eq 'x86'){32}else{64}
-        if($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -ne 33 -or $result.pointerBits -ne $bits){throw "$architecture composition SDK checks failed."}
+        if($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -ne 39 -or $result.pointerBits -ne $bits){throw "$architecture composition SDK checks failed."}
         foreach($marker in $markers){if(-not $result[$marker]){throw "$architecture required marker missing: $marker"}}
     }
     foreach($marker in $markers){$record[$marker]=@($record.results|Where-Object{-not $_[$marker]}).Count -eq 0}

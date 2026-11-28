@@ -11,6 +11,7 @@ namespace mta::game_de
     class CPedClearWeaponDE : public CPedGiveWeaponDE
     {
     public:
+        void ClearWeapons() override;
         void ClearWeapon(eWeaponType weaponType) override;
 
     protected:
@@ -33,7 +34,6 @@ namespace mta::game_de
     private:
         NativePedWeaponClearAccess& nativeClearAccess;
     };
-    // The genuine single-weapon operation needs no returned wrapper lookup.
-    // The enclosing ped supplies ClearWeapons and its weapon slot inventory.
+    // The enclosing ped owns the weapon wrappers for its thirteen slots.
     static_assert(std::is_abstract_v<CPedClearWeaponDE> && std::is_base_of_v<CPedGiveWeaponDE, CPedClearWeaponDE>);
 }

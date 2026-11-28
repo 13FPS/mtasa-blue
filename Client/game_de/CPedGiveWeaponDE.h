@@ -11,6 +11,7 @@ namespace mta::game_de
     class CPedGiveWeaponDE : public CPedOnScreenDE
     {
     public:
+        bool AddProjectile(eWeaponType weaponType, CVector origin, float force, CVector* target, CEntity* targetEntity) override;
         using CPed::GetWeapon;
         CWeapon* GetWeapon(eWeaponType weaponType) const override;
         CWeapon* GiveWeapon(eWeaponType weaponType, std::uint32_t ammo, eWeaponSkill skill) override;

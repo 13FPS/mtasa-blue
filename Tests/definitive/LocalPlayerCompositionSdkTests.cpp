@@ -10,9 +10,11 @@
 #include <game/CGame.h>
 #include <game/CPedIK.h>
 #include <game/CPedSound.h>
+#include <game/CProjectileInfo.h>
 #include <game/CWanted.h>
 #include "../../Client/game_de/CPlayerPedCompositionDE.h"
 #include "../../Client/game_de/CPedBorrowedFactoryDE.h"
+#include <game/CWeapon.h>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -169,6 +171,116 @@ namespace
             return status;
         }
     };
+    struct Projectiles final : CProjectileInfo
+    {
+        CEntity*    creator = nullptr;
+        CEntity*    targetEntity = nullptr;
+        CVector*    targetPoint = nullptr;
+        CVector     origin{};
+        float       force = 0;
+        eWeaponType weapon = WEAPONTYPE_UNARMED;
+        bool        result = false;
+        unsigned    calls = 0;
+        bool        AddProjectile(CEntity* source, eWeaponType type, CVector start, float strength, CVector* point, CEntity* entity) override
+        {
+            ++calls;
+            creator = source;
+            targetEntity = entity;
+            targetPoint = point;
+            origin = start;
+            force = strength;
+            weapon = type;
+            return result;
+        }
+        CProjectile*     GetProjectile(void*) override { std::abort(); }
+        CProjectileInfo* GetProjectileInfo(void*) override { std::abort(); }
+        CProjectileInfo* GetProjectileInfo(DWORD) override { std::abort(); }
+        void             RemoveProjectile(CProjectileInfo*, CProjectile*, bool) override { std::abort(); }
+        void             RemoveEntityReferences(CEntity*) override { std::abort(); }
+        CEntity*         GetTarget() override { std::abort(); }
+        void             SetTarget(CEntity*) override { std::abort(); }
+        bool             IsActive() override { std::abort(); }
+        void             SetCounter(DWORD) override { std::abort(); }
+        DWORD            GetCounter() override { std::abort(); }
+    };
+
+    struct Game final : local_player_composition_fixture::Game
+    {
+        CProjectileInfo* projectiles = nullptr;
+        CProjectileInfo* GetProjectileInfo() override { return projectiles; }
+    };
+
+    struct SlotWeapon final : local_player_composition_fixture::WeaponBase
+    {
+        std::string* events = nullptr;
+        char         identity = 0;
+        void         Record(char action)
+        {
+            events->push_back(identity);
+            events->push_back(action);
+        }
+        void SetAmmoInClip(std::uint32_t ammo) override
+        {
+            if (ammo != 0)
+                std::abort();
+            Record('C');
+        }
+        void SetAmmoTotal(std::uint32_t ammo) override
+        {
+            if (ammo != 0)
+                std::abort();
+            Record('T');
+        }
+        void Remove() override { Record('R'); }
+    };
+
+    void CheckWeaponServices(Player& implementation, CPed& ped, Game& game)
+    {
+        std::string                            events, expected;
+        std::array<SlotWeapon, WEAPONSLOT_MAX> bank;
+        for (std::size_t i = 0; i < bank.size(); ++i)
+        {
+            bank[i].events = &events;
+            bank[i].identity = static_cast<char>('a' + i);
+            implementation.slots[i] = &bank[i];
+            for (const char operation : {'C', 'T', 'R'})
+            {
+                expected.push_back(bank[i].identity);
+                expected.push_back(operation);
+            }
+        }
+
+        implementation.slots.back() = nullptr;
+        bool refused = false;
+        try
+        {
+            ped.ClearWeapons();
+        }
+        catch (const std::runtime_error&)
+        {
+            refused = true;
+        }
+        Check(refused && events.empty(), "an incomplete weapon bank is refused before modifying an earlier slot");
+        implementation.slots.back() = &bank.back();
+        ped.ClearWeapons();
+        Check(events == expected, "all weapon slots get zero clip, zero total, then removal in slot order");
+        implementation.slots.fill(nullptr);
+
+        CVector     origin(2, -4, 8), destination(-3, 10, 5);
+        Projectiles projectiles;
+        Check(!ped.AddProjectile(WEAPONTYPE_GRENADE, origin, 0.5f, &destination, &ped), "an absent projectile service declines the request");
+        game.projectiles = &projectiles;
+        Check(!ped.AddProjectile(WEAPONTYPE_GRENADE, origin, 0.5f, &destination, &ped), "the ped returns the projectile provider's rejection");
+        Check(projectiles.creator == &ped && projectiles.targetEntity == &ped && projectiles.targetPoint == &destination && projectiles.origin == origin &&
+                  projectiles.force == 0.5f && projectiles.weapon == WEAPONTYPE_GRENADE,
+              "the projectile service receives the actual creator, target, type, position and force");
+        projectiles.result = true;
+        Check(ped.AddProjectile(WEAPONTYPE_MOLOTOV, origin, -0.25f, nullptr, nullptr) && !projectiles.targetEntity && !projectiles.targetPoint &&
+                  projectiles.force == -0.25f && projectiles.weapon == WEAPONTYPE_MOLOTOV && projectiles.calls == 2,
+              "acceptance, uncapped input and optional null targets pass through one SDK call");
+        game.projectiles = nullptr;
+    }
+
     struct Sound final : CPedSound
     {
         short       typeID = -1;
@@ -264,7 +376,7 @@ int main()
         static_assert(std::is_constructible_v<Player, NativeGameTimingAccess&, const NativePedReferenceToken&, CGame&, CPoolsDE&, CWanted*, std::uint32_t>);
         static_assert(!std::is_copy_constructible_v<Player> && !std::is_move_constructible_v<Player>);
         Owner                                   owner, foreign;
-        local_player_composition_fixture::Game  game;
+        Game                                    game;
         local_player_composition_fixture::Pools pools(owner);
         unsigned                                destroyed = 0, wantedDestroyed = 0;
         Wanted                                  wanted(wantedDestroyed);
@@ -308,6 +420,7 @@ int main()
         player->SetOccupiedSeat(0);
         Check(ped->GetOccupiedSeat() == 0, "both player and ped SDK views share the driver seat");
         CheckNumericVoice(*implementation, *player);
+        CheckWeaponServices(*implementation, *player, game);
         unsigned identity = 0;
         player->SetStoredPointer(&identity);
         Check(static_cast<CPed*>(static_cast<CPedPooledDE*>(implementation))->GetStoredPointer() == &identity,
@@ -342,8 +455,8 @@ int main()
         Check(factory.Retire() == ClockResult::Ok && destroyed == 1 && owner.releases == 1 && !wantedDestroyed,
               "completed typed retirement is idempotent and does not destroy the borrowed wanted view");
         Check(std::is_abstract_v<CPlayerPedCompositionDE>, "production composition remains abstract despite the strict test-only complete receiver");
-        Check(!std::is_abstract_v<Player>, "exact 95 SDK and two backend strict declarations close only the fixture");
-        std::puts("All 95 local player SDK methods and two backend hooks remain abstract");
+        Check(!std::is_abstract_v<Player>, "exact 93 SDK and two backend strict declarations close only the fixture");
+        std::puts("All 93 local player SDK methods and two backend hooks remain abstract");
         std::puts("Actual local player composition SDK fixture completed");
         std::printf("Passed %u local player composition SDK checks (%zu-bit; no native engine code executed)\n", checks, sizeof(void*) * 8);
         return 0;

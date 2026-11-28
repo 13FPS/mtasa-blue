@@ -3,7 +3,7 @@
 # Focused actual ped/player composition, with unchanged inherited code linked only.
 [CmdletBinding()]
 # The composed DE owner requires 64-bit pointers. Explicit x86 remains available for ABI diagnostics.
-param([ValidateSet('x86','x64')][string[]]$Architectures=@('x64'))
+param([ValidateNotNullOrEmpty()][ValidateSet('x86','x64')][string[]]$Architectures=@('x64'))
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
 $taskRoot=(Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path

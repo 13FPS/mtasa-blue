@@ -1,8 +1,8 @@
 #!/usr/bin/env pwsh
 #requires -Version 7.0
-# Exercise only the same-ped intelligence/manager SDK borrow; no native task adoption or historical replay.
+# Exercise the same-ped manager and current attack-task lookups using SDK wrappers.
 [CmdletBinding()]
-param([ValidateSet('x86','x64')][string[]]$Architectures=@('x64'))
+param([ValidateNotNullOrEmpty()][ValidateSet('x86','x64')][string[]]$Architectures=@('x64'))
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest

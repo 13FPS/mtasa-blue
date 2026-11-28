@@ -13,9 +13,7 @@ class CBassAudio;
 
 #pragma once
 
-#include <cstdlib>
 #include <memory>
-#include <new>
 #include "CClientSoundManager.h"
 #include "CClientEntity.h"
 #include "CSimulatedPlayPosition.h"
@@ -111,49 +109,21 @@ protected:
     void Destroy();
 
 private:
-    struct AudioBufferDeleter
-    {
-        using DeleterFn = void (*)(void*) noexcept;
-
-        AudioBufferDeleter() noexcept = default;
-        explicit AudioBufferDeleter(DeleterFn fn) noexcept { Set(fn); }
-
-        void operator()(void* ptr) const noexcept
-        {
-            if (ptr)
-                m_Deleter(ptr);
-        }
-
-        void Set(DeleterFn fn) noexcept { m_Deleter = fn ? fn : &DeleteArrayImpl; }
-
-        static AudioBufferDeleter ForNewArray() noexcept { return AudioBufferDeleter(&DeleteArrayImpl); }
-        static AudioBufferDeleter ForMalloc() noexcept { return AudioBufferDeleter(&FreeImpl); }
-        static AudioBufferDeleter ForExternalReference() noexcept { return AudioBufferDeleter(&NoopImpl); }
-
-    private:
-        static void DeleteArrayImpl(void* ptr) noexcept { delete[] static_cast<uint8_t*>(ptr); }
-        static void FreeImpl(void* ptr) noexcept { std::free(ptr); }
-        static void NoopImpl(void*) noexcept {}
-
-        DeleterFn m_Deleter = &DeleteArrayImpl;
-    };
-    using BufferPtr = std::unique_ptr<void, AudioBufferDeleter>;
-
     void ReleaseBuffer();
-    void AdoptBuffer(void* pMemory, unsigned int uiLength, AudioBufferDeleter deleter = {});
+    bool AdoptBuffer(void* pMemory, unsigned int uiLength);
 
     CClientSoundManager*   m_pSoundManager;
     CSimulatedPlayPosition m_SimulatedPlayPosition;
     CBassAudio*            m_pAudio;
 
     // Initial state
-    bool         m_bStream;
-    bool         m_b3D;
-    SString      m_strPath;
-    bool         m_bLoop;
-    bool         m_bThrottle;
-    BufferPtr    m_Buffer;
-    unsigned int m_uiBufferLength;
+    bool                             m_bStream;
+    bool                             m_b3D;
+    SString                          m_strPath;
+    bool                             m_bLoop;
+    bool                             m_bThrottle;
+    std::unique_ptr<unsigned char[]> m_Buffer;
+    unsigned int                     m_uiBufferLength;
 
     // Info
     bool                       m_bDoneCreate;

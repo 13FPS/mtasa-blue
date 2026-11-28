@@ -120,19 +120,6 @@ CBassAudio::CBassAudio(bool bStream, const SString& strPath, bool bLoop, bool bT
     m_uiCallbackId = AddCallbackId(this);
 }
 
-CBassAudio::CBassAudio(void* pBuffer, unsigned int uiBufferLength, bool bLoop, bool b3D)
-    : m_bStream(false), m_pBuffer(pBuffer), m_uiBufferLength(uiBufferLength), m_bLoop(bLoop), m_bThrottle(false), m_b3D(b3D)
-{
-    m_fVolume = 1.0f;
-    m_fDefaultFrequency = 44100.0f;
-    m_fMinDistance = 5.0f;
-    m_fMaxDistance = 20.0f;
-    m_fPlaybackSpeed = 1.0f;
-    m_bPaused = false;
-    m_bPan = true;
-    m_uiCallbackId = AddCallbackId(this);
-}
-
 CBassAudio::~CBassAudio()
 {
     assert(m_uiCallbackId == 0);
@@ -140,6 +127,8 @@ CBassAudio::~CBassAudio()
     {
         BASS_ChannelStop(m_pSound);
     }
+    if (m_trackerSource)
+        BASS_MusicFree(m_trackerSource);
 
     SAFE_DELETE(m_pVars);
 }
@@ -172,7 +161,7 @@ void CBassAudio::Destroy()
 //
 // This will return false for non streams if the file is not correct
 //
-bool CBassAudio::BeginLoadingMedia()
+bool CBassAudio::BeginLoadingMedia(const void* data, unsigned int length)
 {
     assert(!m_pSound && !m_bPendingPlay);
 
@@ -213,7 +202,7 @@ bool CBassAudio::BeginLoadingMedia()
         //
         // Check if this file has recently failed to load (file-based only, not buffers)
         const DWORD dwCurrentTime = GetTickCount32();
-        if (!m_pBuffer)
+        if (!data)
         {
             std::lock_guard<std::mutex> lock(ms_FailedFilesMutex);
             const auto                  it = ms_FailedAudioFiles.find(m_strPath);
@@ -239,12 +228,12 @@ bool CBassAudio::BeginLoadingMedia()
         */
         long lCreateFlags = BASS_MUSIC_PRESCAN | BASS_STREAM_DECODE;
 
-        if (!m_pBuffer)
+        if (!data)
         {
             m_pSound = BASS_StreamCreateFile(false, FromUTF8(m_strPath), 0, 0, lCreateFlags | BASS_UNICODE);
             if (!m_pSound)
-                m_pSound = BASS_MusicLoad(false, FromUTF8(m_strPath), 0, 0, BASS_MUSIC_RAMP | BASS_MUSIC_PRESCAN | BASS_STREAM_DECODE | BASS_UNICODE,
-                                          0);  // Try again
+                m_pSound = m_trackerSource =
+                    BASS_MusicLoad(false, FromUTF8(m_strPath), 0, 0, BASS_MUSIC_RAMP | BASS_MUSIC_PRESCAN | BASS_STREAM_DECODE | BASS_UNICODE, 0);
             if (!m_pSound && m_b3D)
             {
                 // Last try if 3D - check cache first to avoid spammed mono conversion attempts
@@ -270,9 +259,11 @@ bool CBassAudio::BeginLoadingMedia()
         }
         else
         {
-            m_pSound = BASS_StreamCreateFile(true, m_pBuffer, 0, m_uiBufferLength, lCreateFlags);
+            // Delayed stops and distance re-entry can leave multiple decoders
+            // alive after the entity releases or replaces its source bytes.
+            m_pSound = BASS_StreamCreateFile(BASS_FILE_MEMCOPY, data, 0, length, lCreateFlags);
             if (!m_pSound)
-                m_pSound = BASS_MusicLoad(true, m_pBuffer, 0, m_uiBufferLength, lCreateFlags, 0);
+                m_pSound = m_trackerSource = BASS_MusicLoad(BASS_FILE_MEM, data, 0, length, lCreateFlags, 0);
         }
 
         // Failed to load ?
@@ -280,7 +271,7 @@ bool CBassAudio::BeginLoadingMedia()
         {
             const int nErrorCode = BASS_ErrorGetCode();
             // Only cache file-not-found errors to prevent spam
-            if (!m_pBuffer && nErrorCode == BASS_ERROR_FILEOPEN)
+            if (!data && nErrorCode == BASS_ERROR_FILEOPEN)
             {
                 std::lock_guard<std::mutex> lock(ms_FailedFilesMutex);
                 if (ms_FailedAudioFiles.size() >= MAX_FAILED_FILES_CACHE_SIZE)
@@ -307,17 +298,23 @@ bool CBassAudio::BeginLoadingMedia()
         }
 
         // Successfully loaded - remove from failed cache if it was there
-        if (!m_pBuffer)
+        if (!data)
         {
             std::lock_guard<std::mutex> lock(ms_FailedFilesMutex);
             ms_FailedAudioFiles.erase(m_strPath);
         }
 
-        HSTREAM pReversed = BASS_FX_ReverseCreate(m_pSound, 2.0f, BASS_STREAM_DECODE | BASS_FX_FREESOURCE | BASS_MUSIC_PRESCAN);
+        // BASS FX releases stream sources on both architectures. Keep ownership
+        // of tracker music explicitly because the x64 add-on leaves HMUSIC live.
+        DWORD reverseFlags = BASS_STREAM_DECODE | BASS_MUSIC_PRESCAN;
+        if (!m_trackerSource)
+            reverseFlags |= BASS_FX_FREESOURCE;
+        HSTREAM pReversed = BASS_FX_ReverseCreate(m_pSound, 2.0f, reverseFlags);
         if (!pReversed)
         {
             g_pCore->GetConsole()->Printf("BASS ERROR %d in BASS_FX_ReverseCreate  path:%s  3d:%d  loop:%d", BASS_ErrorGetCode(), *m_strPath, m_b3D, m_bLoop);
-            BASS_StreamFree(m_pSound);
+            if (!m_trackerSource)
+                BASS_StreamFree(m_pSound);
             m_pSound = 0;
             return false;
         }
@@ -349,6 +346,7 @@ bool CBassAudio::BeginLoadingMedia()
         if (!m_pSound)
         {
             g_pCore->GetConsole()->Printf("BASS ERROR %d in CreateTempo  path:%s  3d:%d  loop:%d", BASS_ErrorGetCode(), *m_strPath, m_b3D, m_bLoop);
+            BASS_StreamFree(pReversed);
             return false;
         }
 

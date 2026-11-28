@@ -80,7 +80,11 @@ def main():
     scratch = ROOT / "Build/tmp"
     scratch.mkdir(exist_ok=True)
     record = {"success": False, "requestedArchitecture": arch, "architecture": None, "inputs": {}, "methods": {}, "bassDevice": 0}
-    dll = (args.bass_dll or ROOT / ("Bin/mods/deathmatch/x64/bass.dll" if arch == "x64" else "Shared/data/MTA San Andreas/MTA/bass.dll")).resolve()
+    staged = ROOT / ("Bin/mods/deathmatch/x64" if arch == "x64" else "Shared/data/MTA San Andreas/MTA")
+    dll = (args.bass_dll or staged / "bass.dll").resolve()
+    fx = dll.with_name("bass_fx.dll")
+    if not fx.is_file():
+        fx = staged / "bass_fx.dll"
     lib = ROOT / ("vendor/bass/lib/x64/bass.lib" if arch == "x64" else "vendor/bass/lib/bass.lib")
 
     def read(path):
@@ -94,7 +98,16 @@ def main():
         record["importLibrary"] = lib.relative_to(ROOT).as_posix()
         if record["bassDll"]["architecture"] != arch:
             raise ValueError(f"BASS DLL machine {record['bassDll']['architecture']} does not match requested {arch}: {dll}")
+        if pe_architecture(fx) != arch:
+            raise ValueError(f"BASS FX DLL machine does not match requested {arch}: {fx}")
         methods = []
+        buffer_methods = []
+        buffer_signatures = {
+            "CBassAudio.cpp": ["bool CBassAudio::BeginLoadingMedia(", "CBassAudio::~CBassAudio("],
+            "CClientSound.cpp": ["void CClientSound::ReleaseBuffer(", "bool CClientSound::AdoptBuffer(", "bool CClientSound::Play(void*",
+                                 "bool CClientSound::Play3D(void*"],
+            "CClientSoundManager.cpp": ["static std::unique_ptr<unsigned char[]> CopyRawAudio("],
+        }
         for path, signatures in (
             (ROOT / "Shared/mods/deathmatch/logic/Utils.h", ["inline float DistanceBetweenPoints3D(", "inline float ConvertDegreesToRadiansNoWrap("]),
             (LOGIC / "CClientCamera.cpp", ["bool CClientCamera::GetMatrix(", "void CClientCamera::SetFixedTarget("]),
@@ -108,10 +121,10 @@ def main():
             if path.name == "CClientCamera.cpp":
                 # Include the same degree conversion, roll table and orthonormality helpers used by the fixed camera.
                 methods.append(source[source.index("    constexpr float"):source.index("    inline CMatrix& ScratchMatrix")])
-            for signature in signatures:
+            for signature in [*signatures, *buffer_signatures.get(path.name, ())]:
                 start = source.index(signature)
                 body = source[start:source.index("\n}", start) + 2]
-                methods.append(body)
+                (methods if signature in signatures else buffer_methods).append(body)
                 record["methods"][signature] = hashlib.sha256(body.encode()).hexdigest()
         header = read(LOGIC / "CBassAudio.h").decode("utf-8-sig")
         worker_state = header[header.index("struct SSoundThreadVariables"):header.index("class CBassAudio")]
@@ -123,7 +136,10 @@ def main():
             locks.append(misc[start:misc.index("\n}", start) + 2])
         cutoff = next(line for line in header.splitlines() if line.startswith("#define CUT_OFF "))
         connections = HOST.with_name("SoundStreamConnectionTests.cpp")
-        for path in (HOST, connections, LOGIC / "CSoundStreamConnections.h", LOGIC / "CClientSoundManager.h", LOGIC.parent / "CClient.cpp",
+        buffers = HOST.with_name("SoundBufferTests.cpp")
+        fxlib = lib.with_name("bass_fx.lib")
+        for path in (HOST, connections, buffers, fx, fxlib, ROOT / "vendor/bass/bass_fx.h", LOGIC / "CClientSound.h",
+                     LOGIC / "CSoundStreamConnections.h", LOGIC / "CClientSoundManager.h", LOGIC.parent / "CClient.cpp",
                      Path(__file__).resolve(), dll, lib, ROOT / "vendor/bass/bass.h",
                      SDK / "CMatrix.h", SDK / "CVector.h", SDK / "CVector4D.h", SDK / "CSphere.h", SDK / "SharedUtil.Map.h", SDK / "SharedUtil.Misc.h", SDK / "SString.hpp"):
             read(path)
@@ -135,23 +151,26 @@ def main():
             work = Path(tmp)
             (work / "ListenerMethods.generated.inl").write_text(cutoff + "\n\n" + "\n\n".join(methods) + "\n", encoding="utf-8")
             (work / "SoundWorkerState.generated.inl").write_text(worker_state, encoding="utf-8")
+            (work / "SoundBufferMethods.generated.inl").write_text("\n\n".join(buffer_methods), encoding="utf-8")
             (work / "WindowsCriticalSection.generated.inl").write_text("\n\n".join(locks), encoding="utf-8")
             shutil.copy2(dll, work / "bass.dll")
+            shutil.copy2(fx, work / "bass_fx.dll")
             cmd = ["cl", "/nologo", "/EHsc", "/O2", "/MT", "/std:c++17", "/DNOMINMAX", "/DWIN32", "/D_CRT_SECURE_NO_WARNINGS",
                    "/I" + str(work), "/I" + str(SDK), "/I" + str(ROOT / "vendor/bass"), str(HOST), str(lib), "/Fe:listener.exe"]
             common = ["cl", "/nologo", "/EHsc", "/O2", "/MT", "/std:c++17", "/DNOMINMAX", "/DWIN32", "/I" + str(ROOT / "vendor/bass")]
             fixture_dll = [*common, "/LD", "/DSTREAM_FIXTURE_DLL", str(connections), str(lib), "/Fe:stream-fixture.dll"]
             fixture_host = [*common, str(connections), "/Fe:stream-host.exe"]
+            buffer_host = [*common, "/I" + str(work), str(buffers), str(lib), str(fxlib), "/Fe:buffers.exe"]
             (work / "build.cmd").write_text(f'@echo off\ncall "{vs}/Common7/Tools/VsDevCmd.bat" -no_logo -arch={arch} -host_arch=x64\n'
-                                            + "".join(f'if errorlevel 1 exit /b 1\n{subprocess.list2cmdline(line)}\n' for line in (cmd, fixture_dll, fixture_host)))
+                                            + "".join(f'if errorlevel 1 exit /b 1\n{subprocess.list2cmdline(line)}\n' for line in (cmd, fixture_dll, fixture_host, buffer_host)))
             env = dict(os.environ, TEMP=tmp, TMP=tmp)
             for var in ("CL", "_CL_", "LINK", "_LINK_"):
                 env.pop(var, None)
             for label, command in (("compile", [env["COMSPEC"], "/d", "/c", "build.cmd"]), ("run", [str(work / "listener.exe")]),
-                                   ("connections", [str(work / "stream-host.exe")])):
+                                   ("connections", [str(work / "stream-host.exe")]), ("buffers", [str(work / "buffers.exe")])):
                 if label == "run":
                     record["binaries"] = {}
-                    for name in ("listener.exe", "stream-fixture.dll", "stream-host.exe"):
+                    for name in ("listener.exe", "stream-fixture.dll", "stream-host.exe", "buffers.exe"):
                         binary = work / name
                         machine = pe_architecture(binary)
                         if machine != arch:
@@ -159,7 +178,7 @@ def main():
                         record["binaries"][name] = {"architecture": machine, "sha256": hashlib.sha256(binary.read_bytes()).hexdigest()}
                     record["architecture"] = record["binaries"]["listener.exe"]["architecture"]
                 with (output / (label + ".log")).open("wb") as log:
-                    run = subprocess.run if label == "compile" else run_with_local_audio
+                    run = run_with_local_audio if label in ("run", "connections") else subprocess.run
                     result = run(command, cwd=work, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=90)
                 record[label] = result.returncode
                 result.check_returncode()

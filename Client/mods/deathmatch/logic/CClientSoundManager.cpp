@@ -11,6 +11,8 @@
 #include "StdInc.h"
 #include <game/CSettings.h>
 #include "CBassAudio.h"
+#include <limits>
+#include <memory>
 
 using SharedUtil::CalcMTASAPath;
 using std::list;
@@ -129,6 +131,15 @@ void CClientSoundManager::SetDimension(unsigned short usDimension)
     m_usDimension = usDimension;
 }
 
+static std::unique_ptr<unsigned char[]> CopyRawAudio(const SString& bytes)
+{
+    if (bytes.empty() || bytes.size() > std::numeric_limits<unsigned int>::max())
+        return {};
+    auto copy = std::make_unique<unsigned char[]>(bytes.size());
+    std::memcpy(copy.get(), bytes.data(), bytes.size());
+    return copy;
+}
+
 CClientSound* CClientSoundManager::PlaySound2D(const SString& strSound, bool bIsURL, bool bIsRawData, bool bLoop, bool bThrottle)
 {
     CClientSound* pSound = new CClientSound(m_pClientManager, INVALID_ELEMENT_ID);
@@ -139,15 +150,9 @@ CClientSound* CClientSoundManager::PlaySound2D(const SString& strSound, bool bIs
     }
     else if (bIsRawData)
     {
-        size_t size = strSound.size();
-        void*  pMemory = new char[size];
-
-        memcpy(pMemory, strSound.data(), size);
-
-        if (pSound->Play((void*)pMemory, size, bLoop))
+        auto data = CopyRawAudio(strSound);
+        if (data && pSound->Play(data.release(), static_cast<unsigned int>(strSound.size()), bLoop))
             return pSound;
-
-        // Note: pMemory is already owned by pSound via AdoptBuffer, don't delete it here
     }
     else if (pSound->Play(strSound, bLoop))
         return pSound;
@@ -179,18 +184,12 @@ CClientSound* CClientSoundManager::PlaySound3D(const SString& strSound, bool bIs
     }
     else if (bIsRawData)
     {
-        size_t size = strSound.size();
-        void*  pMemory = new char[size];
-
-        memcpy(pMemory, strSound.data(), size);
-
-        if (pSound->Play3D((void*)pMemory, size, bLoop))
+        auto data = CopyRawAudio(strSound);
+        if (data && pSound->Play3D(data.release(), static_cast<unsigned int>(strSound.size()), bLoop))
         {
             pSound->SetPosition(vecPosition);
             return pSound;
         }
-
-        // Note: pMemory is already owned by pSound via AdoptBuffer, don't delete it here
     }
     else if (pSound->Play3D(strSound, bLoop))
     {

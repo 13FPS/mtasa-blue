@@ -55,11 +55,10 @@ class CBassAudio
 public:
     ZERO_ON_NEW
     CBassAudio(bool bStream, const SString& strPath, bool bLoop, bool bThrottle, bool b3D);
-    CBassAudio(void* pBuffer, unsigned int uiBufferLength, bool bLoop, bool b3D);
     ~CBassAudio();
     void Destroy();
 
-    bool BeginLoadingMedia();
+    bool BeginLoadingMedia(const void* data, unsigned int length);
 
     void   SetPaused(bool bPaused);
     bool   SetPlayPosition(double dPosition);
@@ -129,11 +128,10 @@ private:
     const SString m_strPath;
     const bool    m_b3D;
     const bool    m_bThrottle;
-    void*         m_pBuffer;
-    unsigned int  m_uiBufferLength;
 
-    bool  m_bPendingPlay;
-    DWORD m_pSound;
+    bool   m_bPendingPlay;
+    DWORD  m_pSound;
+    HMUSIC m_trackerSource = 0;
 
     // Playback state
     bool    m_bLoop;

@@ -11,8 +11,8 @@
 namespace mta::game_de
 {
     class CPedIntelligenceDE;
-    // Task lookup, assignment, and every operation requiring a persistent CTask
-    // remain pure. This slice cannot be published as a complete task manager.
+    // Typed lookup and assignment still need a task provider. The SDK uses
+    // that lookup before requesting removal of a particular task type.
     class CTaskManagerDE : public CTaskManager
     {
     public:

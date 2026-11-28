@@ -10,6 +10,8 @@
 #include <SharedUtil.Defines.h>
 #include "CTaskManagerDE.h"
 #include "NativeGameTimingAccess.h"
+#include <game/CPedTaskPolicy.h>
+#include <game/TaskAttack.h>
 #include <stdexcept>
 #include <string>
 namespace mta::game_de
@@ -62,5 +64,15 @@ namespace mta::game_de
         Require(native.ReadReferencedPedIntelligence(reference, after), "GetTaskManager");
         Require(PedIntelligenceSdkDetail::Same(before, after) && HasManagerBinding() ? ClockResult::Ok : ClockResult::BindingChanged, "GetTaskManager");
         return &manager;
+    }
+
+    CTaskSimpleUseGun* CPedIntelligenceDE::GetTaskUseGun()
+    {
+        return MtaGame::CPedTaskPolicy::GetAttackTask<CTaskSimpleUseGun>(GetTaskManager(), TASK_SIMPLE_USE_GUN);
+    }
+
+    CTaskSimpleFight* CPedIntelligenceDE::GetFightTask()
+    {
+        return MtaGame::CPedTaskPolicy::GetAttackTask<CTaskSimpleFight>(GetTaskManager(), TASK_SIMPLE_FIGHT);
     }
 }

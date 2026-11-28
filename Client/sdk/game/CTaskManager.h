@@ -11,7 +11,7 @@
 
 #pragma once
 
-class CTask;
+#include "Task.h"
 
 enum
 {
@@ -59,10 +59,21 @@ public:
     virtual CTask* FindActiveTaskByType(const int iTaskType) = 0;
     virtual CTask* FindTaskByType(const int iPriority, const int iTaskType) = 0;
     virtual void   RemoveTaskSecondary(const int iTaskPriority) = 0;
-    virtual bool   RemoveTaskSecondary(const int taskPriority, const int taskType) = 0;
+    virtual bool   RemoveTaskSecondary(const int taskPriority, const int taskType);
     // virtual void SetTaskSecondary(CTask* pTaskSecondary, const int iType)=0;
     virtual CTask* GetTaskSecondary(const int iType) = 0;
     virtual bool   HasTaskSecondary(const CTask* pTaskSecondary) = 0;
     virtual void   ClearTaskEventResponse() = 0;
     virtual void   Flush(const int iPriority) = 0;
 };
+
+inline bool CTaskManager::RemoveTaskSecondary(const int taskPriority, const int taskType)
+{
+    // The partial-animation slot can already contain a replacement when a caller cleans up its task.
+    CTask* task = GetTaskSecondary(taskPriority);
+    if (!task || task->GetTaskType() != taskType)
+        return false;
+
+    RemoveTaskSecondary(taskPriority);
+    return true;
+}

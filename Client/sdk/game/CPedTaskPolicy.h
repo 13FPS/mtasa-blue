@@ -11,6 +11,17 @@ namespace MtaGame
 {
     struct CPedTaskPolicy final
     {
+        template <class Task>
+        static Task* GetAttackTask(CTaskManager* manager, int type)
+        {
+            if (!manager)
+                return nullptr;
+
+            // Both SDK interfaces share the attack slot, and its occupant may change between calls.
+            CTask* task = manager->GetTaskSecondary(TASK_SECONDARY_ATTACK);
+            return task && task->GetTaskType() == type ? dynamic_cast<Task*>(task) : nullptr;
+        }
+
         template <class GetIntelligence>
         static bool IsDoingGangDriveby(bool storedIntelligenceAvailable, GetIntelligence&& getIntelligence)
         {

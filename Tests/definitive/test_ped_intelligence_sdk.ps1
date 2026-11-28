@@ -2,7 +2,7 @@
 #requires -Version 7.0
 # Exercise only the same-ped intelligence/manager SDK borrow; no native task adoption or historical replay.
 [CmdletBinding()]
-param()
+param([ValidateSet('x86','x64')][string[]]$Architectures=@('x64'))
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -20,7 +20,7 @@ $record = [ordered]@{
     schema='mta_ped_intelligence_sdk_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     generatedFixture=$null;results=@();failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;
-    scope='One abstract intelligence SDK getter over a genuine caller-supplied complete typed task manager, exact native-owner/full-token provenance and existing opaque identity bookends. No task/native factory, pointer lease or engine code.';
+    scope='SDK manager borrowing, owner identity checks and typed attack-task queries with caller-supplied task wrappers.';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;completeCGameReady=$false;
     pedIntelligenceSdkTested=$false;pedIntelligenceManagerProvenanceTested=$false;pedIntelligenceIdentityBookendsTested=$false;pedIntelligencePureSurfaceTested=$false
 }
@@ -182,8 +182,12 @@ try {
         'Client/sdk/game/CGameAdapter.h',
         'Client/sdk/game/CGameClockService.h',
         'Client/sdk/game/CPedIntelligence.h',
+        'Client/sdk/game/CPedTaskPolicy.h',
         'Client/sdk/game/CPoolSlotPolicy.h',
         'Client/sdk/game/CTaskManager.h',
+        'Client/sdk/game/Task.h',
+        'Client/sdk/game/TaskAttack.h',
+        'Client/sdk/game/TaskTypes.h',
         'Client/sdk/game/CWeaponInfo.h',
         'Client/sdk/game/CWeaponInfoIndexPolicy.h',
         'Client/sdk/game/CWeather.h',
@@ -218,7 +222,8 @@ try {
     $visualStudio = [IO.File]::ReadAllText($discovery.stdout).Trim()
     if ($discovery.exitCode -ne 0 -or $discovery.timedOut -or -not $visualStudio) { throw 'Visual Studio x64 tools are required.' }
     $developerCommand = Join-Path $visualStudio 'Common7/Tools/VsDevCmd.bat'
-    foreach($architecture in @('x86','x64')) {
+    # The DE intelligence owner includes the shipping 64-bit game SDK layouts.
+    foreach($architecture in $Architectures) {
         $directory=Join-Path $outputRoot $architecture
         [IO.Directory]::CreateDirectory($directory)|Out-Null
         $environmentScript=Join-Path $directory 'capture-msvc.cmd'
@@ -253,9 +258,9 @@ try {
         $result['pedIntelligenceSdkTested']=$stdout.Contains('Ped intelligence actual SDK manager borrow fixture completed')
         $result['pedIntelligenceManagerProvenanceTested']=$stdout.Contains('Ped intelligence exact owner and token provenance fixture completed')
         $result['pedIntelligenceIdentityBookendsTested']=$stdout.Contains('Ped intelligence current identity bookends and refusals fixture completed')
-        $result['pedIntelligencePureSurfaceTested']=$stdout.Contains('Four intelligence methods and task-manager factory obligations remain abstract')
+        $result['pedIntelligencePureSurfaceTested']=$stdout.Contains('Two intelligence methods and task-manager factory obligations remain abstract')
         $expectedBits=if($architecture -eq 'x86'){32}else{64}
-        if($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -ne 22 -or $result.pointerBits -ne $expectedBits -or
+        if($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -ne 39 -or $result.pointerBits -ne $expectedBits -or
             -not($result.pedIntelligenceSdkTested -and $result.pedIntelligenceManagerProvenanceTested -and $result.pedIntelligenceIdentityBookendsTested -and $result.pedIntelligencePureSurfaceTested)) {
             throw "$architecture ped intelligence SDK checks or required owner evidence failed"
         }
@@ -263,7 +268,7 @@ try {
     foreach($marker in @('pedIntelligenceSdkTested','pedIntelligenceManagerProvenanceTested','pedIntelligenceIdentityBookendsTested','pedIntelligencePureSurfaceTested')) {
         $record[$marker]=@($record.results|Where-Object{-not $_[$marker]}).Count -eq 0
     }
-    $record.success=$record.results.Count -eq 2 -and $record.pedIntelligenceSdkTested -and $record.pedIntelligenceManagerProvenanceTested -and $record.pedIntelligenceIdentityBookendsTested -and $record.pedIntelligencePureSurfaceTested
+    $record.success=$record.results.Count -eq $Architectures.Count -and $record.pedIntelligenceSdkTested -and $record.pedIntelligenceManagerProvenanceTested -and $record.pedIntelligenceIdentityBookendsTested -and $record.pedIntelligencePureSurfaceTested
 
 
 } catch { AddFailure ($_.Exception.ToString()) }

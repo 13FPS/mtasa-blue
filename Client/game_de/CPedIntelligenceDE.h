@@ -19,7 +19,9 @@ namespace mta::game_de
     class CPedIntelligenceDE : public CPedIntelligence
     {
     public:
-        CTaskManager* GetTaskManager() override;
+        CTaskManager*      GetTaskManager() override;
+        CTaskSimpleUseGun* GetTaskUseGun() override;
+        CTaskSimpleFight*  GetFightTask() override;
         CPedIntelligenceDE(const CPedIntelligenceDE&) = delete;
         CPedIntelligenceDE& operator=(const CPedIntelligenceDE&) = delete;
         CPedIntelligenceDE(CPedIntelligenceDE&&) = delete;
@@ -35,8 +37,7 @@ namespace mta::game_de
         const NativePedReferenceToken reference;
         CTaskManagerDE&               manager;
     };
-    // Four real SDK methods still require task/call authority. Neither this
-    // layer nor the partial manager can publish a complete intelligence/ped.
+    // Duck-task creation and the stealth-kill query still require a backend.
     static_assert(std::is_abstract_v<CPedIntelligenceDE> && std::is_base_of_v<CPedIntelligence, CPedIntelligenceDE> &&
                   !std::has_virtual_destructor_v<CPedIntelligenceDE>);
 }

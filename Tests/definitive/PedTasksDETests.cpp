@@ -98,6 +98,9 @@ namespace
         unsigned reads = 0;
         int      priority = -1;
         bool     throwTask = false;
+        int      secondaryReads = 0;
+        int      removals = 0;
+        int      removedSlot = -1;
         CTask*   GetTask(const int selectedPriority) override
         {
             taskScenarioValue.Record(4);
@@ -113,12 +116,19 @@ namespace
         CTask* GetSimplestTask(const int) override { Unqualified(); }
         CTask* FindActiveTaskByType(const int) override { Unqualified(); }
         CTask* FindTaskByType(const int, const int) override { Unqualified(); }
-        void   RemoveTaskSecondary(const int) override { Unqualified(); }
-        bool   RemoveTaskSecondary(const int, const int) override { Unqualified(); }
-        CTask* GetTaskSecondary(const int) override { Unqualified(); }
-        bool   HasTaskSecondary(const CTask*) override { Unqualified(); }
-        void   ClearTaskEventResponse() override { Unqualified(); }
-        void   Flush(const int) override { Unqualified(); }
+        void   RemoveTaskSecondary(const int slot) override
+        {
+            ++removals;
+            removedSlot = slot;
+        }
+        CTask* GetTaskSecondary(const int slot) override
+        {
+            ++secondaryReads;
+            return slot == TASK_SECONDARY_PARTIAL_ANIM ? selected : nullptr;
+        }
+        bool HasTaskSecondary(const CTask*) override { Unqualified(); }
+        void ClearTaskEventResponse() override { Unqualified(); }
+        void Flush(const int) override { Unqualified(); }
 
     private:
         [[noreturn]] static void         Unqualified() noexcept { ped_tasks_fixture::Unqualified("TaskManager unrelated method"); }
@@ -257,6 +267,30 @@ int main()
         scenario.ResetEvents();
         CheckTask(!sdk.IsDoingGangDriveby() && Events(scenario, {1}),
                   "later stored-wrapper retirement again avoids the virtual getter and all task interfaces");
+        // Fire cleanup must preserve another animation occupying the same secondary slot.
+        CTaskManager& taskManager = manager;
+        manager.selected = nullptr;
+        CheckTask(!taskManager.RemoveTaskSecondary(TASK_SECONDARY_PARTIAL_ANIM, TASK_SIMPLE_PLAYER_ON_FIRE) && manager.removals == 0,
+                  "an empty secondary slot is preserved");
+        manager.selected = &task;
+        task.value = TASK_SIMPLE_GANG_DRIVEBY;
+        CheckTask(!taskManager.RemoveTaskSecondary(TASK_SECONDARY_PARTIAL_ANIM, TASK_SIMPLE_PLAYER_ON_FIRE) && manager.removals == 0,
+                  "a different task in the same slot is preserved");
+        task.value = TASK_SIMPLE_PLAYER_ON_FIRE;
+        CheckTask(taskManager.RemoveTaskSecondary(TASK_SECONDARY_PARTIAL_ANIM, TASK_SIMPLE_PLAYER_ON_FIRE) && manager.removals == 1 &&
+                      manager.removedSlot == TASK_SECONDARY_PARTIAL_ANIM && manager.secondaryReads == 3,
+                  "a matching task is removed once through the owning manager");
+        task.throwType = true;
+        bool typeRefused = false;
+        try
+        {
+            taskManager.RemoveTaskSecondary(TASK_SECONDARY_PARTIAL_ANIM, TASK_SIMPLE_PLAYER_ON_FIRE);
+        }
+        catch (const std::runtime_error&)
+        {
+            typeRefused = true;
+        }
+        CheckTask(typeRefused && manager.removals == 1, "a failed type read cannot authorize removal");
         std::puts("Actual shared ped task policy fixture completed");
         std::puts("Actual ped task SDK fixture completed");
         std::printf("Passed %u ped task policy SDK checks (64-bit; no native engine code executed)\n", taskChecks);

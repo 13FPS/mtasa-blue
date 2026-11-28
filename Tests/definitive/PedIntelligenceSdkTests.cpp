@@ -8,6 +8,7 @@
 #include <SharedUtil.Defines.h>
 #include "../../Client/game_de/CTaskManagerDE.h"
 #include "../../Client/game_de/NativeGameTimingAccess.h"
+#include <game/TaskAttack.h>
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -133,6 +134,46 @@ namespace
         {
         }
         ~Manager() { ++destructions; }
+        CTask* GetTaskSecondary(const int slot) override
+        {
+            Check(slot == TASK_SECONDARY_ATTACK, "query uses the attack slot");
+            ++lookups;
+            return attack;
+        }
+        CTask*   attack = nullptr;
+        unsigned lookups = 0;
+    };
+
+    template <class Interface>
+    struct SimpleTask : Interface
+    {
+        int                     type = NO_TASK_TYPE;
+        int                     GetTaskType() override { return type; }
+        CTask*                  Clone() override { std::abort(); }
+        void                    SetParent(CTask*) override { std::abort(); }
+        CTask*                  GetParent() override { std::abort(); }
+        CTask*                  GetSubTask() override { std::abort(); }
+        bool                    IsSimpleTask() override { std::abort(); }
+        void                    StopTimer(const CEvent*) override { std::abort(); }
+        bool                    MakeAbortable(CPed*, int, const CEvent*) override { std::abort(); }
+        const char*             GetTaskName() override { std::abort(); }
+        CTaskSAInterface*       GetInterface() noexcept override { std::abort(); }
+        const CTaskSAInterface* GetInterface() const noexcept override { std::abort(); }
+        bool                    IsValid() override { std::abort(); }
+        void                    SetAsPedTask(CPed*, int, bool) override { std::abort(); }
+        void                    SetAsSecondaryPedTask(CPed*, int) override { std::abort(); }
+        void                    Destroy() override { std::abort(); }
+        void                    DestroyJustThis() override { std::abort(); }
+        bool                    ProcessPed(CPed*) override { std::abort(); }
+        bool                    SetPedPosition(CPed*) override { std::abort(); }
+    };
+    using FightTask = SimpleTask<CTaskSimpleFight>;
+    struct UseGunTask final : SimpleTask<CTaskSimpleUseGun>
+    {
+        bool ControlGun(CPed*, CEntity*, char) override { std::abort(); }
+        bool ControlGunMove(CVector2D*) override { std::abort(); }
+        void Reset(CPed*, CEntity*, CVector, char, short) override { std::abort(); }
+        bool GetSkipAim() override { std::abort(); }
     };
     template <class Call>
     bool Refuses(Call&& call, ClockResult result, const char* operation = "GetTaskManager")
@@ -176,6 +217,40 @@ namespace
         }
         Check(deaths == 1 && owner.removals == 1, "the enclosing caller explicitly owns manager retirement after intelligence and users quiesce");
         std::puts("Ped intelligence actual SDK manager borrow fixture completed");
+    }
+    void AttackTasks()
+    {
+        Owner                                  owner;
+        unsigned                               deaths = 0;
+        Manager                                manager(owner, owner.expected, deaths);
+        ped_intelligence_fixture::Intelligence intelligence(owner, owner.expected, manager);
+        CPedIntelligence&                      sdk = intelligence;
+        struct WithoutManager final : ped_intelligence_fixture::Intelligence
+        {
+            using Intelligence::Intelligence;
+            CTaskManager* GetTaskManager() override { return nullptr; }
+        };
+        WithoutManager unavailable(owner, owner.expected, manager);
+        Check(!unavailable.GetFightTask() && !unavailable.GetTaskUseGun() && !manager.lookups, "missing manager has neither attack task");
+        Check(!sdk.GetFightTask() && !sdk.GetTaskUseGun(), "empty attack slot has neither task");
+
+        FightTask fight;
+        fight.type = TASK_SIMPLE_FIGHT;
+        manager.attack = &fight;
+        Check(sdk.GetFightTask() == &fight && !sdk.GetTaskUseGun(), "only the current fight task is returned");
+        fight.type = TASK_SIMPLE_USE_GUN;
+        Check(!sdk.GetFightTask() && !sdk.GetTaskUseGun(), "both type tag and SDK wrapper must match");
+
+        UseGunTask gun;
+        gun.type = TASK_SIMPLE_USE_GUN;
+        manager.attack = &gun;
+        Check(sdk.GetTaskUseGun() == &gun && !sdk.GetFightTask(), "replacement task is looked up on each call");
+        gun.type = TASK_SIMPLE_FIGHT;
+        Check(!sdk.GetTaskUseGun() && !sdk.GetFightTask(), "a mislabeled gun wrapper cannot be returned for either task");
+
+        ++owner.expected.version;
+        Check(Refuses([&] { sdk.GetTaskUseGun(); }, ClockResult::OwnerConflict) && manager.lookups == 10 && !owner.removals,
+              "a stale manager refuses before looking up the slot");
     }
     void Provenance()
     {
@@ -268,7 +343,7 @@ namespace
         Check(intelligence.GetTaskManager() == static_cast<CTaskManager*>(&manager) && owner.reads == 2 && !owner.removals,
               "a later fresh coherent observation neither adopts tasks nor replays a mutation");
         std::puts("Ped intelligence current identity bookends and refusals fixture completed");
-        std::puts("Four intelligence methods and task-manager factory obligations remain abstract");
+        std::puts("Two intelligence methods and task-manager factory obligations remain abstract");
     }
 }
 int main()
@@ -276,6 +351,7 @@ int main()
     try
     {
         Borrowing();
+        AttackTasks();
         Provenance();
         RefusalsAndBookends();
         std::printf("Passed %u ped intelligence SDK checks (%u-bit; opaque provider doubles only)\n", checks, static_cast<unsigned>(sizeof(void*) * 8));

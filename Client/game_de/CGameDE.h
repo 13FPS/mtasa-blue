@@ -74,7 +74,8 @@ namespace mta::game_de
         // Later startup services share this game's captured constructor graph.
         // A current native callback alone cannot renew an older game binding.
         // Historical unprepared constructor routes keep their existing policy.
-        void RequirePreparedServiceBinding(const char* operation);
+        void        RequirePreparedServiceBinding(const char* operation);
+        ClockResult PreparedServiceBindingStatus() const noexcept;
 
         enum class ConstructorServices : unsigned char
         {

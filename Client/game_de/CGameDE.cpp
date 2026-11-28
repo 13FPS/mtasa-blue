@@ -57,8 +57,12 @@ namespace mta::game_de
 
     void CGameDE::RequirePreparedServiceBinding(const char* operation)
     {
-        if (preparedServices.generation)
-            RequirePreparedServices(operation);
+        RequireNativeWrite(PreparedServiceBindingStatus(), operation);
+    }
+
+    ClockResult CGameDE::PreparedServiceBindingStatus() const noexcept
+    {
+        return preparedServices.generation ? NativeWrites().ValidateConstructorServices(preparedServices) : ClockResult::Ok;
     }
 
     CWeaponInfo* CGameDE::ResolveWeaponInfoSlot(std::size_t slot)
@@ -232,11 +236,15 @@ namespace mta::game_de
 
     void CGameDE::OnPedContextChange(CPed* context)
     {
+        // Clearing the cached pointer is part of teardown and needs no borrow.
+        if (context)
+            RequirePreparedServiceBinding("OnPedContextChange");
         pedContext = context;
     }
 
     CPed* CGameDE::GetPedContext()
     {
+        RequirePreparedServiceBinding("GetPedContext");
         if (!pedContext)
         {
             // Preserve MTA's lazy local-player fallback through its real pool
@@ -244,7 +252,11 @@ namespace mta::game_de
             auto* pools = GetPools();
             if (!pools)
                 throw std::runtime_error("DE CGame ped context requires an available pool service");
-            pedContext = pools->GetPedFromRef(DWORD{1});
+            auto* localPlayer = pools->GetPedFromRef(DWORD{1});
+            // The pool can complete its own lookup during a session change.
+            // Recheck the game's generation before caching or returning it.
+            RequirePreparedServiceBinding("GetPedContext");
+            pedContext = localPlayer;
         }
         return pedContext;
     }

@@ -52,8 +52,26 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("objects", type=Path, help="Game DE Release x64 intermediate directory")
     args = parser.parse_args()
-    objects = sorted(args.objects.resolve().glob("*.obj"))
-    required_objects = {"CGameCameraAudioDE.obj", "CCameraTransitionDE.obj", "CPoolsDE.obj", "GameSdkStrings.obj"}
+    object_dir = args.objects.resolve()
+    # An incremental build may leave obsolete objects in its intermediate directory.
+    # Use only objects read by the normal module's linker.
+    link_logs = list(object_dir.glob("*.tlog/link.read.1.tlog"))
+    if len(link_logs) != 1:
+        parser.error("expected the normal Game DE link trace in the object directory")
+    expected = {path.stem + ".obj" for path in (ROOT / "Client/game_de").rglob("*.cpp")} | {"CAudioContainerFiles.obj"}
+    expected_paths = {object_dir / name for name in expected}
+    objects = sorted(expected_paths)
+    # MSBuild can retain several prior link commands in a trace. One command
+    # must account for the entire current source set, including the shared reader.
+    link_commands = [line for line in link_logs[0].read_text(encoding="utf-16").splitlines() if line.startswith("^")]
+    def project_objects(command):
+        paths = map(Path, command[1:].split("|"))
+        return {path for path in paths if path.parent == object_dir and path.suffix.lower() == ".obj"}
+
+    if not all(obj.is_file() for obj in objects) or not any(project_objects(command) == expected_paths for command in link_commands):
+        parser.error("the normal Game DE link did not include the current object set")
+    required_objects = {"CGameClientServicesDE.obj", "CGameCameraAudioDE.obj", "CCameraCamsDE.obj", "CCameraTransitionDE.obj",
+                        "CPoolsDE.obj", "CGameDE.obj", "GameSdkStrings.obj"}
     if required_objects.difference(obj.name for obj in objects):
         parser.error("build the current Game DE Release x64 project first")
     output = ROOT / "Build/definitive-recovery" / ("game-camera-audio-" + uuid4().hex)
@@ -78,22 +96,28 @@ def main():
                     ROOT / "vendor/sparsehash/src/windows", ROOT / "vendor/sparsehash/src"]
         options = ["/nologo", "/std:c++20", "/EHsc", "/MT", "/Gy", "/O2", "/DWIN32", "/DNOMINMAX",
                    "/DMTA_RELEASE", "/D_CRT_SECURE_NO_WARNINGS", "/D_SCL_SECURE_NO_WARNINGS", *["/I" + str(path) for path in includes]]
-        types = {"Game": "mta::game_de::CGameCameraAudioDE", "Audio": "mta::game_de::CAudioEngineDE",
+        types = {"Game": "mta::game_de::CGameClientServicesDE", "Settings": "mta::game_de::CGameSettingsDE", "Audio": "mta::game_de::CAudioEngineDE",
                  "Camera": "mta::game_de::CCameraTransitionDE", "Pools": "mta::game_de::CPoolsDE"}
-        required_methods = {"Game": {"GetCamera", "GetAudioEngine", "GetAESoundManager"},
+        required_methods = {"Game": {"GetCamera", "GetAudioEngine", "GetAESoundManager", "GetSettings", "GetPools"},
+                            "Settings": {"GetVolumetricShadowsEnabledByVideoSetting", "IsDynamicPedShadowsEnabledByVideoSetting",
+                                         "ResetVolumetricShadows", "ResetDynamicPedShadows", "UpdateFieldOfViewFromSettings"},
                             "Audio": {"SetWorldSoundEnabled", "SetWorldSoundHandler"},
                             "Camera": {"GetTransitionState", "GetTransitionFOV", "GetTransitionMatrix", "IsInTransition"}}
         outstanding = {}
+        settings_receivers = {"SetVolumetricShadowsEnabled", "SetDynamicPedShadowsEnabled", "SetFieldOfViewPlayer",
+                              "SetFieldOfViewVehicle", "SetFieldOfViewVehicleMax"}
         for label, typename in types.items():
             probe = work / "probe.cpp"
-            probe.write_text('#include "CGameCameraAudioDE.h"\n#include "CAudioEngineDE.h"\n#include "CCameraTransitionDE.h"\n#include "CPoolsDE.h"\n'
+            probe.write_text('#include "CGameClientServicesDE.h"\n#include "CGameSettingsDE.h"\n#include "CAudioEngineDE.h"\n'
+                             '#include "CCameraTransitionDE.h"\n#include "CPoolsDE.h"\n'
                              + f"struct Receiver : {typename} {{}};\nvoid CheckAbstract(Receiver) {{}}\n")
             methods = missing_methods(run("inspect-" + label, ["cl", *options, "/Zs", probe], check=False))
             outstanding[label] = [name for name, _ in methods]
             forbidden = required_methods.get(label, set())
             if forbidden.intersection(outstanding[label]):
                 raise RuntimeError(f"missing production {label} methods: {forbidden.intersection(outstanding[label])}")
-            (work / f"{label}.generated.inl").write_text("\n".join(sig + " override { std::abort(); }" for _, sig in methods))
+            (work / f"{label}.generated.inl").write_text("\n".join(sig + " override { std::abort(); }" for name, sig in methods
+                                                                   if label != "Settings" or name not in settings_receivers))
 
         (work / "objects.rsp").write_text("\n".join(f'"{obj}"' for obj in objects))
         run("archive", ["lib", "/nologo", "/out:game.lib", "@objects.rsp"])
@@ -107,12 +131,16 @@ def main():
                         "d3d12.lib", "user32.lib", "/OPT:REF"])
         run("execute", [work / "host.exe"])
         sources = [HOST, Path(__file__), ROOT / "Client/game_de/CGameCameraAudioDE.h", ROOT / "Client/game_de/CGameCameraAudioDE.cpp",
+                   ROOT / "Client/game_de/CGameClientServicesDE.h", ROOT / "Client/game_de/CGameClientServicesDE.cpp",
+                   ROOT / "Client/game_de/CCameraCamsDE.h", ROOT / "Client/game_de/CGameDE.h", ROOT / "Client/game_de/CGameDE.cpp",
+                   ROOT / "Client/game_de/CGameSettingsDE.h", ROOT / "Client/sdk/game/CGameSettingsProfile.h", ROOT / "Client/sdk/core/CCVarsInterface.h",
                    ROOT / "Client/game_de/CAudioEngineDE.h", ROOT / "Client/sdk/game/CAudioEngineSoundPolicy.h",
                    ROOT / "Client/game_de/GameSdkStrings.cpp", ROOT / "Shared/sdk/SString.hpp", ROOT / "Client/game_de/CCameraTransitionDE.h",
                    ROOT / "Client/game_de/CCameraTransitionDE.cpp", ROOT / "Client/game_de/CCameraSphereVisibleDE.cpp",
                    ROOT / "Client/game_de/CPoolsDE.h", ROOT / "Client/game_de/CPoolsDE.cpp",
                    ROOT / "Client/sdk/game/CCameraTransitionPose.h", ROOT / "Client/sdk/game/CCameraTransitionFOV.h", ROOT / "Shared/sdk/CMatrix.h"]
-        record = {"success": True, "abstractMethods": outstanding, "normalObjects": str(args.objects.resolve()),
+        record = {"success": True, "abstractMethods": outstanding, "normalObjects": str(object_dir), "normalObjectCount": len(objects),
+                  "linkTraceSha256": hashlib.sha256(link_logs[0].read_bytes()).hexdigest(),
                   "sources": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sources},
                   "linkedObjects": {obj.name: hashlib.sha256(obj.read_bytes()).hexdigest() for obj in objects if obj.name in required_objects}}
         (output / "verification.json").write_text(json.dumps(record, indent=2) + "\n")

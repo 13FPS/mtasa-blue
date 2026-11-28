@@ -16,6 +16,16 @@ the factory cannot return an incomplete `CGame` as a playable backend.
 the DE game. The session owner supplies the camera and audio engine and keeps
 them alive through Deathmatch shutdown. Immediate world-sound cancellation
 uses the same sound manager returned by `GetAESoundManager()`.
+
+`CGameClientServicesDE` returns the camera's pool registry through `GetPools()`
+and checks that the registry belongs to the game's native owner during
+construction. It also returns the session's `CGameSettingsDE` through
+`GetSettings()`. It reads the Core profile for shadow preferences and player
+and vehicle FOV. Applying those preferences requires the owning backend's
+shadow and FOV setters. A prepared game checks its generation before returning
+any of these services. The SDK's nonthrowing pool getter returns null for an
+expired generation. Cached player context also expires with its game.
+
 `CCameraTransitionDE` reads one `CameraTransitionSample` for each state,
 FOV or matrix query. A DE session camera must supply a `CameraTransitionSource`
 that captures state, FOV, world position, look-at target and up direction from
@@ -39,8 +49,10 @@ To exercise the getters offline, build the Release x64 Game DE target and run
 from the repository root. The host links the normal production objects and
 supplies test receivers for the remaining abstract methods. Through the SDK
 getters it checks a rolled DE camera transition, a refused camera sample,
-world-sound cancellation and isolation between two games. The public adapter
-continues to return a null `CGame` pointer.
+world-sound cancellation, shadow resets and FOV application across two games
+with different Core profiles. It also checks player lookup, cross-owner camera
+rejection and session expiry. The public adapter continues to return a null
+`CGame` pointer.
 
 `SetAsyncLoadingFromScript`, `SuspendASyncLoading` and `IsASyncLoadingEnabled`
 now use the same MTA-owned loading policy as the classic backend. DE uses a

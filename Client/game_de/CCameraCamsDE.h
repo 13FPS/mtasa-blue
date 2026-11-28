@@ -19,6 +19,7 @@ namespace mta::game_de
     {
     public:
         CCam*       GetCam(BYTE index) override;
+        CPoolsDE&   GetCameraPools() const noexcept { return camPools; }
         void        CloseCamPublication() noexcept { publicationClosed.store(true); }
         ClockResult DrainCamsOnProducer() noexcept;
         ~CCameraCamsDE() noexcept;

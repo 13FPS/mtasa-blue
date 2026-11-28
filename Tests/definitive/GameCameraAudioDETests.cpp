@@ -1,9 +1,11 @@
 // Exercise the normal DE game objects with two independent sets of SDK services.
-#include "../../Client/game_de/CGameCameraAudioDE.h"
+#include "../../Client/game_de/CGameClientServicesDE.h"
+#include "../../Client/game_de/CGameSettingsDE.h"
 #include "../../Client/game_de/CAudioEngineDE.h"
 #include "../../Client/game_de/CCameraTransitionDE.h"
 #include "../../Client/game_de/CPoolsDE.h"
 #include <CMatrix.h>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
@@ -84,14 +86,88 @@ namespace
         {
             return supplied.Same(current) ? ClockResult::Ok : ClockResult::OwnerConflict;
         }
+        ClockResult CheckPedPoolAccess() noexcept override { return ClockResult::Ok; }
+        ClockResult ProbePedPoolHandle(std::uint32_t handle, bool& present, NativePedPoolReader::Value&) noexcept override
+        {
+            if (handle != 1)
+                return ClockResult::InvalidArgument;
+            ++localPedLookups;
+            present = false;
+            if (retireDuringLookup)
+                ++current.generation;
+            return ClockResult::Ok;
+        }
 
         NativeGameConstructorServices current;
+        unsigned                      localPedLookups = 0;
+        bool                          retireDuringLookup = false;
     };
 
-    struct Game final : CGameCameraAudioDE
+    class Profile final : public CCVarsInterface
+    {
+    public:
+        Profile(bool volumetric, bool dynamicPeds, float fov) : volumetric(volumetric), dynamicPeds(dynamicPeds), fov(fov) {}
+
+        bool Get(const std::string& name, bool& out) override
+        {
+            if (name == "volumetric_shadows")
+                out = volumetric;
+            else if (name == "dynamic_ped_shadows")
+                out = dynamicPeds;
+            else
+                std::abort();
+            return true;
+        }
+        bool Get(const std::string& name, float& out) override
+        {
+            Check(name == "fov", "unexpected float setting");
+            out = fov;
+            return true;
+        }
+        bool Exists(const std::string&) override { std::abort(); }
+        bool Get(const std::string&, std::string&) override { std::abort(); }
+        bool Get(const std::string&, int&) override { std::abort(); }
+        bool Get(const std::string&, unsigned int&) override { std::abort(); }
+        void Set(const std::string&, const std::string&) override { std::abort(); }
+        void Set(const std::string&, bool) override { std::abort(); }
+        void Set(const std::string&, int) override { std::abort(); }
+        void Set(const std::string&, unsigned int) override { std::abort(); }
+        void Set(const std::string&, float) override { std::abort(); }
+
+    private:
+        bool  volumetric;
+        bool  dynamicPeds;
+        float fov;
+    };
+
+    class Settings final : public CGameSettingsDE
+    {
+    public:
+        explicit Settings(CCVarsInterface& profile) : CGameSettingsDE(profile) {}
+
+        void                 SetVolumetricShadowsEnabled(bool value) override { volumetric = value; }
+        void                 SetDynamicPedShadowsEnabled(bool value) override { dynamicPeds = value; }
+        void                 SetFieldOfViewPlayer(float angle, bool fromScript, bool instant) override { RecordFov(0, angle, fromScript, instant); }
+        void                 SetFieldOfViewVehicle(float angle, bool fromScript, bool instant) override { RecordFov(1, angle, fromScript, instant); }
+        void                 SetFieldOfViewVehicleMax(float angle, bool fromScript, bool instant) override { RecordFov(2, angle, fromScript, instant); }
+        std::array<float, 3> fov{};
+        unsigned             calls = 0;
+        bool                 volumetric = false;
+        bool                 dynamicPeds = false;
+#include "Settings.generated.inl"
+    private:
+        void RecordFov(unsigned index, float angle, bool fromScript, bool instant)
+        {
+            Check(calls == index && !fromScript && !instant, "unexpected field-of-view request");
+            ++calls;
+            fov[index] = angle;
+        }
+    };
+
+    struct Game final : CGameClientServicesDE
     {
         template <typename... Args>
-        Game(Args&&... args) : CGameCameraAudioDE(std::forward<Args>(args)...)
+        Game(Args&&... args) : CGameClientServicesDE(std::forward<Args>(args)...)
         {
         }
 #include "Game.generated.inl"
@@ -131,11 +207,22 @@ int main()
         Camera                             camera(pools, owner, transition);
         SoundManager                       manager, otherManager;
         Audio                              audio(manager), otherAudio(otherManager);
-        Game                               first(camera, audio, timing, clock, owner, streaming, state);
+        Profile                            profile(true, false, 83.5f);
+        Settings                           settings(profile);
+        Game                               first(settings, camera, audio, timing, clock, owner, streaming, state);
         CGame&                             game = first;
 
         Check(game.GetCamera() == &camera && game.GetAudioEngine() == &audio && game.GetAESoundManager() == &manager, "wrong initial provider");
         Check(game.GetClock() == &clock && game.GetGameVersion() == VERSION_DE, "wrong underlying game");
+        Check(game.GetPools() == &pools && game.GetPools()->GetPedCount() == 0, "game lost its camera's pool registry");
+        game.GetPools()->ResetPedPoolCount();
+        Check(game.GetSettings() == &settings && game.GetSettings()->GetVolumetricShadowsEnabledByVideoSetting() &&
+                  !game.GetSettings()->IsDynamicPedShadowsEnabledByVideoSetting(),
+              "wrong settings profile");
+        Check(game.GetSettings()->ResetVolumetricShadows() && game.GetSettings()->ResetDynamicPedShadows() && settings.volumetric && !settings.dynamicPeds,
+              "shadow resets missed their settings owner");
+        game.GetSettings()->UpdateFieldOfViewFromSettings();
+        Check(settings.calls == 3 && settings.fov == std::array<float, 3>{83.5f, 83.5f, 100.f}, "wrong profile FOV");
         Check(game.GetAudioContainer() != nullptr, "file-audio service missing from game");
         // The inherited texture registry uses shared SDK strings when a game
         // is instantiated. Exercise its normal initialization and stats paths.
@@ -162,11 +249,25 @@ int main()
             Pools      otherPools(otherOwner);
             Transition otherTransition;
             Camera     otherCamera(otherPools, otherOwner, otherTransition);
-            Game       second(otherCamera, otherAudio, timing, otherClock, otherOwner, streaming, state);
+            Profile    otherProfile(false, true, 130.f);
+            Settings   otherSettings(otherProfile);
+            Game       second(otherSettings, otherCamera, otherAudio, timing, otherClock, otherOwner, streaming, state);
             CGame&     another = second;
+            Check(another.GetPools() == &otherPools && another.GetPools() != game.GetPools(), "shared pool registry across games");
+            Check(Refused([&] { Game mismatched(otherSettings, camera, otherAudio, timing, otherClock, otherOwner, streaming, state); }),
+                  "game accepted a camera from another owner");
             another.GetShaderReplacementStats(stats);
             Check(stats.uiTotalTextures == 0, "texture registry leaked across games");
             Check(another.GetCamera() == &otherCamera && another.GetAudioEngine() == &otherAudio, "shared provider across games");
+            Check(another.GetSettings() == &otherSettings && !another.GetSettings()->GetVolumetricShadowsEnabledByVideoSetting() &&
+                      another.GetSettings()->IsDynamicPedShadowsEnabledByVideoSetting(),
+                  "another game read the first profile");
+            Check(another.GetSettings()->ResetVolumetricShadows() && another.GetSettings()->ResetDynamicPedShadows() && !otherSettings.volumetric &&
+                      otherSettings.dynamicPeds && settings.volumetric && !settings.dynamicPeds,
+                  "shared shadow settings");
+            another.GetSettings()->UpdateFieldOfViewFromSettings();
+            Check(otherSettings.calls == 3 && otherSettings.fov == std::array<float, 3>{100.f, 100.f, 100.f} && settings.fov[0] == 83.5f,
+                  "second game did not clamp its own FOV");
             Check(!another.GetCamera()->IsInTransition() && otherTransition.reads == 1 && transition.reads == 1 && otherAudio.CanPlayWorldSound(event),
                   "shared service state");
             another.GetAudioEngine()->SetWorldSoundEnabled(2, 3, false, true);
@@ -199,13 +300,26 @@ int main()
         services.weaponManager = static_cast<CWeaponStatManager*>(identity);
         services.weapons.fill(static_cast<CWeaponInfo*>(identity));
 
-        Game   prepared(camera, audio, timing, clock, owner, streaming, state, services);
+        Game   prepared(settings, camera, audio, timing, clock, owner, streaming, state, services);
         CGame& bound = prepared;
-        Check(bound.GetCamera() == &camera && bound.GetAudioEngine() == &audio && bound.GetAESoundManager() == &manager, "prepared lookup lost provider");
+        Check(bound.GetPools() == &pools, "prepared game lost its pools");
+        Check(bound.GetPedContext() == nullptr && owner.localPedLookups == 1, "local player fallback missed the camera's pool");
+        auto* ped = static_cast<CPed*>(identity);
+        bound.OnPedContextChange(ped);
+        Check(bound.GetPedContext() == ped && owner.localPedLookups == 1, "explicit ped context did not use its cache");
+        Check(bound.GetCamera() == &camera && bound.GetAudioEngine() == &audio && bound.GetAESoundManager() == &manager && bound.GetSettings() == &settings,
+              "prepared lookup lost provider");
         ++services.generation;
-        Check(Refused([&] { bound.GetCamera(); }) && Refused([&] { bound.GetAudioEngine(); }) && Refused([&] { bound.GetAESoundManager(); }),
+        Check(bound.GetPools() == nullptr, "expired game still published the pool registry");
+        Check(Refused([&] { bound.GetPedContext(); }) && Refused([&] { bound.OnPedContextChange(ped); }), "expired game accepted a cached ped context");
+        bound.OnPedContextChange(nullptr);
+        Check(Refused([&] { bound.GetCamera(); }) && Refused([&] { bound.GetAudioEngine(); }) && Refused([&] { bound.GetAESoundManager(); }) &&
+                  Refused([&] { bound.GetSettings(); }),
               "expired generation accepted");
-        std::puts("CGame DE camera transition pose, source refusal, audio dispatch, game isolation, unregister and stale generation passed");
+        Game renewed(settings, camera, audio, timing, clock, owner, streaming, state, services);
+        owner.retireDuringLookup = true;
+        Check(Refused([&] { renewed.GetPedContext(); }) && owner.localPedLookups == 2, "ped lookup crossed game generations");
+        std::puts("CGame DE camera, audio, settings and pool dispatch, profile FOV, ped context and stale generation passed");
         return 0;
     }
     catch (const std::exception& e)

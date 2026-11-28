@@ -3730,7 +3730,17 @@ bool CClientPed::AcquireRequestedModel(const char* tag)
     if (!requested)
         return false;
     requested->ModelAddRef(BLOCKING, tag);
-    if (!requested->GetRwObject() || m_pModelInfo != requested || m_clientModel != registration)
+    bool hasRenderObject;
+    try
+    {
+        hasRenderObject = static_cast<bool>(requested->GetRwObject());
+    }
+    catch (...)
+    {
+        requested->RemoveRef();
+        throw;
+    }
+    if (!hasRenderObject || m_pModelInfo != requested || m_clientModel != registration)
     {
         requested->RemoveRef();
         return false;
@@ -3752,23 +3762,48 @@ void CClientPed::ReleaseLoadedModel()
 
 void CClientPed::_CreateModel()
 {
-    if (!AcquireRequestedModel("CClientPed::_CreateModel"))
+    bool          acquired = false;
+    CPools*       pools = nullptr;
+    CPed*         created = nullptr;
+    CPlayerPed*   player = nullptr;
+    CTaskManager* tasks = nullptr;
+    auto          discard = [&]
     {
+        if (created)
+            pools->RemovePed(created);
+        if (acquired)
+            ReleaseLoadedModel();
         NotifyUnableToCreate();
-        return;
+        // A failed recreation has already destroyed the previously streamed-in ped.
+        // Finish streaming it out so the streamer can retry on a later pulse.
+        InternalStreamOut();
+    };
+    try
+    {
+        acquired = AcquireRequestedModel("CClientPed::_CreateModel");
+        if (acquired)
+        {
+            pools = g_pGame->GetPools();
+            created = pools ? pools->AddPed(this, m_ulModel) : nullptr;
+            player = dynamic_cast<CPlayerPed*>(created);
+            auto* intelligence = player ? player->GetPedIntelligence() : nullptr;
+            tasks = intelligence ? intelligence->GetTaskManager() : nullptr;
+        }
+    }
+    catch (...)
+    {
+        discard();
+        throw;
     }
 
-    // Create the new ped
-    m_pPlayerPed = dynamic_cast<CPlayerPed*>(g_pGame->GetPools()->AddPed(this, m_ulModel));
-    if (m_pPlayerPed)
+    if (tasks)
     {
+        m_pPlayerPed = player;
+        m_pTaskManager = tasks;
         // Put our pointer in the stored data and update the remote data with the new model pointer
         m_pPlayerPed->SetStoredPointer(this);
 
         g_pMultiplayer->AddRemoteDataStorage(m_pPlayerPed, m_remoteDataStorage);
-
-        // Grab the task manager
-        m_pTaskManager = m_pPlayerPed->GetPedIntelligence()->GetTaskManager();
 
         // Validate
         m_pManager->RestoreEntity(this);
@@ -3868,11 +3903,7 @@ void CClientPed::_CreateModel()
     }
     else
     {
-        // Remove the reference again
-        ReleaseLoadedModel();
-
-        // Tell the streamed we were unable to create
-        NotifyUnableToCreate();
+        discard();
     }
 }
 
@@ -4231,13 +4262,13 @@ void CClientPed::ReCreateGameEntity()
     if (!m_shouldRecreate || !m_pPlayerPed)
         return;
 
+    m_shouldRecreate = false;
+
     // Destroy current game entity
     _DestroyModel();
 
     // Create the new game entity
     _CreateModel();
-
-    m_shouldRecreate = false;
 }
 
 void CClientPed::ModelRequestCallback(CModelInfo* pModelInfo)

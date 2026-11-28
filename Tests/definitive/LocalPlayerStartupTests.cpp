@@ -1,8 +1,10 @@
 // Compile the production startup methods with counters in place of GTA, Lua and network services.
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -28,15 +30,22 @@ struct Scenario
     int streamEvents = 0, attemptsRefused = 0, created = 0, deleted = 0, resets = 0;
     int watchdog = 0, notices = 0, initialized = 0, buffers = 0, dialogs = 0, unloads = 0;
     int nativeResets = 0, animations = 0, vehicleReleases = 0;
+    bool throwAdd = false, throwTasks = false, throwRender = false, requested = true;
+    int remoteAdds = 0, remoteRemoves = 0, storageAdds = 0, streamOutEvents = 0;
     std::function<void()> onAcquire, onStream, onFocus, onDialog, onNotice, onVehicleRelease;
 } scenario;
 
 struct CVector { CVector(float, float, float) {} };
 struct Tasks {};
+using CTaskManager = Tasks;
 struct Intelligence
 {
     Tasks tasks;
-    Tasks* GetTaskManager() { return scenario.hasTasks ? &tasks : nullptr; }
+    Tasks* GetTaskManager()
+    {
+        if (scenario.throwTasks) throw std::runtime_error("task lookup refused");
+        return scenario.hasTasks ? &tasks : nullptr;
+    }
 };
 struct CPed { virtual ~CPed() = default; };
 struct CPlayerPed : CPed
@@ -54,7 +63,26 @@ struct CPlayerPed : CPed
     void SetMoveAnim(int) {}
     void SetInitialState() { ++scenario.nativeResets; }
 };
-struct CModelInfo { void MakeCustomModel() {} bool GetRwObject() const { return true; } };
+enum { BLOCKING };
+struct CModelInfo
+{
+    void MakeCustomModel() {}
+    void ModelAddRef(int, const char*)
+    {
+        if (scenario.onAcquire) scenario.onAcquire();
+        ++scenario.references;
+    }
+    void RemoveRef()
+    {
+        Expect(scenario.references > 0, "removed an unowned model reference");
+        --scenario.references;
+    }
+    bool GetRwObject() const
+    {
+        if (scenario.throwRender) throw std::runtime_error("render lookup refused");
+        return scenario.model;
+    }
+};
 static CPlayerPed native, other;
 static CPed plainPed;
 struct Row { CPed* pEntity = &native; CClientPed* pClientEntity = nullptr; };
@@ -62,6 +90,20 @@ struct Pools
 {
     Row row;
     CPed* handle = &native;
+    CPed* AddPed(CClientPed* owner, unsigned long)
+    {
+        ++scenario.remoteAdds;
+        if (scenario.throwAdd) throw std::runtime_error("pool refused");
+        row.pEntity = handle;
+        row.pClientEntity = handle ? owner : nullptr;
+        return handle;
+    }
+    void RemovePed(CPed* ped)
+    {
+        Expect(ped && ped == row.pEntity && row.pClientEntity, "removed a foreign or unregistered ped");
+        ++scenario.remoteRemoves;
+        row = {nullptr, nullptr};
+    }
     Row* GetPed(size_t slot)
     {
         Expect(slot == 0, "local registry slot must be zero");
@@ -81,6 +123,7 @@ struct Pools
     }
     CClientPed* GetPedClientEntity(CPed* wrapper) { return row.pEntity == wrapper ? row.pClientEntity : nullptr; }
 } pools, replacement;
+using CPools = Pools;
 static Pools* activePools = &pools;
 
 struct GameServices
@@ -109,6 +152,7 @@ struct GameServices
     void Pause(bool) {}
     void SetComponentVisible(int, bool) {}
     void DeleteAndDisableGangTags() {}
+    void AddRemoteDataStorage(CPlayerPed* ped, void*) { Expect(ped->stored != nullptr, "storage before association"); ++scenario.storageAdds; }
     void ClearRemovedBuildingLists() {}
     void SetOcclusionsEnabled(bool) {}
     void ResetModelLodDistances() {}
@@ -158,7 +202,8 @@ struct ClientServices
     ClientServices* GetModManager() { return this; }
     CClientPedManager* GetPedManager() { return &pedManager; }
     void InvalidateEntity(CClientPed*) {}
-    bool RequestForStreamIn(unsigned short, CClientPed*) { throw std::logic_error("remote stream request"); }
+    bool RequestForStreamIn(unsigned short, CClientPed*) { return scenario.requested; }
+    int GetDimension() const { return 0; }
     void RestoreEntity(CClientPed*) { ++scenario.restored; }
     void RemoveAll() {}
     void DoPulse() {}
@@ -187,18 +232,36 @@ static void WatchDogCompletedSection(const char*) { ++scenario.watchdog; }
 static void SetApplicationSettingInt(const char*, int) {}
 static int GetApplicationSettingInt(const char*) { return 0; }
 struct CClientTime { static int GetTime() { return 1; } };
+struct CLuaArguments {};
 
 struct CClientStreamElement
 {
-    bool streamedIn = false;
+    virtual ~CClientStreamElement() = default;
+    virtual void StreamIn(bool) = 0;
+    virtual void StreamOut() = 0;
+    bool m_bStreamedIn = false, m_bAttemptingToStreamIn = false;
+    std::uint32_t m_lastStreamOutTime{};
+    std::vector<CClientStreamElement*> m_AttachedEntities;
+    void InternalStreamIn(bool);
+    void InternalStreamOut();
+    void NotifyUnableToCreate();
+    void CallEvent(const char* event, CLuaArguments&, bool)
+    {
+        Expect(std::string(event) == "onClientElementStreamOut", "unexpected event");
+        ++scenario.streamOutEvents;
+    }
     void NotifyCreate()
     {
         ++scenario.streamEvents;
-        streamedIn = true;
+        m_bStreamedIn = true;
+        m_bAttemptingToStreamIn = false;
         if (scenario.onStream) scenario.onStream();
-        if (scenario.withdrawStream) streamedIn = false;
+        if (scenario.withdrawStream) m_bStreamedIn = false;
     }
 };
+using uint = unsigned int;
+struct CClientObject : CClientStreamElement { bool IsLowLod() const { return false; } };
+template<typename T> T* DynamicCast(CClientStreamElement* e) { return dynamic_cast<T*>(e); }
 struct CVehicle {};
 struct CClientVehicle
 {
@@ -220,9 +283,13 @@ struct CClientPed : CClientStreamElement
     CModelInfo model;
     CModelInfo* m_pModelInfo = &model;
     CModelInfo* m_pLoadedModelInfo = nullptr;
+    std::shared_ptr<int> m_clientModel, m_loadedClientModel;
     ClientServices* m_pManager = &clientServices;
     ClientServices* m_pRequester = &clientServices;
     bool m_bIsLocalPlayer = true, m_bHasJetPack = false;
+    bool m_shouldRecreate = false;
+    void* m_remoteDataStorage = nullptr;
+    ClientServices* m_pStreamer = &clientServices;
     CClientVehicle* m_pOccupyingVehicle = nullptr;
     int m_FightingStyle = 0, m_MoveAnim = 0;
     unsigned long m_ulModel = 0;
@@ -231,31 +298,34 @@ struct CClientPed : CClientStreamElement
     void ReleaseLocalModel();
     bool HasLocalModel() const;
     void BeginDestruction();
-    void StreamIn(bool);
+    void StreamIn(bool) override;
+    void StreamOut() override { if (m_pPlayerPed) _DestroyModel(); }
+    void ReCreateGameEntity();
+    void ModelRequestCallback(CModelInfo*);
+    bool IsVisibleInAllDimensions() const { return false; }
+    int GetDimension() const { return 0; }
+    void _ChangeModel() { throw std::logic_error("unexpected change to an existing model"); }
     void NotifyCreate();
     CClientVehicle* GetRealOccupiedVehicle() { return nullptr; }
     CClientVehicle* GetOccupiedVehicle() { return nullptr; }
     void InternalRemoveFromVehicle(CVehicle*) {}
-    void _CreateModel() { throw std::logic_error("remote model creation"); }
-    bool AcquireRequestedModel(const char*)
+    void _CreateModel();
+    void _DestroyModel()
     {
-        if (scenario.onAcquire) scenario.onAcquire();
-        if (!scenario.model) return false;
-        ++scenario.references;
-        m_pLoadedModelInfo = &model;
-        return true;
+        pools.RemovePed(m_pPlayerPed);
+        m_pPlayerPed->SetStoredPointer(nullptr);
+        m_pPlayerPed = nullptr;
+        m_pTaskManager = nullptr;
+        ReleaseLoadedModel();
+        pedManager.OnDestruction(this);
     }
-    void ReleaseLoadedModel()
-    {
-        Expect(m_pLoadedModelInfo != nullptr, "released unowned model");
-        --scenario.references;
-        m_pLoadedModelInfo = nullptr;
-    }
+    bool AcquireRequestedModel(const char*);
+    void ReleaseLoadedModel();
     void SetHasJetPack(bool) {}
     void RebuildModel() {}
     CPlayerPed* GetGamePlayer() { return m_pPlayerPed; }
-    bool IsStreamedIn() const { return streamedIn; }
-    void NotifyUnableToCreate() { ++scenario.attemptsRefused; }
+    bool IsStreamedIn() const { return m_bStreamedIn; }
+    void NotifyUnableToCreate() { CClientStreamElement::NotifyUnableToCreate(); ++scenario.attemptsRefused; }
 };
 
 struct CClientPlayer : CClientPed
@@ -346,7 +416,7 @@ static void CheckPed(const std::string& name)
     if (name == "foreign-stream-in")
     {
         ped._CreateLocalModel();
-        ped.streamedIn = false;
+        ped.m_bStreamedIn = false;
         pools.row.pClientEntity = &previous;
         ped.StreamIn(false);
         Expect(!ped.IsStreamedIn() && scenario.streamEvents == 1 && scenario.attemptsRefused == 1, "foreign resident wrapper streamed in");
@@ -388,7 +458,7 @@ static void CheckPed(const std::string& name)
         Expect(ped.IsStreamedIn() && native.stored == &ped && native.model == 0 && pools.row.pClientEntity == &ped, "wrong player published");
         Expect(scenario.references == 1 && scenario.restored == 1 && scenario.streamEvents == 1 && !scenario.attemptsRefused,
                "local success must own its model and announce creation once");
-        ped.streamedIn = false;  // The streamer can clear this flag while the local model stays resident.
+        ped.m_bStreamedIn = false;  // The streamer can clear this flag while the local model stays resident.
         ped.StreamIn(false);
         Expect(ped.IsStreamedIn() && scenario.streamEvents == 2 && scenario.registrations == 1 && scenario.references == 1,
                "resident local restream must reuse its current model");
@@ -490,13 +560,90 @@ static void CheckGame(const std::string& name)
     if (name == "reentrant-success" || name == "reentrant-focus") Expect(entered, "startup callback did not run");
 }
 
+static void CheckRemotePed(const std::string& name)
+{
+    CClientPed ped;
+    ped.m_bIsLocalPlayer = false;
+    pools.row = {nullptr, nullptr};
+    auto checkReady = [&]
+    {
+        Expect(ped.IsStreamedIn() && !ped.m_bAttemptingToStreamIn && ped.GetGamePlayer() == &native, "remote ped did not stream in");
+        Expect(ped.m_pTaskManager == &native.intelligence.tasks && native.stored == &ped, "incomplete remote association");
+        Expect(scenario.references == 1 && pedManager.m_StreamedIn.size() == 1, "remote stream ref or registry entry missing");
+    };
+
+    const bool recreate = name == "remote-recreate-failure" || name == "remote-recreate-model-refusal" ||
+                          name == "remote-recreate-throw-render" || name == "remote-reentrant-recreate";
+    if (recreate)
+    {
+        ped.InternalStreamIn(false);
+        checkReady();
+        ped.m_shouldRecreate = true;
+        if (name == "remote-reentrant-recreate")
+        {
+            scenario.onStream = [&] { ped.m_shouldRecreate = true; };
+            ped.ReCreateGameEntity();
+            checkReady();
+            Expect(ped.m_shouldRecreate, "lost recreation requested by the new ped's stream-in callback");
+            return;
+        }
+    }
+
+    scenario.pools = name != "remote-missing-pool";
+    scenario.model = name != "remote-model-refusal" && name != "remote-recreate-model-refusal";
+    scenario.throwAdd = name == "remote-throw-add";
+    scenario.throwTasks = name == "remote-throw-tasks";
+    scenario.throwRender = name == "remote-throw-render" || name == "remote-recreate-throw-render";
+    if (name == "remote-missing-ped" || name == "remote-recreate-failure") pools.handle = nullptr;
+    if (name == "remote-wrong-ped") pools.handle = &plainPed;
+    scenario.hasIntelligence = name != "remote-missing-intelligence";
+    scenario.hasTasks = name != "remote-missing-tasks";
+    const bool deferred = name == "remote-missing-intelligence" || name == "remote-wrong-ped" || name == "remote-throw-render";
+    scenario.requested = !deferred;
+    bool threw = false;
+    try
+    {
+        if (recreate)
+            ped.ReCreateGameEntity();
+        else
+        {
+            ped.InternalStreamIn(false);
+            if (deferred)
+                ped.ModelRequestCallback(ped.m_pModelInfo);
+        }
+    }
+    catch (const std::runtime_error&)
+    {
+        threw = true;
+    }
+    Expect(threw == (scenario.throwAdd || scenario.throwTasks || scenario.throwRender), "did not preserve the SDK error");
+    if (name == "remote-success")
+    {
+        checkReady();
+        Expect(scenario.storageAdds == 1 && scenario.streamEvents == 1 && scenario.restored == 1, "stream publication count");
+        return;
+    }
+    Expect(!ped.IsStreamedIn() && !ped.m_bAttemptingToStreamIn && !ped.GetGamePlayer() && !ped.m_pTaskManager, "failed admission left a live ped");
+    Expect(!scenario.references && !pools.row.pClientEntity && !native.stored && pedManager.m_StreamedIn.empty(), "leaked failed ped or model reference");
+    Expect(scenario.streamOutEvents == int(recreate) && scenario.storageAdds == int(recreate) &&
+           scenario.streamEvents == int(recreate) && scenario.restored == int(recreate), "failed candidate was published or wrong stream-out count");
+    scenario.pools = scenario.model = scenario.hasIntelligence = scenario.hasTasks = scenario.requested = true;
+    scenario.throwAdd = scenario.throwTasks = scenario.throwRender = false;
+    pools.handle = &native;
+    ped.InternalStreamIn(false);
+    checkReady();
+    Expect(scenario.streamEvents == 1 + int(recreate) && scenario.storageAdds == 1 + int(recreate), "retry did not publish exactly once");
+}
+
 int main(int argc, char** argv)
 {
     try
     {
         if (argc != 2) return 2;
         const std::string name = argv[1];
-        if (name == "online" || name == "offline-then-online" || name == "server-starting" || name == "reentrant-success" ||
+        if (name.rfind("remote-", 0) == 0)
+            CheckRemotePed(name);
+        else if (name == "online" || name == "offline-then-online" || name == "server-starting" || name == "reentrant-success" ||
             name == "reentrant-focus" || name == "reentrant-refusal" || name == "repeated-refusal" || name == "withdrawn-stream-in" ||
             name == "transferred-during-stream" || name == "lost-handle-during-stream" || name == "waiting-for-game")
             CheckGame(name);

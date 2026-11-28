@@ -1,4 +1,4 @@
-"""Exercise normal Deathmatch local-player startup against in-process game and event fakes."""
+"""Exercise Deathmatch player startup and ped streaming against in-process game and event fakes."""
 
 import argparse
 import hashlib
@@ -20,7 +20,11 @@ CASES = ("init-refusal", "missing-pools", "pool-replaced", "missing-ped", "wrong
          "early-stream-in", "ped-only-stream-in", "model-only-stream-in", "online", "offline-then-online",
          "server-starting", "reentrant-focus", "reentrant-success", "reentrant-refusal", "repeated-refusal",
          "withdrawn-stream-in", "transferred-during-stream", "lost-handle-during-stream", "foreign-stream-in", "waiting-for-game",
-         "cleanup-owned", "cleanup-reassociated", "cleanup-missing-pool", "cleanup-after-vehicle-callback")
+         "cleanup-owned", "cleanup-reassociated", "cleanup-missing-pool", "cleanup-after-vehicle-callback",
+         "remote-success", "remote-missing-pool", "remote-missing-ped", "remote-wrong-ped", "remote-missing-intelligence",
+         "remote-missing-tasks", "remote-throw-add", "remote-throw-tasks", "remote-model-refusal",
+         "remote-recreate-failure", "remote-recreate-model-refusal", "remote-reentrant-recreate",
+         "remote-throw-render", "remote-recreate-throw-render")
 
 
 def method(source, owner, name):
@@ -56,6 +60,7 @@ def main():
 
     ped = read_source("CClientPed.cpp")
     ped_manager = read_source("CClientPedManager.cpp")
+    stream = read_source("CClientStreamElement.cpp")
     game = read_source("CClientGame.cpp")
     game_header = read_source("CClientGame.h")
     packet = read_source("CPacketHandler.cpp")
@@ -73,7 +78,15 @@ def main():
     for helper in ("HasLocalModel", "ReleaseLocalModel"):
         if f"CClientPed::{helper}(" in ped:
             parts.append(method(ped, "CClientPed", helper))
-    parts += [method(ped, "CClientPed", name) for name in ("_CreateLocalModel", "_DestroyLocalModel", "StreamIn", "NotifyCreate")]
+    parts += [method(ped, "CClientPed", name) for name in ("AcquireRequestedModel", "ReleaseLoadedModel", "_CreateLocalModel",
+                                                          "_DestroyLocalModel", "StreamIn", "NotifyCreate")]
+    parts += [method(stream, "CClientStreamElement", name) for name in ("InternalStreamIn", "InternalStreamOut", "NotifyUnableToCreate")]
+    # Property restoration after a valid remote ped has been published is independent
+    # of acquiring or rejecting the new ped. Keep the real pool, task, and stream-event calls.
+    remote = method(ped, "CClientPed", "_CreateModel")
+    restore = between(remote, "        // Jump straight to the target position", "        // Tell the streamer we created the player")
+    parts += [remote.replace(restore, ""), method(ped, "CClientPed", "ReCreateGameEntity")]
+    parts += [method(ped, "CClientPed", "ModelRequestCallback")]
     destructor_start = between(ped, "CClientPed::~CClientPed()", "    g_pClientGame->RemovePedPointerFromSet(this);")
     parts.append(destructor_start.replace("CClientPed::~CClientPed()", "void CClientPed::BeginDestruction()", 1) + "}")
     parts += [event, method(game, "CClientGame", "Event_OnIngameAndConnected"), pulse,

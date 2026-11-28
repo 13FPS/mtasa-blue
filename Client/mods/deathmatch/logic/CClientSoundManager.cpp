@@ -45,9 +45,6 @@ CClientSoundManager::CClientSoundManager(CClientManager* pClientManager)
     BASS_SetConfig(BASS_CONFIG_NET_PLAYLIST, 1);  // Allow playlists
     BASS_SetConfig(BASS_CONFIG_NET_TIMEOUT, 15000);
 
-    m_strUserAgent = SString("MTA:SA Server %s - See http://mtasa.com/agent/", g_pNet->GetConnectedServer(true));
-    BASS_SetConfigPtr(BASS_CONFIG_NET_AGENT, (void*)*m_strUserAgent);
-
     UpdateVolume();
 
     m_FxEffectNames["chorus"] = BASS_FX_DX8_CHORUS;
@@ -66,22 +63,16 @@ CClientSoundManager::CClientSoundManager(CClientManager* pClientManager)
     {
         m_aValidatedSFX[i] = audio->ValidateContainer(static_cast<eAudioLookupIndex>(i));
     }
+    OpenAudioStreamingSession(*this, SString("MTA:SA Server %s - See http://mtasa.com/agent/", g_pNet->GetConnectedServer(true)).c_str());
 }
 
 CClientSoundManager::~CClientSoundManager()
 {
-    ProcessStopQueues(true);
-
-    // Signal stream threads to exit as soon as their blocking call returns
     SignalStreamingThreadsToStop();
-
-    // Stopping and freeing BASS should lead any pending BASS_StreamCreateURL to abort/return.
-    // This makes threads exit quickly
+    ProcessStopQueues(true);
     BASS_Stop();
     BASS_Free();
 
-    // Now wait for threads to finish - they should exit almost immediately since BASS was freed.
-    // Use a short timeout since the blocking call should have been interrupted.
     WaitForAllStreamingThreads(3000);
 }
 

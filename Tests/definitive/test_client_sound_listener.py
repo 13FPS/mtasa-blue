@@ -27,9 +27,15 @@ def run_with_local_audio(executable, **kwargs):
         audio.setparams((1, 2, 22050, 0, "NONE", ""))
         audio.writeframes(bytes(44100))
     payload = data.getvalue()
+    stop = threading.Event()
 
     class AudioHandler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
+            if self.path == "/held":
+                (Path(kwargs["cwd"]) / "request-held").touch()
+                stop.wait(8)
+                self.close_connection = True
+                return
             self.send_response(200)
             self.send_header("Content-Type", "audio/wav")
             self.send_header("Content-Length", str(len(payload)))
@@ -46,6 +52,7 @@ def run_with_local_audio(executable, **kwargs):
             url = f"http://127.0.0.1:{server.server_port}/sample.wav"
             return subprocess.run([*executable, url], **kwargs)
         finally:
+            stop.set()
             server.shutdown()
             worker.join()
 
@@ -115,7 +122,9 @@ def main():
             start = misc.index(signature)
             locks.append(misc[start:misc.index("\n}", start) + 2])
         cutoff = next(line for line in header.splitlines() if line.startswith("#define CUT_OFF "))
-        for path in (HOST, Path(__file__).resolve(), dll, lib, ROOT / "vendor/bass/bass.h",
+        connections = HOST.with_name("SoundStreamConnectionTests.cpp")
+        for path in (HOST, connections, LOGIC / "CSoundStreamConnections.h", LOGIC / "CClientSoundManager.h", LOGIC.parent / "CClient.cpp",
+                     Path(__file__).resolve(), dll, lib, ROOT / "vendor/bass/bass.h",
                      SDK / "CMatrix.h", SDK / "CVector.h", SDK / "CVector4D.h", SDK / "CSphere.h", SDK / "SharedUtil.Map.h", SDK / "SharedUtil.Misc.h", SDK / "SString.hpp"):
             read(path)
         vswhere = Path(os.environ["ProgramFiles(x86)"]) / "Microsoft Visual Studio/Installer/vswhere.exe"
@@ -130,18 +139,27 @@ def main():
             shutil.copy2(dll, work / "bass.dll")
             cmd = ["cl", "/nologo", "/EHsc", "/O2", "/MT", "/std:c++17", "/DNOMINMAX", "/DWIN32", "/D_CRT_SECURE_NO_WARNINGS",
                    "/I" + str(work), "/I" + str(SDK), "/I" + str(ROOT / "vendor/bass"), str(HOST), str(lib), "/Fe:listener.exe"]
+            common = ["cl", "/nologo", "/EHsc", "/O2", "/MT", "/std:c++17", "/DNOMINMAX", "/DWIN32", "/I" + str(ROOT / "vendor/bass")]
+            fixture_dll = [*common, "/LD", "/DSTREAM_FIXTURE_DLL", str(connections), str(lib), "/Fe:stream-fixture.dll"]
+            fixture_host = [*common, str(connections), "/Fe:stream-host.exe"]
             (work / "build.cmd").write_text(f'@echo off\ncall "{vs}/Common7/Tools/VsDevCmd.bat" -no_logo -arch={arch} -host_arch=x64\n'
-                                            f'if errorlevel 1 exit /b 1\n{subprocess.list2cmdline(cmd)}\n')
+                                            + "".join(f'if errorlevel 1 exit /b 1\n{subprocess.list2cmdline(line)}\n' for line in (cmd, fixture_dll, fixture_host)))
             env = dict(os.environ, TEMP=tmp, TMP=tmp)
             for var in ("CL", "_CL_", "LINK", "_LINK_"):
                 env.pop(var, None)
-            for label, command in (("compile", [env["COMSPEC"], "/d", "/c", "build.cmd"]), ("run", [str(work / "listener.exe")])):
+            for label, command in (("compile", [env["COMSPEC"], "/d", "/c", "build.cmd"]), ("run", [str(work / "listener.exe")]),
+                                   ("connections", [str(work / "stream-host.exe")])):
                 if label == "run":
-                    record["architecture"] = pe_architecture(work / "listener.exe")
-                    if record["architecture"] != arch:
-                        raise ValueError(f"Listener executable machine {record['architecture']} does not match requested {arch}")
+                    record["binaries"] = {}
+                    for name in ("listener.exe", "stream-fixture.dll", "stream-host.exe"):
+                        binary = work / name
+                        machine = pe_architecture(binary)
+                        if machine != arch:
+                            raise ValueError(f"{name} machine {machine} does not match requested {arch}")
+                        record["binaries"][name] = {"architecture": machine, "sha256": hashlib.sha256(binary.read_bytes()).hexdigest()}
+                    record["architecture"] = record["binaries"]["listener.exe"]["architecture"]
                 with (output / (label + ".log")).open("wb") as log:
-                    run = run_with_local_audio if label == "run" else subprocess.run
+                    run = subprocess.run if label == "compile" else run_with_local_audio
                     result = run(command, cwd=work, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=90)
                 record[label] = result.returncode
                 result.check_returncode()

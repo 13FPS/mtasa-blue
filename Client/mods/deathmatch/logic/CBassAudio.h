@@ -41,8 +41,6 @@ struct SSoundThreadVariables
             BASS_StreamFree(pSound);
     }
 
-    SString            strURL;
-    long               lFlags;
     DWORD              pSound = 0;
     bool               bStreamCreateResult = false;
     std::list<double>  onClientSoundFinishedDownloadQueue;
@@ -113,12 +111,11 @@ public:
     static int ErrorGetCode();
 
 protected:
-    HSTREAM             ConvertFileToMono(const SString& strPath);
-    static DWORD WINAPI PlayStreamIntern(LPVOID argument);
-    void                CompleteStreamConnect(HSTREAM pSound);
-    void                ApplyFxEffects();
-    void                ServiceVars();
-    void                SetFinishedCallbacks();
+    HSTREAM ConvertFileToMono(const SString& strPath);
+    void    CompleteStreamConnect(HSTREAM pSound);
+    void    ApplyFxEffects();
+    void    ServiceVars();
+    void    SetFinishedCallbacks();
 
     void Process3D(const CMatrix& listener);
 
@@ -172,8 +169,10 @@ private:
     HSYNC m_hSyncMeta;
 };
 
-// Signal streaming threads that shutdown is in progress - they should exit ASAP
+class CClientSoundManager;
+bool CanBeginAudioStreamingSession();
+void OpenAudioStreamingSession(CClientSoundManager& manager, const char* userAgent);
 void SignalStreamingThreadsToStop();
 
-// Wait for streaming threads to complete. Call after BASS_Free() which aborts pending operations.
+// A thread that exceeds the shutdown budget keeps its own DLL reference.
 void WaitForAllStreamingThreads(unsigned int uiTimeoutMs = 3000);

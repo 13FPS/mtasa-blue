@@ -10,6 +10,7 @@
  *****************************************************************************/
 
 #include <StdInc.h>
+#include "logic/CBassAudio.h"
 #define ALLOC_STATS_MODULE_NAME "client"
 #include "SharedUtil.hpp"
 #include <core/CClientCommands.h>
@@ -29,6 +30,12 @@ int CClient::ClientInitialize(const char* szArguments, CCoreInterface* pCore)
     {
         return 1;
     }
+    if (!CanBeginAudioStreamingSession())
+    {
+        pCore->GetConsole()->Print("Deathmatch audio is still retiring the previous session. Retry the connection.");
+        return 1;
+    }
+    g_bClientShuttingDown = false;
 
 #if defined(MTA_DM_EXPIRE_DAYS)
     // Make public client test builds expire

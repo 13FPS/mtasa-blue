@@ -13,15 +13,12 @@
 
 #include <StdInc.h>
 #include "CBassAudio.h"
-#include <process.h>
+#include "CSoundStreamConnections.h"
 #include <tags.h>
 #include <bassmix.h>
 #include <basswma.h>
 #include <bass_fx.h>
-#include <atomic>
-#include <condition_variable>
 #include <limits>
-#include <chrono>
 
 void CALLBACK BPMCallback(int handle, float bpm, void* user);
 void CALLBACK BeatCallback(DWORD chan, double beatpos, void* user);
@@ -44,11 +41,20 @@ namespace
     constexpr DWORD                    FAILED_LOAD_RETRY_DELAY = 10000;  // 10 seconds before retrying a failed file
     constexpr size_t                   MAX_FAILED_FILES_CACHE_SIZE = 1000;
 
-    // Track active streaming threads to ensure they complete before DLL unload
-    std::atomic<int>        ms_iActiveStreamingThreads{0};
-    std::atomic<bool>       ms_bShuttingDown{false};
-    std::mutex              ms_StreamingThreadMutex;
-    std::condition_variable ms_StreamingThreadCV;
+    void PublishStreamResult(CClientSoundManager& manager, void* soundId, HSTREAM stream)
+    {
+        std::lock_guard lock(ms_CallbackMutex);
+        if (auto* audio = MapFindRef(ms_CallbackIdMap, soundId))
+        {
+            auto&                   vars = *audio->m_pVars;
+            SharedUtil::CAutoCSLock resultLock(vars.criticalSection);
+            vars.bStreamCreateResult = true;
+            vars.pSound = stream;
+        }
+        else if (stream)
+            manager.QueueChannelStop(stream);
+    }
+    CSoundStreamConnections ms_streamConnections(PublishStreamResult);
 
     // Get callback id for this CBassAudio
     void* AddCallbackId(CBassAudio* pBassAudio)
@@ -80,17 +86,25 @@ namespace
     }
 }  // namespace
 
-// Signal streaming threads that we're shutting down - they should exit ASAP after their blocking call returns
+bool CanBeginAudioStreamingSession()
+{
+    return ms_streamConnections.CanBeginSession();
+}
+
+void OpenAudioStreamingSession(CClientSoundManager& manager, const char* userAgent)
+{
+    ms_streamConnections.Open(manager, userAgent);
+}
+
 void SignalStreamingThreadsToStop()
 {
-    ms_bShuttingDown.store(true);
+    ms_streamConnections.Close();
 }
 
 // Wait for all active streaming threads to complete (called during shutdown after BASS is freed)
 void WaitForAllStreamingThreads(unsigned int uiTimeoutMs)
 {
-    std::unique_lock<std::mutex> lock(ms_StreamingThreadMutex);
-    ms_StreamingThreadCV.wait_for(lock, std::chrono::milliseconds(uiTimeoutMs), []() { return ms_iActiveStreamingThreads.load() == 0; });
+    ms_streamConnections.Wait(uiTimeoutMs);
 }
 
 CBassAudio::CBassAudio(bool bStream, const SString& strPath, bool bLoop, bool bThrottle, bool b3D)
@@ -181,10 +195,7 @@ bool CBassAudio::BeginLoadingMedia()
         //
         assert(!m_pVars);
         m_pVars = new SSoundThreadVariables();
-        m_pVars->strURL = m_strPath;
-        m_pVars->lFlags = lFlags;
-        HANDLE hThread = CreateThread(NULL, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(&CBassAudio::PlayStreamIntern), m_uiCallbackId, 0, NULL);
-        if (!hThread)
+        if (!ms_streamConnections.Connect(FromUTF8(m_strPath), lFlags, m_uiCallbackId))
         {
             g_pCore->GetConsole()->Printf("Could not create audio stream thread for %s", *m_strPath);
             delete m_pVars;
@@ -192,7 +203,6 @@ bool CBassAudio::BeginLoadingMedia()
             return false;
         }
 
-        CloseHandle(hThread);
         m_bPendingPlay = true;
         OutputDebugLine("[Bass]        stream connect started");
     }
@@ -622,70 +632,6 @@ void CALLBACK BeatCallback(DWORD chan, double beatpos, void* user)
         }
     }
     UnlockCallbackId();
-}
-
-DWORD CBassAudio::PlayStreamIntern(LPVOID argument)
-{
-    // Track this thread so DLL unload can wait for it.
-    // This needs be incremented at the very start and decremented at the very end
-    // to ensure the main thread waits for it before unloading the DLL.
-    ++ms_iActiveStreamingThreads;
-
-    // Check if we're already shutting down
-    if (ms_bShuttingDown.load())
-    {
-        --ms_iActiveStreamingThreads;
-        ms_StreamingThreadCV.notify_all();
-        return 0;
-    }
-
-    CBassAudio* pBassAudio = LockCallbackId(argument);
-    if (pBassAudio)
-    {
-        pBassAudio->m_pVars->criticalSection.Lock();
-        SString strURL = pBassAudio->m_pVars->strURL;
-        long    lFlags = pBassAudio->m_pVars->lFlags;
-        pBassAudio->m_pVars->criticalSection.Unlock();
-        UnlockCallbackId();
-
-        // This can take a long time (30+ seconds on slow/failing connections).
-        // The main thread will wait for it with WaitForAllStreamingThreads().
-        HSTREAM pSound = BASS_StreamCreateURL(FromUTF8(strURL), 0, lFlags | BASS_UNICODE, NULL, NULL);
-
-        // After BASS_StreamCreateURL returns, minimize work before decrementing counter.
-        // If shutting down, skip all processing and exit quickly - BASS is already freed
-        // So we shouldnt call any BASS functions or access game objects.
-        if (!ms_bShuttingDown.load())
-        {
-            CBassAudio* pBassAudio = LockCallbackId(argument);
-            if (pBassAudio)
-            {
-                pBassAudio->m_pVars->criticalSection.Lock();
-                pBassAudio->m_pVars->bStreamCreateResult = true;
-                pBassAudio->m_pVars->pSound = pSound;
-                pBassAudio->m_pVars->criticalSection.Unlock();
-            }
-            else if (pSound)
-            {
-                // Deal with unwanted pSound unless we're disconnecting already
-                if (g_pClientGame != nullptr && !g_pClientGame->IsBeingDeleted())
-                    g_pClientGame->GetManager()->GetSoundManager()->QueueChannelStop(pSound);
-            }
-            UnlockCallbackId();
-        }
-        // If shutting down: BASS is already freed, so pSound is invalid - just discard it.
-        // Do NOT call BASS_StreamFree or any BASS API here.
-    }
-    else
-    {
-        UnlockCallbackId();
-    }
-
-    // Signal that this thread is done - this allows WaitForAllStreamingThreads to return
-    --ms_iActiveStreamingThreads;
-    ms_StreamingThreadCV.notify_all();
-
-    return 0;
 }
 
 //

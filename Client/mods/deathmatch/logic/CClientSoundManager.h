@@ -69,7 +69,6 @@ private:
     std::set<CClientSound*>  m_DistanceStreamedInMap;
 
     std::map<std::string, int> m_FxEffectNames;
-    SString                    m_strUserAgent;
 
     bool m_bMinimizeMuted;
 

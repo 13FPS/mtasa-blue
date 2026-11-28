@@ -6,10 +6,12 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 using uint = unsigned int;
@@ -30,7 +32,9 @@ T* DynamicCast(U* object)
 #define DECLARE_CLASS(derived, base) \
     struct ClassInitStub \
     { \
-        explicit ClassInitStub(void*) {} \
+        explicit ClassInitStub(void*) \
+        { \
+        } \
     } ClassInit;
 
 struct CVector2D
@@ -61,7 +65,8 @@ struct CElapsedTime
 };
 struct CClientTime
 {
-    static unsigned int GetTime() { return 1000; }
+    inline static unsigned int now = 1000;
+    static unsigned int        GetTime() { return now; }
 };
 enum ModelRequestType
 {
@@ -88,13 +93,45 @@ struct CModelInfo
         --references;
     }
 };
+struct Native
+{
+    float GetHealth() { return 1000; }
+};
+using DWORD = unsigned long;
 struct Game
 {
-    CModelInfo  model;
-    CModelInfo* GetModelInfo(unsigned short) { return &model; }
+    CModelInfo  model, replacement;
+    CModelInfo* GetModelInfo(unsigned short id) { return id == 1337 ? &model : &replacement; }
     bool        IsASyncLoadingEnabled() { return true; }
+    bool        full = false, lowLodFull = false, allocationFails = false;
+    int         objects = 0, vehicles = 0, trains = 0;
+    Game*       GetPools() { return this; }
+    void        AllowCreatedObjectsInVerticalLineTest(bool) {}
+    Native*     Allocate(int& attempts)
+    {
+        ++attempts;
+        return allocationFails ? nullptr : new Native;
+    }
+    Native* AddObject(void*, unsigned short, bool, bool) { return Allocate(objects); }
+    Native* AddVehicle(void*, unsigned short, unsigned char, unsigned char) { return Allocate(vehicles); }
+    Native* AddTrain(void*, CVector, const std::vector<DWORD>&, bool, unsigned char) { return Allocate(trains); }
+    void    RemoveObject(Native* n) { delete n; }
+    void    RemoveVehicle(Native* n) { delete n; }
 } game;
 auto* g_pGame = &game;
+auto* g_pMultiplayer = &game;
+struct CClientObjectManager
+{
+    static bool StaticIsObjectLimitReached() { return game.full; }
+    static bool StaticIsLowLodObjectLimitReached() { return game.lowLodFull; }
+    static bool IsValidModel(unsigned short) { return true; }
+    static bool IsBreakableModel(unsigned short) { return false; }
+};
+struct CClientVehicleManager
+{
+    static bool IsVehicleLimitReached() { return game.full; }
+    static bool IsTrainModel(unsigned short model) { return model == 537; }
+};
 class CClientModel
 {
 };
@@ -118,6 +155,7 @@ struct CClientManager
     Camera*                    GetCamera() { return &camera; }
     ModelManager*              GetModelManager() { return &models; }
     void                       OnUpdateStreamPosition(CClientStreamElement*) {}
+    void                       InvalidateEntity(CClientStreamElement*) {}
     void                       PulseModels() { requests.DoPulse(); }
 } manager;
 struct CClientGame
@@ -131,16 +169,22 @@ class CClientEntity
 public:
     explicit CClientEntity(ElementID) {}
     virtual ~CClientEntity() = default;
-    virtual void             SetDimension(unsigned short dimension) { m_usDimension = dimension; }
-    virtual void             ModelRequestCallback(CModelInfo*) {}
-    unsigned short           GetDimension() const { return m_usDimension; }
-    CClientEntity*           GetAttachedTo() { return attachedTo; }
-    void                     UpdateSpatialData() {}
-    bool                     IsDoubleSided() { return false; }
-    void                     SetDoubleSided(bool) {}
-    void                     CallEvent(const std::string& name, CLuaArguments&, bool) { events.push_back(name); }
-    CClientEntity*           attachedTo = nullptr;
-    std::vector<std::string> events;
+    virtual void   SetDimension(unsigned short dimension) { m_usDimension = dimension; }
+    virtual void   ModelRequestCallback(CModelInfo*) {}
+    unsigned short GetDimension() const { return m_usDimension; }
+    CClientEntity* GetAttachedTo() { return attachedTo; }
+    void           UpdateSpatialData() {}
+    bool           IsDoubleSided() { return false; }
+    void           SetDoubleSided(bool) {}
+    void           CallEvent(const std::string& name, CLuaArguments&, bool)
+    {
+        events.push_back(name);
+        if (onEvent)
+            onEvent(name);
+    }
+    CClientEntity*                          attachedTo = nullptr;
+    std::vector<std::string>                events;
+    std::function<void(const std::string&)> onEvent;
 
 protected:
     CClientManager*             m_pManager = &manager;
@@ -160,6 +204,31 @@ struct CClientPlayer : CClientStreamElement
 };
 struct CClientVehicle : CClientStreamElement
 {
+    explicit CClientVehicle(CClientStreamer& streamer) : CClientStreamElement(&streamer, 2) {}
+    ~CClientVehicle()
+    {
+        m_pModelRequester->Cancel(this, true);
+        Destroy();
+    }
+    void                          Create();
+    void                          Destroy();
+    void                          ReCreate();
+    void                          SetModelBlocking(unsigned short, unsigned char, unsigned char);
+    void                          StreamIn(bool) override;
+    void                          StreamOut() override;
+    void                          ModelRequestCallback(CModelInfo*) override;
+    void                          NotifyDestroy() {}
+    Native*                       m_pVehicle = nullptr;
+    CClientModelRequestManager*   m_pModelRequester = &manager.requests;
+    CModelInfo*                   m_pModelInfo = &game.model;
+    std::shared_ptr<CClientModel> m_clientModel;
+    unsigned short                m_usModel = 1337;
+    unsigned char                 m_ucVariation{}, m_ucVariation2{}, m_ucTrackID{};
+    bool                          m_bTrainDirection = false;
+    struct
+    {
+        CVector vPos;
+    } m_Matrix;
     CClientPlayer*  GetOccupant() { return nullptr; }
     CClientVehicle* GetTowedByVehicle() { return nullptr; }
 };
@@ -169,36 +238,35 @@ struct CClientVehicle : CClientStreamElement
 struct CClientObject : CClientStreamElement
 {
     explicit CClientObject(CClientStreamer& streamer) : CClientStreamElement(&streamer, 1) {}
-    ~CClientObject() { m_pModelRequester->Cancel(this, true); }
-    void StreamIn(bool) override;
-    void StreamOut() override;
-    void ModelRequestCallback(CModelInfo*) override;
-    bool IsLowLod() { return false; }
-    void Create()
+    ~CClientObject()
     {
-        if (!m_pObject)
-        {
-            m_pObject = &native;
-            NotifyCreate();
-        }
+        m_pModelRequester->Cancel(this, true);
+        Destroy();
     }
-    void Destroy() { m_pObject = nullptr; }
-    struct Native
-    {
-        float GetHealth() { return 1000; }
-    } native;
-    Native*                     m_pObject = nullptr;
-    CClientModelRequestManager* m_pModelRequester = &manager.requests;
-    CModelInfo*                 m_pModelInfo = &game.model;
-    unsigned short              m_usModel = 1337;
-    bool                        m_bRespawnEnabled = true;
-    float                       m_fHealth = 1000;
+    void                          StreamIn(bool) override;
+    void                          StreamOut() override;
+    void                          ModelRequestCallback(CModelInfo*) override;
+    bool                          IsLowLod() { return m_bIsLowLod; }
+    void                          Create();
+    void                          Destroy();
+    void                          ReCreate();
+    void                          SetModel(unsigned short);
+    void                          NotifyDestroy() {}
+    std::shared_ptr<CClientModel> m_clientModel;
+    bool                          m_bIsLowLod = false, m_bBreakingDisabled = false;
+    Native*                       m_pObject = nullptr;
+    CClientModelRequestManager*   m_pModelRequester = &manager.requests;
+    CModelInfo*                   m_pModelInfo = &game.model;
+    unsigned short                m_usModel = 1337;
+    bool                          m_bRespawnEnabled = true;
+    float                         m_fHealth = 1000;
 };
 #include "CClientStreamSector.cpp"
 #include "CClientStreamSectorRow.cpp"
 #include "CClientStreamer.cpp"
 #include "CClientStreamElement.generated.inl"
 #include "CClientObject.generated.inl"
+#include "CClientVehicle.generated.inl"
 #include "CClientModelRequestManager.cpp"
 
 CSphere CClientStreamElement::GetWorldBoundingSphere()
@@ -214,6 +282,90 @@ static void Require(bool condition, const char* message)
 {
     if (!condition)
         throw std::runtime_error(message);
+}
+
+template <class T>
+static void TestRecreation(const std::string& scenario)
+{
+    const std::string in = "onClientElementStreamIn", out = "onClientElementStreamOut";
+    const bool        initial = scenario.find("-initial-") != std::string::npos;
+    const bool        delayed = scenario.find("-delayed-") != std::string::npos;
+    const bool        limit = scenario.find("-limit") != std::string::npos;
+    const bool        broken = scenario == "object-delayed-broken";
+    const bool        successful = scenario.find("-success") != std::string::npos;
+    CClientStreamer   streamer([] { return false; }, 80, 200, 200);
+    manager.camera.position = {800, 0, 0};
+    streamer.DoPulse(manager.camera.position);
+    manager.camera.position = {};
+    streamer.DoPulse(manager.camera.position);
+    T entity(streamer);
+    if constexpr (std::is_same_v<T, CClientObject>)
+        entity.m_bIsLowLod = scenario == "object-recreate-lod-limit";
+    auto hasNative = [&]
+    {
+        if constexpr (std::is_same_v<T, CClientObject>)
+            return entity.m_pObject != nullptr;
+        else
+            return entity.m_pVehicle != nullptr;
+    };
+    game.model.ready = true;
+    game.replacement.ready = !delayed;
+    if (!initial)
+    {
+        streamer.DoPulse(manager.camera.position);
+        Require(entity.IsStreamedIn() && hasNative() && game.model.references == 1 && entity.events == std::vector<std::string>{in}, "initial entity missing");
+    }
+    game.lowLodFull = scenario == "object-recreate-lod-limit";
+    game.full = limit && !game.lowLodFull;
+    game.allocationFails = !limit && !broken && !successful;
+    entity.onEvent = [&](const std::string& event)
+    {
+        if (event == out)
+            Require(!hasNative() && game.model.references == 0 && game.replacement.references == int(delayed),
+                    "stream-out callback observed an unreleased native model reference");
+    };
+    if (initial)
+        streamer.DoPulse(manager.camera.position);
+    else if (scenario.find("-recreate-") != std::string::npos)
+        entity.ReCreate();
+    else if constexpr (std::is_same_v<T, CClientObject>)
+    {
+        entity.SetModel(1338);
+        if (delayed)
+        {
+            entity.ModelRequestCallback(&game.model);
+            Require(entity.IsStreamedIn() && !hasNative() && entity.events == std::vector<std::string>{in} &&
+                        manager.requests.GetRequestedModelInfo(&entity) == &game.replacement,
+                    "a stale completion disturbed the pending replacement");
+            entity.m_bRespawnEnabled = !broken;
+            entity.m_fHealth = broken ? 0.0f : 1000.0f;
+            game.replacement.ready = true;
+            manager.PulseModels();
+        }
+    }
+    else
+        entity.SetModelBlocking(scenario == "vehicle-train-allocation" ? 537 : 411, 0, 0);
+    if (successful)
+    {
+        Require(entity.IsStreamedIn() && hasNative() && entity.events == std::vector<std::string>{in, in} && entity.m_pModelInfo->references == 1 &&
+                    game.model.references + game.replacement.references == 1,
+                "successful replacement changed its event or reference behavior");
+        return;
+    }
+    Require(!entity.IsStreamedIn() && !entity.IsAttemptingToStreamIn() && !hasNative(), "refused creation stranded a streamed-in element");
+    Require(entity.events == (initial ? std::vector<std::string>{} : std::vector<std::string>{in, out}), "wrong events after refusal");
+    Require(!manager.requests.HasRequested(&entity) && !game.model.references && !game.replacement.references,
+            "refusal leaked a queue or resident model reference");
+    if (scenario == "vehicle-train-allocation")
+        Require(game.trains == 1, "train allocation branch was not exercised");
+    game.full = game.lowLodFull = game.allocationFails = false;
+    if constexpr (std::is_same_v<T, CClientObject>)
+        entity.m_fHealth = 1000.0f;
+    CClientTime::now += 101;
+    streamer.DoPulse(manager.camera.position);
+    Require(entity.IsStreamedIn() && hasNative() && entity.m_pModelInfo->references == 1, "the distance streamer failed to retry the selected model");
+    Require(entity.events == (initial ? std::vector<std::string>{in} : std::vector<std::string>{in, out, in}), "retry emitted redundant events");
+    entity.onEvent = {};
 }
 
 static void Test(const std::string& scenario)
@@ -306,7 +458,7 @@ static void Test(const std::string& scenario)
 
     model.ready = scenario != "object-moves";
     manager.PulseModels();
-    Require(!manager.requests.HasRequested(&object) && model.references == 0, "stale or completed reference is still queued");
+    Require(!manager.requests.HasRequested(&object) && model.references == int(object.m_pObject != nullptr), "stale or completed reference is still queued");
     if (scenario == "forced" || scenario == "hysteresis" || scenario == "acquire-retry" || explicitDemand)
     {
         Require(object.IsStreamedIn() && object.events == std::vector<std::string>{"onClientElementStreamIn"},
@@ -335,7 +487,7 @@ static void Test(const std::string& scenario)
     Require(manager.requests.HasRequested(&object) && model.references == 1, "re-entry failed to acquire a new model reference");
     model.ready = true;
     manager.PulseModels();
-    Require(object.IsStreamedIn() && model.references == 0 && model.applications == 1 && object.events == std::vector<std::string>{"onClientElementStreamIn"},
+    Require(object.IsStreamedIn() && model.references == 1 && model.applications == 1 && object.events == std::vector<std::string>{"onClientElementStreamIn"},
             "eligible retry did not create exactly once");
 }
 int main(int argc, char** argv)
@@ -344,7 +496,13 @@ int main(int argc, char** argv)
         return 2;
     try
     {
-        Test(argv[1]);
+        const std::string scenario = argv[1];
+        if (scenario.rfind("vehicle-", 0) == 0)
+            TestRecreation<CClientVehicle>(scenario);
+        else if (scenario.rfind("object-", 0) == 0 && scenario != "object-moves")
+            TestRecreation<CClientObject>(scenario);
+        else
+            Test(scenario);
     }
     catch (const std::exception& e)
     {

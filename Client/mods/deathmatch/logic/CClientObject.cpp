@@ -241,6 +241,8 @@ void CClientObject::ModelRequestCallback(CModelInfo* pModelInfo)
     if ((!m_bRespawnEnabled && m_fHealth == 0.0f) || (!IsVisibleInAllDimensions() && GetDimension() != m_pStreamer->GetDimension()))
     {
         NotifyUnableToCreate();
+        if (!m_pObject)
+            InternalStreamOut();
         return;
     }
 
@@ -592,8 +594,9 @@ void CClientObject::Create()
             }
         }
 
-        // Tell the streamer we could not create it
+        // A model change can leave the previously streamed-in object without a game entity.
         NotifyUnableToCreate();
+        InternalStreamOut();
     }
 }
 

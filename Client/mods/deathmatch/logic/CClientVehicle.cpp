@@ -2529,8 +2529,8 @@ void CClientVehicle::Create()
         // we load async. The streamer isn't always aware of our limits.
         if (CClientVehicleManager::IsVehicleLimitReached())
         {
-            // Tell the streamer we could not create it
             NotifyUnableToCreate();
+            InternalStreamOut();
             return;
         }
 
@@ -2569,10 +2569,10 @@ void CClientVehicle::Create()
         // Failed. Remove our reference to the vehicle model and return
         if (!m_pVehicle)
         {
-            // Tell the streamer we could not create it
-            NotifyUnableToCreate();
-
+            // Release before a recreation's stream-out event can select a different model.
             m_pModelInfo->RemoveRef();
+            NotifyUnableToCreate();
+            InternalStreamOut();
             return;
         }
 

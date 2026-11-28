@@ -17,7 +17,12 @@ LOGIC = Path("Client/mods/deathmatch/logic")
 COMPONENTS = ("CClientStreamer", "CClientStreamSector", "CClientStreamSectorRow",
               "CClientStreamElement", "CClientModelRequestManager")
 SCENARIOS = ("camera-sector", "camera-before-streamer", "object-moves", "parent-streams-out", "forced", "hysteresis",
-             "explicit-request", "direct-stream-in", "acquire-retry", "repair-broken", "enable-respawn", "break-while-loading")
+             "explicit-request", "direct-stream-in", "acquire-retry", "repair-broken", "enable-respawn", "break-while-loading",
+             "object-initial-limit", "object-initial-allocation", "object-recreate-limit", "object-recreate-lod-limit",
+             "object-recreate-success", "object-model-allocation",
+             "object-delayed-allocation", "object-delayed-broken", "object-delayed-success",
+             "vehicle-initial-limit", "vehicle-initial-allocation", "vehicle-recreate-limit", "vehicle-model-allocation",
+             "vehicle-train-allocation", "vehicle-recreate-success")
 
 
 def main():
@@ -36,7 +41,7 @@ def main():
         fixture = Path(__file__).with_name("ClientStreamerPendingModelTests.cpp")
         shutil.copyfile(fixture, work / fixture.name)
         result["sourceHashes"][fixture.name] = hashlib.sha256(fixture.read_bytes()).hexdigest()
-        for name in [c + ext for c in COMPONENTS for ext in (".h", ".cpp")] + ["CClientObject.cpp"]:
+        for name in [c + ext for c in COMPONENTS for ext in (".h", ".cpp")] + ["CClientObject.cpp", "CClientVehicle.cpp"]:
             path = LOGIC / name
             data = (subprocess.check_output(["git", "show", f"{commit}:{path.as_posix()}"], cwd=ROOT)
                     if commit else (ROOT / path).read_bytes())
@@ -46,13 +51,31 @@ def main():
                 # The engine-backed bounding box is a point in this fixture.
                 source = source[:source.index("CSphere CClientStreamElement::GetWorldBoundingSphere(")]
                 name = "CClientStreamElement.generated.inl"
-            elif name == "CClientObject.cpp":
+            elif name in ("CClientObject.cpp", "CClientVehicle.cpp"):
+                owner = name[:-4]
                 methods = []
-                for method in ("StreamIn", "StreamOut", "ModelRequestCallback"):
-                    begin = source.index(f"void CClientObject::{method}(")
-                    methods.append(source[begin:source.index("\n}", begin) + 2])
+                for method in ("StreamIn", "StreamOut", "ModelRequestCallback", "ReCreate", "Create", "Destroy",
+                               "SetModel" if owner == "CClientObject" else "SetModelBlocking"):
+                    begin = source.index(f"void {owner}::{method}(")
+                    body = source[begin:source.index("\n}", begin) + 2]
+                    # Keep admission, pool allocation, model references and publication. The in-game property
+                    # restore, vehicle audio/handling setup and destruction snapshots need a live game object.
+                    if method == "Create" and owner == "CClientObject":
+                        body = body[:body.index("                // Put our pointer")] + body[body.index("                // Tell the streamer"):]
+                    elif method == "Create":
+                        body = body[:body.index("        // Might want")] + body[body.index("        // Create the vehicle"):]
+                        body = body[:body.index("        // Put our pointer")] + body[body.index("        // Tell the streamer we've created"):]
+                    elif method == "Destroy" and owner == "CClientVehicle":
+                        body = body[:body.index("#ifdef MTA_DEBUG")] + body[body.index("        // Destroy the vehicle\n"):]
+                        body = body[:body.index("        // Clear our component data")] + body[body.index("        // Remove reference to its model"):]
+                        body = body.replace("        m_ucFellThroughMapCount = 1;", "")
+                    elif method == "SetModelBlocking":
+                        body = body[:body.index("        // Get rid of our upgrades")] + body[body.index("        m_usModel = usModel;"):]
+                        body = body[:body.index("        m_eVehicleType = ")] + body[body.index("        m_pModelInfo = g_pGame->GetModelInfo"):]
+                        body = body[:body.index("        m_ucMaxPassengers ")] + body[body.index("        // Create the vehicle if we're streamed in"):]
+                    methods.append(body)
                 source = "\n\n".join(methods)
-                name = "CClientObject.generated.inl"
+                name = owner + ".generated.inl"
             elif name == "CClientStreamer.cpp":
                 source = source.replace(r'..\deathmatch\logic\CClientGame.h', "CClientGame.h")
             (work / name).write_text(source, encoding="utf-8")

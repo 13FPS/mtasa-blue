@@ -10,6 +10,47 @@ Remote gameplay also requires a DE multiplayer factory, multiplayer and
 renderer startup, and a compatible x64 client network module. Both documented
 Windows client network downloads checked for this port contain x86 DLLs.
 
+The x64 compiler identifies 78 missing public `CGame` methods and seven
+backend lifecycle methods on the most complete named implementation,
+`CGameModelLodResetDE`. Deathmatch needs a camera and an audio engine while
+constructing the session. Creating the local player requires model lookup,
+pools and `InitLocalPlayer`. Even after the adapter supplies a game interface,
+Core still needs the DE multiplayer and renderer startup path.
+
+The Release Deathmatch DLLs passed 61 module-loader checks on each Windows
+architecture. In a separate process for each DLL, two calls to the exported
+`InitClient` factory returned the same non-null client. Four pre-session
+frame callbacks returned and the DLL unloaded. Starting a session with
+`ClientInitialize` still requires Core and the game services above.
+
+On x64, the Lua `getCameraMatrix` call now reads the field of view from the
+active SDK camera, or from the transition camera during a blend. The
+previous steady-state path accessed a field at a classic-only address.
+
+Deathmatch now streams objects in the initial camera sector and its neighbors
+on the first stationary pulse. Previously, nearby objects could remain absent
+until the camera left the area and returned. Beyond the mainland, exact
+negative grid coordinates now select the cell that contains the object.
+Object, vehicle and train recreations also retry when the engine pool is full
+or allocation fails. An object that returns to view before a queued removal
+now keeps its model and avoids an unwanted stream-out event. All 36 sector
+and recreation cases passed on Windows and
+Linux using the production streamer and simulated engine pools.
+
+During a local skin change, Deathmatch keeps the active model registered
+until it can determine which skin the player owns. If a provider throws
+after installing a skin, the client checks the actor before retiring the old
+reference. A later observation or shutdown resolves an uncertain result.
+Both model releases and vehicle-startup restoration are attempted during
+cleanup. Windows and Ubuntu each passed 139 model ownership assertions and
+48 local-player startup scenarios using controlled game services.
+
+In a mixed queue with 64 waiting models followed by 64 ready ones, the
+model-request manager delivered all 64 ready models in one pulse. Checks of
+the waiting models fell from 4,160 to 128. The queue also picked up an
+earlier model that became ready during a later model's callback. These are
+SDK call counts from the Windows and Linux fixtures.
+
 Deathmatch now releases the model reference if the render-object lookup fails.
 If the ped pool, player wrapper or task manager is unavailable, it rolls back
 creation. A failed recreation can retry on a later streamer pulse. During
@@ -24,10 +65,13 @@ The DE player now tracks the occupied seat, looks up a weapon by type using
 the inventory slot, and reads and writes numeric voice IDs through the ped
 sound interface. Classic and DE now share the SDK checks for selecting the
 current attack task and removing a secondary task only if its type still
-matches. The x64 compiler reports 95 outstanding public player methods and
-two internal hooks, down from 100 public methods. The player still needs an
+matches. The DE player can also clear its 13 inventory slots and delegate
+projectiles to the supplied game service. Its task manager can follow SDK
+subtasks to the simplest task and search a priority for a particular task
+type. The x64 compiler reports 93 outstanding public player methods and
+two internal hooks. The player still needs an
 owned implementation of `GetPedIntelligence()` for startup. Its intelligence
-class has two unimplemented methods and its task manager has eleven.
+class has two unimplemented methods and its task manager has eight.
 
 The D3D12 frontend now stops copying pixels back to the CPU after verifying
 the menu at its current size. It keeps sampling when the initial frames are
@@ -42,9 +86,27 @@ entered the game. If local-player creation fails after GTA reports that the
 world is loaded, the client shows an error and unloads the session. A new
 connection starts with a fresh player.
 
-MTA can now export a saved primary movement key to GTA before launch with
+In DE Settings, **Restore MTA defaults** stages W/S/A/D, Left Shift for
+sprint and Right Shift for walk. Cancel keeps the previous bindings. Apply
+clears alternates and saves the six defaults when persistence is enabled.
+The Windows frontend host read a UTF-16LE copy of a GTA-generated K profile,
+applied the defaults and read them back in a fresh Core session. All 4,311
+host checks passed. Exporting that session's saved defaults to copies of
+stock, arrow-key and I/J/K/L/U profiles changed zero, four and five records
+respectively. The production reader recovered all five expected keys.
+
+A November 28 stock Steam launch opened the GTA window. Windows then
+recorded an unexpected shutdown before the Controls screen could be
+observed. The cause is undetermined. All 22 user profile files and the
+64-file installation manifest matched their original contents after recovery.
+
+MTA can export one saved primary movement key or all five retail movement
+and sprint keys together with
 [`sync-movement-binding.ps1`](Client/definitive/sync-movement-binding.ps1).
-In a Steam test, GTA's Controls screen first showed W/A/S/D and left Shift.
+`-WholeProfile` validates swaps before updating the file once. On three
+107-row GTA-generated layouts, a five-key cycle changed only the five
+selected key IDs. The exporter passed 72 focused checks.
+In an earlier Steam test, GTA's Controls screen first showed W/A/S/D and left Shift.
 After GTA closed, exporting all five controls from an MTA Settings save
 changed five key codes in the 107-row retail file. On a fresh launch, GTA
 showed I/J/K/L for on-foot movement, U for sprint, and W/A/S/D for driving.

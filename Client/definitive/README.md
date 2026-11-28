@@ -54,7 +54,12 @@ in the same GTA file. The selected MTA setting must contain `0` or `1`.
 ./Client/definitive/sync-mouse-inversion.ps1 -CoreConfig 'C:\Program Files (x86)\MTA San Andreas 1.6\MTA\config\coreconfig.xml' -Preference ControllerVibration
 ```
 
-### Export one MTA movement key to GTA
+### Restore and export movement keys
+
+In MTA Settings, **Restore MTA defaults** stages W/S/A/D for movement,
+Left Shift for sprint and Right Shift for walk. **Apply** clears the alternates
+and applies those six bindings. With persistence enabled, they also survive
+a restart. **Cancel** keeps the previous bindings.
 
 Save the movement bindings in MTA Settings. GTA creates `KeyboardMappings.cfg`
 in its Documents folder when you change a key in **Options → Controls → Adjust
@@ -67,9 +72,17 @@ $profile = Join-Path $env:ProgramData 'MTA San Andreas All/1.7/definitive/keybin
 ```
 
 Omit `-WhatIf` to apply the edit. Use `-KeyboardMappings` to select another
-existing GTA keyboard file. Each invocation updates one control. Supported
-controls are `forwards`, `backwards`, `left`, `right` and `sprint`. Supported
-keys are A, D, I, J, K, L, S, U, W, Space, left Shift and the four arrow keys.
+existing GTA keyboard file. To preview the five retail controls together,
+including swaps such as W and S, run this command.
+
+```powershell
+./Client/definitive/sync-movement-binding.ps1 -MtaKeybinds $profile -WholeProfile -WhatIf
+```
+
+The whole-profile export checks all five final keys before writing the file
+once. The retail controls are `forwards`, `backwards`, `left`, `right` and `sprint`.
+Walk remains an MTA binding. Supported keys are A, D, I, J, K, L, S, U,
+W, Space, left Shift and the four arrow keys.
 
 The command uses the first saved MTA key for the selected control. An unbound
 control, unsupported primary key, ambiguous GTA row or conflicting on-foot key

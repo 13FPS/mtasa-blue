@@ -27,7 +27,6 @@ CClientCheckpoint::CClientCheckpoint(CClientMarker* pThis)
     m_fSize = 4.0f;
     m_dwType = CHECKPOINT_EMPTYTUBE;
     m_vecDirection.fX = 1.0f;
-    m_bHasTarget = false;
     m_ignoreAlphaLimits = false;
     m_TargetArrowColor = SColorRGBA(255, 64, 64, 255);
     m_TargetArrowSize = m_fSize * 0.625f;
@@ -127,9 +126,9 @@ void CClientCheckpoint::SetPosition(const CVector& vecPosition)
     if (m_Matrix.vPos != vecPosition)
     {
         // Recalculate the stored target so that its accurate even if we move it
-        if (m_vecTargetPosition.fX != 0 && m_vecTargetPosition.fY != 0 && m_vecTargetPosition.fZ != 0)
+        if (m_target)
         {
-            m_vecDirection = m_vecTargetPosition - vecPosition;
+            m_vecDirection = *m_target - vecPosition;
             m_vecDirection.Normalize();
         }
 
@@ -139,21 +138,12 @@ void CClientCheckpoint::SetPosition(const CVector& vecPosition)
     }
 }
 
-void CClientCheckpoint::SetDirection(const CVector& vecDirection)
+bool CClientCheckpoint::GetTarget(CVector& target) const
 {
-    // Different target position than already?
-    if (m_vecDirection != vecDirection)
-    {
-        // Set the direction and reset the target position
-        m_vecTargetPosition = CVector(0.0f, 0.0f, 0.0f);
-        m_vecDirection = vecDirection;
-
-        // Recreate
-        if (GetCheckpointType() == CClientCheckpoint::TYPE_RING || m_uiIcon == CClientCheckpoint::ICON_ARROW)
-        {
-            ReCreate();
-        }
-    }
+    if (!m_target)
+        return false;
+    target = *m_target;
+    return true;
 }
 
 void CClientCheckpoint::GetMatrix(CMatrix& mat)
@@ -167,22 +157,31 @@ void CClientCheckpoint::SetMatrix(CMatrix& mat)
     m_Matrix = mat;
 }
 
-void CClientCheckpoint::SetNextPosition(const CVector& vecPosition)
+void CClientCheckpoint::SetTarget(const CVector* target)
 {
-    // Different target position than already?
-    if (m_vecTargetPosition != vecPosition)
+    // A target at the origin or on a coordinate plane is valid. Keep Lua's
+    // reported target and the direction used by the renderer in the same state.
+    const bool changed = target ? (!m_target || *m_target != *target) : m_target.has_value();
+    if (changed)
     {
-        // Set the new target position and direction
-        m_vecTargetPosition = vecPosition;
-        m_vecDirection = m_vecTargetPosition - m_Matrix.vPos;
-        m_vecDirection.Normalize();
-
-        // Recreate
-        if (GetCheckpointType() == CClientCheckpoint::TYPE_RING || m_uiIcon == CClientCheckpoint::ICON_ARROW)
+        if (target)
         {
-            ReCreate();
+            m_target = *target;
+            m_vecDirection = *target - m_Matrix.vPos;
+            m_vecDirection.Normalize();
+        }
+        else
+        {
+            m_target.reset();
+            m_vecDirection = CVector(1, 0, 0);
         }
     }
+
+    const auto previousType = m_dwType;
+    SetIcon(target ? ICON_ARROW : ICON_NONE);
+    // SetIcon already refreshes a tube whose icon changes its game type.
+    if (changed && m_dwType == previousType)
+        ReCreate();
 }
 
 void CClientCheckpoint::SetVisible(bool bVisible)
@@ -412,6 +411,8 @@ void CClientCheckpoint::SetTargetArrowProperties(const SColor& arrowColor, float
 
 RpAtomic* CClientCheckpoint::GetAtomic() const
 {
+    if (!m_pCheckpoint)
+        return nullptr;
     C3DMarker* marker = g_pGame->Get3DMarkers()->FindMarker(m_dwIdentifier);
     return marker ? reinterpret_cast<RpAtomic*>(marker->GetRwObject()) : nullptr;
 }

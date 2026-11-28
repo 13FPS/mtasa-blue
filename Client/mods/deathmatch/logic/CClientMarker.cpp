@@ -548,57 +548,49 @@ bool CClientMarker::IsOnScreen() const
     if (!m_pMarker)
         return false;
 
-    bool isCorona = GetMarkerType() == MARKER_CORONA;
+    const bool isCorona = GetMarkerType() == MARKER_CORONA;
+    RpAtomic*  atomic = m_pMarker->GetAtomic();
+    if (atomic && g_pGame->GetVisibilityPlugins()->IsAtomicVisible(atomic))
+        return true;
 
-    // Check if marker's atomic is visible on the screen
-    // Always false for corona (corona is just a texture)
-    bool isVisible = g_pGame->GetVisibilityPlugins()->IsAtomicVisible(m_pMarker->GetAtomic());
+    // The atomic can fall outside the view while part of the marker is still visible.
+    CVector pos;
+    GetPosition(pos);
 
-    // The above check for atomic visibility may return false at certain camera angles, even though the marker is partially visible on the screen
-    // This happens because the sphere of its atomic is no fully visible on the screen.
-    // So instead, we check whether the marker's position along with its size is visible on the screen.
-    if (!isVisible)
-    {
-        CVector pos;
-        GetPosition(pos);
+    // The game tests a radius of 2.0 while rendering 3D markers.
+    CCamera* camera = g_pGame->GetCamera();
+    if (!camera || !camera->IsSphereVisible(&pos, isCorona ? GetSize() : 2.0f))
+        return false;
+    if (!isCorona)
+        return true;
 
-        // A radius of 2.0 is the size that is checked when rendering a 3D marker.
-        // If the camera is outside this area, large markers will disappear even though
-        // they are partially visible on the screen.
-        // See C3dMarkers::Render()
-        isVisible = g_pGame->GetCamera()->IsSphereVisible(&pos, isCorona ? GetSize() : 2.0f);
-    }
+    // The corona sprite is pulled towards the camera before it is drawn.
+    CCoronas*          coronas = g_pGame->GetCoronas();
+    CRegisteredCorona* corona = coronas ? coronas->FindCorona(static_cast<CClientCorona*>(m_pMarker)->GetIdentifier()) : nullptr;
+    if (!corona)
+        return false;
 
-    // The above camera check returns a false positive even when the corona is not visible on the screen,
-    // because the area with that radius is within the camera's range.
-    // To eliminate this false positive, we check whether the corona is actually visible on the screen.
-    // The point is that you can move away from the corona and completely lose sight of it,
-    // yet the area is still within the camera's range.
-
-    // For coronas, we need to check if they are within the camera's view because simply checking the screen coordinates
-    // is insufficient and often returns true even when the corona is not visible on the screen.
-    // (GTA renders coronas with some offset outside the screen area).
-    if (isVisible && isCorona)
-    {
-        CVector outPos;
-        float   w;
-        float   h;
-
-        CVector camPos;
-        m_pManager->GetCamera()->GetPosition(camPos);
-
-        CRegisteredCorona* corona = g_pGame->GetCoronas()->FindCorona(static_cast<CClientCorona*>(m_pMarker)->GetIdentifier());
-        if (!corona)
-            return false;
-
-        CVector diff = m_vecPosition - camPos;
-        diff.Normalize();
-
-        CVector inPos = m_vecPosition - diff * corona->GetNearClipDistance();
-
-        // Call CSprite::CalcScreenCoors
-        isVisible = ((bool(__cdecl*)(const CVector*, CVector*, float*, float*, bool, bool))0x70CE30)(&inPos, &outPos, &w, &h, true, true);
-    }
-
-    return isVisible;
+#if defined(_WIN64)
+    CMatrix        pose;
+    CClientCamera* clientCamera = m_pManager->GetCamera();
+    if (!clientCamera || !clientCamera->GetMatrix(pose))
+        return false;
+    CVector     diff = pos - pose.vPos;
+    const float distance = diff.Normalize();
+    const float range = corona->GetRange();
+    if (!std::isfinite(distance) || !std::isfinite(range) || distance > range)
+        return false;
+    // Test the offset render point against DE's own camera frustum.
+    CVector renderPoint = pos - diff * corona->GetNearClipDistance();
+    return renderPoint.IsValid() && camera->IsSphereVisible(&renderPoint, 0.0f);
+#else
+    CVector camPos;
+    m_pManager->GetCamera()->GetPosition(camPos);
+    CVector diff = pos - camPos;
+    diff.Normalize();
+    CVector inPos = pos - diff * corona->GetNearClipDistance();
+    CVector outPos;
+    float   w, h;
+    return ((bool(__cdecl*)(const CVector*, CVector*, float*, float*, bool, bool))0x70CE30)(&inPos, &outPos, &w, &h, true, true);
+#endif
 }

@@ -11,7 +11,7 @@
 #pragma once
 
 #include "CClientMarkerCommon.h"
-#include <list>
+#include <optional>
 
 class CClientMarker;
 class CCheckpoint;
@@ -47,8 +47,6 @@ public:
 
     void GetPosition(CVector& vecPosition) const { vecPosition = m_Matrix.vPos; };
     void SetPosition(const CVector& vecPosition);
-    void SetDirection(const CVector& vecDirection);
-    void SetNextPosition(const CVector& vecPosition);
 
     void GetMatrix(CMatrix& mat);
     void SetMatrix(CMatrix& mat);
@@ -65,14 +63,12 @@ public:
     float GetSize() const { return m_fSize; };
     void  SetSize(float fSize);
 
-    bool HasTarget() { return m_bHasTarget; }
-    void SetHasTarget(bool bHasTarget) { m_bHasTarget = bHasTarget; }
-    void GetTarget(CVector& vecTarget) { vecTarget = m_vecTarget; }
-    void SetTarget(const CVector& vecTarget) { m_vecTarget = vecTarget; }
+    bool HasTarget() const { return m_target.has_value(); }
+    bool GetTarget(CVector& target) const;
+    void SetTarget(const CVector* target);
 
     static unsigned char StringToIcon(const char* szString);
     static bool          IconToString(unsigned char ucIcon, SString& strOutString);
-    void                 ReCreateWithSameIdentifier();
 
     void SetIgnoreAlphaLimits(bool ignore) noexcept { m_ignoreAlphaLimits = ignore; };
     bool AreAlphaLimitsIgnored() const noexcept override { return m_ignoreAlphaLimits; };
@@ -92,24 +88,23 @@ private:
     void Create(unsigned long ulIdentifier = 0);
     void Destroy();
     void ReCreate();
+    void ReCreateWithSameIdentifier();
     void ApplyCheckpointTargetArrowProperties() noexcept;
 
-    CClientMarkerPtr m_pThis;
-    bool             m_bStreamedIn;
-    CMatrix          m_Matrix;
-    CVector          m_vecDirection;
-    CVector          m_vecTargetPosition;
-    bool             m_bVisible;
-    unsigned int     m_uiIcon;
-    DWORD            m_dwType;
-    float            m_fSize;
-    SColor           m_Color;
-    CCheckpoint*     m_pCheckpoint;
-    bool             m_ignoreAlphaLimits;
-    SColor           m_TargetArrowColor;
-    float            m_TargetArrowSize;
+    CClientMarkerPtr       m_pThis;
+    bool                   m_bStreamedIn;
+    CMatrix                m_Matrix;
+    CVector                m_vecDirection;
+    std::optional<CVector> m_target;
+    bool                   m_bVisible;
+    unsigned int           m_uiIcon;
+    DWORD                  m_dwType;
+    float                  m_fSize;
+    SColor                 m_Color;
+    CCheckpoint*           m_pCheckpoint;
+    bool                   m_ignoreAlphaLimits;
+    SColor                 m_TargetArrowColor;
+    float                  m_TargetArrowSize;
 
-    DWORD   m_dwIdentifier;
-    bool    m_bHasTarget;
-    CVector m_vecTarget;
+    DWORD m_dwIdentifier = 0;
 };

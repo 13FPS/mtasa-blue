@@ -4926,16 +4926,7 @@ CClientMarker* CStaticFunctionDefinitions::CreateMarker(CResource& Resource, con
 bool CStaticFunctionDefinitions::GetMarkerTarget(CClientMarker& Marker, CVector& vecTarget)
 {
     CClientCheckpoint* pCheckpoint = Marker.GetCheckpoint();
-    if (pCheckpoint)
-    {
-        if (pCheckpoint->HasTarget())
-        {
-            pCheckpoint->GetTarget(vecTarget);
-            return true;
-        }
-    }
-
-    return false;
+    return pCheckpoint && pCheckpoint->GetTarget(vecTarget);
 }
 
 bool CStaticFunctionDefinitions::SetMarkerType(CClientEntity& Entity, const char* szType)
@@ -5004,19 +4995,7 @@ bool CStaticFunctionDefinitions::SetMarkerTarget(CClientEntity& Entity, const CV
         CClientCheckpoint* pCheckpoint = Marker.GetCheckpoint();
         if (pCheckpoint)
         {
-            if (pTarget)
-            {
-                pCheckpoint->SetNextPosition(*pTarget);
-                pCheckpoint->SetIcon(CClientCheckpoint::ICON_ARROW);
-                pCheckpoint->SetHasTarget(true);
-                pCheckpoint->SetTarget(*pTarget);
-            }
-            else
-            {
-                pCheckpoint->SetIcon(CClientCheckpoint::ICON_NONE);
-                pCheckpoint->SetDirection(CVector(1.0f, 0.0f, 0.0f));
-                pCheckpoint->SetHasTarget(false);
-            }
+            pCheckpoint->SetTarget(pTarget);
             return true;
         }
     }

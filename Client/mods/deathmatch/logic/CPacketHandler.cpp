@@ -3663,9 +3663,7 @@ retry:
                                     // Read out the target position
                                     if (bitStream.Read(&position))
                                     {
-                                        // Set the next position and the icon
-                                        pCheckpoint->SetNextPosition(position.data.vecPosition);
-                                        pCheckpoint->SetIcon(CClientCheckpoint::ICON_ARROW);
+                                        pCheckpoint->SetTarget(&position.data.vecPosition);
                                     }
 
                                     if (ucType == CClientGame::MARKER_CHECKPOINT)

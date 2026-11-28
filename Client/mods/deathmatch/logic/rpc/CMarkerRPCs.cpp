@@ -90,10 +90,7 @@ void CMarkerRPCs::SetMarkerTarget(CClientEntity* pSource, NetBitStreamInterface&
                     // No target?
                     case 0:
                     {
-                        pCheckpoint->SetIcon(CClientCheckpoint::ICON_NONE);
-                        pCheckpoint->SetDirection(CVector(1.0f, 0.0f, 0.0f));
-                        pCheckpoint->SetHasTarget(false);
-                        pCheckpoint->ReCreateWithSameIdentifier();
+                        pCheckpoint->SetTarget(nullptr);
                         break;
                     }
 
@@ -104,12 +101,7 @@ void CMarkerRPCs::SetMarkerTarget(CClientEntity* pSource, NetBitStreamInterface&
                         CVector vecPosition;
                         if (bitStream.Read(vecPosition.fX) && bitStream.Read(vecPosition.fY) && bitStream.Read(vecPosition.fZ))
                         {
-                            // Set the icon to arrow and the target position
-                            pCheckpoint->SetNextPosition(vecPosition);
-                            pCheckpoint->SetIcon(CClientCheckpoint::ICON_ARROW);
-                            pCheckpoint->SetHasTarget(true);
-                            pCheckpoint->SetTarget(vecPosition);
-                            pCheckpoint->ReCreateWithSameIdentifier();
+                            pCheckpoint->SetTarget(&vecPosition);
                         }
 
                         break;

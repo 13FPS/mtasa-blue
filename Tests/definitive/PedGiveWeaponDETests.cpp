@@ -82,6 +82,8 @@ namespace
     {
         Trace&       trace;
         eWeaponModel model;
+        eWeaponSlot  slot = WEAPONSLOT_TYPE_HANDGUN;
+        eWeaponSlot GetSlot() override { return slot; }
         Info(Trace& selected, eWeaponModel value) noexcept : trace(selected), model(value) {}
         eWeaponModel GetModel() override
         {
@@ -253,6 +255,35 @@ int main()
         Check(!trace.count && !first.calls && !lookup.count && !tasks.eventCount,
               "constructing an abstract SDK test receiver borrows owners without preparing models or native grants");
         CPed& sdk = ped;
+        const CPed& readOnly = ped;
+        Check(readOnly.GetOccupiedSeat() == 0xff, "a new ped starts with no occupied seat");
+        sdk.SetOccupiedSeat(0);
+        Check(readOnly.GetOccupiedSeat() == 0, "driver seat zero is a valid seat");
+        sdk.SetOccupiedSeat(13);
+        Check(readOnly.GetOccupiedSeat() == 13, "the wrapper preserves the assigned passenger seat");
+
+        weapon.heldWeaponType = WEAPONTYPE_DESERT_EAGLE;
+        Check(readOnly.GetWeapon(WEAPONTYPE_DESERT_EAGLE) == &weapon && lookup.count == 1 && lookup.slots[0] == WEAPONSLOT_TYPE_HANDGUN,
+              "weapon type resolves to the ped's existing wrapper at the configured slot");
+        Check(trace.count == 1 && trace.events[0].kind == Kind::Info && trace.events[0].second == WEAPONSKILL_STD,
+              "type lookup reads standard skill information");
+        weapon.heldWeaponType = WEAPONTYPE_PISTOL;
+        Check(readOnly.GetWeapon(WEAPONTYPE_DESERT_EAGLE) == nullptr, "a different weapon in the same slot is not a match");
+        lookup.bank[2] = nullptr;
+        Check(readOnly.GetWeapon(WEAPONTYPE_PISTOL) == nullptr, "an empty slot has no weapon");
+        lookup.bank[2] = &weapon;
+        game.ordinary.slot = WEAPONSLOT_MAX;
+        const auto slotsBefore = lookup.count;
+        Check(readOnly.GetWeapon(WEAPONTYPE_PISTOL) == nullptr && lookup.count == slotsBefore, "invalid metadata slot is rejected before accessing the bank");
+        game.ordinary.slot = WEAPONSLOT_TYPE_HANDGUN;
+        game.missingInfo = WEAPONTYPE_PISTOL;
+        Check(readOnly.GetWeapon(WEAPONTYPE_PISTOL) == nullptr && lookup.count == slotsBefore, "missing metadata skips the slot bank");
+        game.missingInfo = -1;
+        const auto metadataBefore = trace.count;
+        Check(readOnly.GetWeapon(WEAPONTYPE_LAST_WEAPONTYPE) == nullptr && trace.count == metadataBefore, "non-inventory types skip the metadata lookup");
+        trace.Reset();
+        lookup.count = 0;
+        callerToken = expected;
         Check(sdk.GiveWeapon(WEAPONTYPE_DESERT_EAGLE, 0xffffffffu, static_cast<eWeaponSkill>(255)) == &weapon,
               "actual CPed dispatch returns the pointer selected by the existing slot lookup");
         ExpectKinds(trace, {Kind::Info, Kind::ModelId, Kind::Model, Kind::Request, Kind::Custom, Kind::Grant});
@@ -350,6 +381,10 @@ int main()
         const NativePedReferenceToken nextToken{91, 92, 93};
         auto                          another = MakePed(anotherGame, other, anotherGrant, nextToken, tasks, anotherLookup);
         const auto                    firstBefore = first.calls;
+        CPed& secondPed = another;
+        Check(secondPed.GetOccupiedSeat() == 0xff && sdk.GetOccupiedSeat() == 13, "separate peds keep independent seat state");
+        sdk.SetOccupiedSeat(0xff);
+        Check(sdk.GetOccupiedSeat() == 0xff, "clearing the seat restores the unoccupied value");
         Check(static_cast<CPed&>(another).GiveWeapon(WEAPONTYPE_UNARMED, 3, WEAPONSKILL_STD) == &detonator && anotherGrant.calls == 1 &&
                   SameToken(anotherGrant.received[0], nextToken) && first.calls == firstBefore,
               "separate wrapper/game/grant/bank ownership cannot be replaced by a global current-player receiver");

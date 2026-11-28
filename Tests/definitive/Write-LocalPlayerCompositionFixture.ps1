@@ -11,23 +11,29 @@ function Write-LocalPlayerCompositionFixture([string]$RepositoryRoot,[string]$Ou
     $prefix=$text.Substring(0,$begin).Replace('namespace ped_rebuild_fixture {',"namespace local_player_composition_fixture {`n[[noreturn]] inline void Unqualified(const char*) noexcept {std::abort();}")
     $class=$text.Substring($begin)
     $lines=@($class -split '\r?\n' | Where-Object {$_ -match '\s+override\b'})
-    $pedRejectors=@($lines | Where-Object {$_ -notmatch '\b(?:GetInterface|GetRpClump)\s*\('})
-    if($lines.Count -ne 101 -or $pedRejectors.Count -ne 99){throw 'Strict 99 SDK + two backend rebuild surface changed.'}
+    $pedRejectors=@($lines | Where-Object {
+        $_ -notmatch '\b(?:GetInterface|GetRpClump|GetOccupiedSeat|SetOccupiedSeat)\s*\(' -and
+        $_ -notmatch '\bGetWeapon\s*\(eWeaponType\b' -and $_ -notmatch '\b(?:GetVoice|SetVoice)\s*\(std::int16_t\b'
+    })
+    if($lines.Count -ne 101 -or $pedRejectors.Count -ne 94){throw 'Expected 94 remaining ped and backend overrides from the rebuild fixture.'}
     $player=[IO.File]::ReadAllText((Join-Path $RepositoryRoot 'Client/sdk/game/CPlayerPed.h'))
     $playerRejectors=@(foreach($match in [regex]::Matches($player,'virtual\s+(?<signature>[^;{}]+?)\s*=\s*0\s*;')) {
         $signature=[regex]::Replace($match.Groups['signature'].Value,'\s+',' ').Trim()
-        if($signature -notmatch '\b(?:GetWanted|GetMoveAnim)\s*\('){$signature+' override {Unqualified("Player");}'}
+        if($signature -notmatch '\b(?:GetWanted|GetMoveAnim|SetMoveAnim)\s*\('){$signature+' override {Unqualified("Player");}'}
     })
-    if($playerRejectors.Count -ne 4){throw 'Strict remaining player surface changed.'}
+    if($playerRejectors.Count -ne 3){throw 'Strict remaining player surface changed.'}
     $rejectors=@($pedRejectors)+@($playerRejectors)
     $declarations=@($rejectors | ForEach-Object {([regex]::Replace($_,'\s+override\b.*$',' override;')).Replace('protected:','').Trim()})
-    if($declarations.Count -ne 103){throw 'Exact 101 SDK plus two backend hooks is required.'}
+    if($declarations.Count -ne 97){throw 'Expected 95 SDK methods and two backend hooks.'}
+    $playerMethods=@($rejectors | Where-Object {$_ -notmatch '\bGetPedSound\s*\('})
     $body=@($prefix,
         'class Player final : public mta::game_de::CPlayerPedCompositionDE { public:',
         'Player(mta::game_de::NativeGameTimingAccess& owner,const mta::game_de::NativePedReferenceToken& token,CGame& game,mta::game_de::CPoolsDE& pools,CWanted* wanted,std::uint32_t wrapperType,unsigned* destroyed=nullptr) : CPlayerPedCompositionDE(owner,token,game,pools,wanted,wrapperType),destructionCount(destroyed) {}',
         '~Player() override {if(destructionCount)++*destructionCount;}',
         'const mta::game_de::NativePedReferenceToken* FixtureTokenAddress() const noexcept {return &ReferenceToken();}',
-        'void FixtureCustomMoveAnim(int value) noexcept {m_iCustomMoveAnim=value;}')+@($rejectors)+@(
+        'void FixtureCustomMoveAnim(int value) noexcept {m_iCustomMoveAnim=value;}',
+        'CPedSound* sound=nullptr;',
+        'CPedSound* GetPedSound() const noexcept override {return sound;}')+@($playerMethods)+@(
         'private:unsigned* destructionCount;','};',
         'static_assert(!std::is_abstract_v<Player>);',
         'static_assert(std::is_convertible_v<Player*,CPed*> && std::is_convertible_v<Player*,CPlayerPed*>);',
@@ -53,7 +59,7 @@ function Write-LocalPlayerCompositionFixture([string]$RepositoryRoot,[string]$Ou
     $body=@('#pragma once','#if defined(_MSC_VER)','#pragma warning(push)','#pragma warning(disable : 4100 4250)','#endif')+$body+@('#if defined(_MSC_VER)','#pragma warning(pop)','#endif')
     [IO.File]::WriteAllLines($OutputPath,$body,[Text.UTF8Encoding]::new($false))
     [ordered]@{path=$OutputPath;sha256=(Get-FileHash -LiteralPath $OutputPath -Algorithm SHA256).Hash.ToLowerInvariant();
-        inheritedSdkSignatures=69;rejectingPedSdkSignatures=97;rejectingPlayerSdkSignatures=4;rejectingBackendHooks=2;
-        pureOmissionProbes=103;historicalTestsExecuted=$false;productionFactoryPublished=$false;
+        inheritedSdkSignatures=75;rejectingPedSdkSignatures=91;fixturePedSoundProviders=1;rejectingPlayerSdkSignatures=3;rejectingBackendHooks=2;
+        pureOmissionProbes=97;historicalTestsExecuted=$false;productionFactoryPublished=$false;
         parentRebuild=$parent;parentPools=$poolReceipt}
 }

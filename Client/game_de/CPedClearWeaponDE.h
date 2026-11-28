@@ -34,7 +34,6 @@ namespace mta::game_de
         NativePedWeaponClearAccess& nativeClearAccess;
     };
     // The genuine single-weapon operation needs no returned wrapper lookup.
-    // ClearWeapons and both GetWeapon overloads remain the complete ped's
-    // obligations; this layer publishes no weapon bank or complete factory.
+    // The enclosing ped supplies ClearWeapons and its weapon slot inventory.
     static_assert(std::is_abstract_v<CPedClearWeaponDE> && std::is_base_of_v<CPedGiveWeaponDE, CPedClearWeaponDE>);
 }

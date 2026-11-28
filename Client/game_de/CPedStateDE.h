@@ -23,6 +23,11 @@ namespace mta::game_de
         void          SetDucking(bool ducking) override;
         std::uint32_t GetType() const noexcept override;
         int           GetCustomMoveAnim() const noexcept override;
+        using CPed::GetVoice;
+        using CPed::SetVoice;
+        void GetVoice(std::int16_t* voiceType, std::int16_t* voiceID) const override;
+        void SetVoice(std::int16_t voiceType, std::int16_t voiceID) override;
+
         // Preserve the real CPedSA bookkeeping operation without translating
         // it into native memory or changing this wrapper's registered token.
         void SetType(std::uint32_t type) noexcept { wrapperTypeValue = type; }

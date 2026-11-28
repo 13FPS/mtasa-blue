@@ -7,10 +7,28 @@
 #include <game/CGame.h>
 #include <game/CModelInfo.h>
 #include <game/CPedGiveWeaponPolicy.h>
+#include <game/CWeapon.h>
 #include <stdexcept>
 #include <string>
 namespace mta::game_de
 {
+    CWeapon* CPedGiveWeaponDE::GetWeapon(eWeaponType weaponType) const
+    {
+        if (static_cast<std::uint32_t>(weaponType) >= WEAPONTYPE_LAST_WEAPONTYPE)
+            return nullptr;
+
+        CWeaponInfo* info = weaponGame.GetWeaponInfo(weaponType);
+        if (!info)
+            return nullptr;
+
+        const eWeaponSlot slot = info->GetSlot();
+        if (static_cast<std::uint32_t>(slot) >= WEAPONSLOT_MAX)
+            return nullptr;
+
+        CWeapon* weapon = GetWeapon(slot);
+        return weapon && weapon->GetType() == weaponType ? weapon : nullptr;
+    }
+
     CWeapon* CPedGiveWeaponDE::GiveWeapon(eWeaponType weaponType, std::uint32_t ammo, eWeaponSkill skill)
     {
         // Ordinary model preparation may call back into SDK services. Fix the

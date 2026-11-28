@@ -2,7 +2,8 @@
 #requires -Version 7.0
 # Focused actual ped/player composition, with unchanged inherited code linked only.
 [CmdletBinding()]
-param()
+# The composed DE owner requires 64-bit pointers. Explicit x86 remains available for ABI diagnostics.
+param([ValidateSet('x86','x64')][string[]]$Architectures=@('x64'))
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
 $taskRoot=(Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
@@ -16,7 +17,7 @@ foreach($name in @('TEMP','TMP','VCToolsInstallDir','INCLUDE','LIB','LIBPATH','P
 $markers=@('localPlayerCompositionSdkTested','localPlayerCompositionSingleBaseTested','localPlayerCompositionOwnerTested','localPlayerCompositionDispatchTested','localPlayerCompositionPureSurfaceTested')
 $record=[ordered]@{schema='mta_local_player_composition_sdk_tests_v1';directory=$outputRoot;success=$false;recordedAt=[DateTimeOffset]::Now.ToString('o');
     sourceHashes=@();sourcesUnchanged=$true;generatedFixture=$null;results=@();failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;
-    scope='Actual maximal abstract ped/player composition, exact same-owner constructor, one shared SDK identity, representative inherited dispatch and103 pure omission probes. Old implementation definitions link without their historical main/cases. Explicit doubles only.';
+    scope='Actual maximal abstract ped/player composition, exact same-owner constructor, one shared SDK identity, representative inherited dispatch and 97 pure omission probes. Old implementation definitions link without their historical main/cases. Explicit doubles only.';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;completeCGameReady=$false;completePedReady=$false;fullMtaReady=$false;productionFactoryPublished=$false}
 foreach($marker in $markers){$record[$marker]=$false}
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -64,6 +65,7 @@ function RunOwned([string]$Executable,[string[]]$Arguments,[string]$Directory,[s
 . (Join-Path $PSScriptRoot 'Write-LocalPlayerCompositionFixture.ps1')
 try {
     $productionSources=@('Client/game_de/CPedVitalsDE.cpp','Client/game_de/CPedMetadataDE.cpp','Client/game_de/CPedMutationDE.cpp','Client/game_de/CPedPhysicsDE.cpp','Client/game_de/CPedRotationDE.cpp','Client/game_de/CPedStateDE.cpp','Client/game_de/CPedFlagsDE.cpp','Client/game_de/CPedBehaviorDE.cpp','Client/game_de/CPedCombatDE.cpp','Client/game_de/CPedWeaponSelectionDE.cpp','Client/game_de/CPedPoseDE.cpp','Client/game_de/CPedWeaponStatsDE.cpp','Client/game_de/CPedWaterDE.cpp','Client/game_de/CPedOrientationDE.cpp','Client/game_de/CPedAreaDE.cpp','Client/game_de/CPedFireDE.cpp','Client/game_de/CPedCollisionDE.cpp','Client/game_de/CPedTasksDE.cpp','Client/game_de/CPedGogglesDE.cpp','Client/game_de/CPedVisibilityDE.cpp','Client/game_de/CPedOnScreenDE.cpp','Client/game_de/CPedGiveWeaponDE.cpp','Client/game_de/CPedClearWeaponDE.cpp','Client/game_de/CPedClothesDE.cpp','Client/game_de/CPedRebuildDE.cpp','Client/game_de/CPlayerPedMoveAnimDE.cpp','Client/game_de/CPedPooledDE.cpp','Client/game_de/CPoolsDE.cpp','Client/game_de/CPlayerPedCompositionDE.cpp')
+    $productionSources+=@('Client/game_de/CAnimBlockDE.cpp','Client/game_de/CAnimBlockRequestDE.cpp','Client/game_de/CAnimManagerDE.cpp','Client/game_de/CAnimBlendStaticAssociationDE.cpp','Client/game_de/CKeyGenDE.cpp','Client/game_de/CStreamingDE.cpp','Client/game_de/CAnimBlendAssocGroupDE.cpp','Client/game_de/CAnimBlendAssociationDE.cpp','Client/game_de/CAnimBlendHierarchyDE.cpp','Client/game_de/CAnimBlendSequenceDE.cpp','Client/game_de/NativeClassicAnimationNameHash.cpp')
     $sourceNames=$productionSources+@('Tests/definitive/LocalPlayerCompositionSdkTests.cpp','Tests/definitive/test_local_player_composition_sdk.ps1','Tests/definitive/Write-LocalPlayerCompositionFixture.ps1',
         'Tests/definitive/Write-PedRebuildFixture.ps1','Tests/definitive/Write-PedClothesFixture.ps1','Tests/definitive/Write-PedClearWeaponFixture.ps1','Tests/definitive/Write-PedPoolRegistryFixture.ps1',
         'Client/sdk/game/CPlayerPed.h','Client/sdk/game/CGame.h','Client/sdk/game/CPools.h')
@@ -100,7 +102,7 @@ try {
     $visualStudio=[IO.File]::ReadAllText($discovery.stdout).Trim()
     if($discovery.exitCode -ne 0 -or $discovery.timedOut -or -not $visualStudio){throw 'MSVC x86/x64 tools are required.'}
     $developerCommand=Join-Path $visualStudio 'Common7/Tools/VsDevCmd.bat'
-    foreach($architecture in @('x86','x64')) {
+    foreach($architecture in $Architectures) {
         $directory=Join-Path $outputRoot $architecture
         [IO.Directory]::CreateDirectory($directory)|Out-Null
         $batch=Join-Path $directory 'capture-msvc.cmd'
@@ -130,13 +132,13 @@ try {
         $result['localPlayerCompositionSingleBaseTested']=$stdout.Contains('Actual local player composition single base fixture completed')
         $result['localPlayerCompositionOwnerTested']=$stdout.Contains('Actual local player composition owner admission fixture completed')
         $result['localPlayerCompositionDispatchTested']=$stdout.Contains('Actual local player composition inherited dispatch fixture completed')
-        $result['localPlayerCompositionPureSurfaceTested']=$stdout.Contains('All 101 local player SDK methods and two backend hooks remain abstract')
+        $result['localPlayerCompositionPureSurfaceTested']=$stdout.Contains('All 95 local player SDK methods and two backend hooks remain abstract')
         $bits=if($architecture -eq 'x86'){32}else{64}
-        if($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -ne 24 -or $result.pointerBits -ne $bits){throw "$architecture composition SDK checks failed."}
+        if($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -ne 33 -or $result.pointerBits -ne $bits){throw "$architecture composition SDK checks failed."}
         foreach($marker in $markers){if(-not $result[$marker]){throw "$architecture required marker missing: $marker"}}
     }
     foreach($marker in $markers){$record[$marker]=@($record.results|Where-Object{-not $_[$marker]}).Count -eq 0}
-    $record.success=$record.results.Count -eq 2
+    $record.success=$record.results.Count -eq $Architectures.Count
 } catch {AddFailure ($_.Exception.ToString())}
 finally {
     foreach ($name in $previousEnvironment.Keys) {

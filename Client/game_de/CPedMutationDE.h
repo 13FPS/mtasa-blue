@@ -21,6 +21,8 @@ namespace mta::game_de
         void  SetTurnSpeed(CVector* velocity) override;
         void* GetStoredPointer() override;
         void  SetStoredPointer(void* pointer) override;
+        std::uint8_t GetOccupiedSeat() const noexcept override { return occupiedSeat; }
+        void         SetOccupiedSeat(std::uint8_t seat) noexcept override { occupiedSeat = seat; }
         float GetMass() override;
         void  SetMass(float mass) override;
         float GetTurnMass() override;
@@ -58,7 +60,8 @@ namespace mta::game_de
         // This is MTA's client association, not a native object pointer or
         // reference lease. The caller retains its pointee's lifetime exactly
         // as in CEntitySA; destruction never dereferences or deletes it.
-        void* storedPointer = nullptr;
+        void*        storedPointer = nullptr;
+        std::uint8_t occupiedSeat = 0xff;
     };
     static_assert(std::is_abstract_v<CPedMutationDE> && std::is_base_of_v<CPed, CPedMutationDE>);
 }

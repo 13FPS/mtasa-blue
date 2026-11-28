@@ -20,7 +20,7 @@ $record = [ordered]@{
     schema='mta_ped_oxygen_state_de_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     generatedFixture=$null;result=$null;failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;
-    scope='Actual CPedStateDE oxygen getter/setter and named IsDucking query borrow the same immutable registered token. Preserves raw breath bits, true/false queries, all explicit owner refusal statuses, accepted-effect/no-retry forwarding, independent full DWORD CPU wrapper identity and protected signed custom-move bookkeeping (default0) under refused/absent native access. Seat remains pure because classic has no initialized default; no native custom-animation setter is claimed. Production SetDucking, target rotation, native repair and complete ped factory remain unavailable. No native engine code or process executes.';
+    scope='Actual CPedStateDE oxygen getter/setter and named IsDucking query borrow the same immutable registered token. Preserves raw breath bits, true/false queries, all explicit owner refusal statuses, accepted-effect/no-retry forwarding, independent full DWORD CPU wrapper identity and protected signed custom-move bookkeeping (default0) under refused/absent native access. No native engine code or process executes.';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;
     completeCGameReady=$false;fullMtaReady=$false;completePedReady=$false;completePoolsReady=$false;nativeRepairQualified=$false;actualPedOxygenStateSdkTested=$false;actualPedWrapperTypeSdkTested=$false;actualPedCustomMoveBookkeepingSdkTested=$false
 }

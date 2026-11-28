@@ -11,6 +11,8 @@ namespace mta::game_de
     class CPedGiveWeaponDE : public CPedOnScreenDE
     {
     public:
+        using CPed::GetWeapon;
+        CWeapon* GetWeapon(eWeaponType weaponType) const override;
         CWeapon* GiveWeapon(eWeaponType weaponType, std::uint32_t ammo, eWeaponSkill skill) override;
 
     protected:
@@ -34,9 +36,6 @@ namespace mta::game_de
         CGame&                      weaponGame;
         NativePedWeaponGrantAccess& nativeGrantAccess;
     };
-    // The genuine CGame/model services still own Request/MakeCustomModel, and
-    // both GetWeapon overloads remain pure: only the enclosing complete ped can
-    // supply its existing wrapper bank. This layer creates no native weapon,
-    // model implementation, ready flag or complete factory on its own.
+    // The enclosing ped supplies its inventory through GetWeapon(eWeaponSlot).
     static_assert(std::is_abstract_v<CPedGiveWeaponDE> && std::is_base_of_v<CPedOnScreenDE, CPedGiveWeaponDE>);
 }

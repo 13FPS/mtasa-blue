@@ -510,5 +510,5 @@ private:
     std::int16_t m_defaultVoiceID;
 
     std::uint32_t m_type{PLAYER_PED};
-    std::uint8_t  m_occupiedSeat;
+    std::uint8_t  m_occupiedSeat = 0xff;
 };

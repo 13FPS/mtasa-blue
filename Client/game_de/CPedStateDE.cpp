@@ -4,6 +4,7 @@
  * PURPOSE: Forward raw oxygen and named ducking intent without substitutions
  ****************************************************************************/
 #include "CPedStateDE.h"
+#include <game/CPedSound.h>
 #include <stdexcept>
 #include <string>
 
@@ -17,6 +18,28 @@ namespace mta::game_de
     {
         return m_iCustomMoveAnim;
     }
+    void CPedStateDE::GetVoice(std::int16_t* voiceType, std::int16_t* voiceID) const
+    {
+        CPedSound* sound = GetPedSound();
+        if (!sound)
+            return;
+
+        if (voiceType)
+            *voiceType = sound->GetVoiceTypeID();
+        if (voiceID)
+            *voiceID = sound->GetVoiceID();
+    }
+
+    void CPedStateDE::SetVoice(std::int16_t voiceType, std::int16_t voiceID)
+    {
+        CPedSound* sound = GetPedSound();
+        if (!sound)
+            return;
+
+        sound->SetVoiceTypeID(voiceType);
+        sound->SetVoiceID(voiceID);
+    }
+
     void CPedStateDE::Require(ClockResult result, const char* operation)
     {
         if (result != ClockResult::Ok)

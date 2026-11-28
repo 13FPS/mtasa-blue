@@ -9,6 +9,7 @@
 #include <CMatrix.h>
 #include <game/CGame.h>
 #include <game/CPedIK.h>
+#include <game/CPedSound.h>
 #include <game/CWanted.h>
 #include "../../Client/game_de/CPlayerPedCompositionDE.h"
 #include "../../Client/game_de/CPedBorrowedFactoryDE.h"
@@ -168,6 +169,69 @@ namespace
             return status;
         }
     };
+    struct Sound final : CPedSound
+    {
+        short       typeID = -1;
+        short       voiceID = -1;
+        std::string calls;
+        short GetVoiceTypeID() override
+        {
+            calls += 't';
+            return typeID;
+        }
+        short GetVoiceID() override
+        {
+            calls += 'v';
+            return voiceID;
+        }
+        void SetVoiceTypeID(short value) override
+        {
+            calls += 'T';
+            typeID = value;
+        }
+        void SetVoiceID(short value) override
+        {
+            calls += 'V';
+            voiceID = value;
+        }
+        CPedSoundSAInterface* GetInterface() override { std::abort(); }
+        bool                  IsSpeechDisabled() override { std::abort(); }
+        void                  EnablePedSpeech() override { std::abort(); }
+        void                  DisablePedSpeech(bool) override { std::abort(); }
+    };
+
+    void CheckNumericVoice(Player& implementation, CPed& ped)
+    {
+        std::int16_t type = 17, id = 23;
+        const CPed&  readable = ped;
+        ped.SetVoice(-2, 41);
+        readable.GetVoice(&type, &id);
+        Check(type == 17 && id == 23, "an absent ped sound leaves both caller outputs intact");
+
+        Sound sound;
+        implementation.sound = &sound;
+        ped.SetVoice(-2, 41);
+        Check(sound.calls == "TV" && sound.typeID == -2 && sound.voiceID == 41, "voice assignment preserves signed IDs and sets type first");
+
+        sound.calls.clear();
+        readable.GetVoice(&type, &id);
+        Check(sound.calls == "tv" && type == -2 && id == 41, "voice getters return the selected sound provider's type and ID in order");
+
+        sound.calls.clear();
+        readable.GetVoice(&type, nullptr);
+        Check(sound.calls == "t", "requesting only a type skips the voice ID getter");
+        sound.calls.clear();
+        readable.GetVoice(nullptr, &id);
+        Check(sound.calls == "v", "requesting only a voice ID skips the type getter");
+        sound.calls.clear();
+        readable.GetVoice(static_cast<std::int16_t*>(nullptr), nullptr);
+        Check(sound.calls.empty(), "omitting both outputs skips both sound getters");
+
+        readable.GetVoice(&id, &id);
+        Check(id == sound.voiceID && sound.calls == "tv", "aliased output receives the voice ID last");
+        implementation.sound = nullptr;
+    }
+
     struct Wanted final : CWanted
     {
         unsigned* destroyed;
@@ -240,6 +304,10 @@ int main()
         const auto expected = owner.token;
         Check(Same(*implementation->FixtureTokenAddress(), expected) && implementation->FixtureTokenAddress() != &owner.token,
               "existing immutable ped reference stores the issued identity without aliasing the caller");
+        Check(ped->GetOccupiedSeat() == 0xff, "a newly registered player starts unseated");
+        player->SetOccupiedSeat(0);
+        Check(ped->GetOccupiedSeat() == 0, "both player and ped SDK views share the driver seat");
+        CheckNumericVoice(*implementation, *player);
         unsigned identity = 0;
         player->SetStoredPointer(&identity);
         Check(static_cast<CPed*>(static_cast<CPedPooledDE*>(implementation))->GetStoredPointer() == &identity,
@@ -274,8 +342,8 @@ int main()
         Check(factory.Retire() == ClockResult::Ok && destroyed == 1 && owner.releases == 1 && !wantedDestroyed,
               "completed typed retirement is idempotent and does not destroy the borrowed wanted view");
         Check(std::is_abstract_v<CPlayerPedCompositionDE>, "production composition remains abstract despite the strict test-only complete receiver");
-        Check(!std::is_abstract_v<Player>, "exact 101 SDK and two backend strict declarations close only the fixture");
-        std::puts("All 101 local player SDK methods and two backend hooks remain abstract");
+        Check(!std::is_abstract_v<Player>, "exact 95 SDK and two backend strict declarations close only the fixture");
+        std::puts("All 95 local player SDK methods and two backend hooks remain abstract");
         std::puts("Actual local player composition SDK fixture completed");
         std::printf("Passed %u local player composition SDK checks (%zu-bit; no native engine code executed)\n", checks, sizeof(void*) * 8);
         return 0;

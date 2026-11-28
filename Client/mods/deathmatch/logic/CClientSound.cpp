@@ -272,9 +272,10 @@ bool CClientSound::Play(void* pMemory, unsigned int uiLength, bool bLoop)
     m_bPan = false;
 
     // Instant distance-stream in
-    const bool loaded = Create();
-    ReleaseBuffer();  // A 2D memory sound opens once. Its decoder owns the bytes from here.
-    return loaded;
+    if (Create())
+        return true;
+    ReleaseBuffer();
+    return false;
 }
 
 bool CClientSound::Play3D(const SString& strPath, bool bLoop)
@@ -603,11 +604,13 @@ DWORD CClientSound::GetLevelData()
 
 float CClientSound::GetSoundBPM()
 {
-    if (m_pAudio)
-    {
-        return m_pAudio->GetSoundBPM();
-    }
-    return 0.0f;
+    if (!m_pAudio)
+        return 0;
+    const float bpm = m_pAudio->GetSoundBPM(m_Buffer.get(), m_uiBufferLength);
+    // Spatial sounds reopen from these bytes each time they enter range.
+    if (bpm > 0 && m_Buffer && !m_b3D)
+        ReleaseBuffer();
+    return bpm;
 }
 
 ////////////////////////////////////////////////////////////

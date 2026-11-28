@@ -249,7 +249,9 @@ std::variant<double, bool> CLuaAudioDefs::GetSoundLength(std::variant<CClientSou
 
 std::variant<double, bool> CLuaAudioDefs::GetSoundBufferLength(CClientSound* sound)
 {
-    return sound->IsSoundStream() ? sound->GetBufferLength() : false;
+    if (sound->IsSoundStream())
+        return sound->GetBufferLength();
+    return false;
 }
 
 bool CLuaAudioDefs::SetSoundLooped(CClientSound* sound, bool loop)
@@ -461,8 +463,10 @@ auto CLuaAudioDefs::GetSoundLevelData(std::variant<CClientSound*, CClientPlayer*
 
 std::variant<float, bool> CLuaAudioDefs::GetSoundBPM(CClientSound* sound)
 {
-    float bpm = sound->GetSoundBPM();
-    return bpm != 0.0f ? bpm : false;
+    const float bpm = sound->GetSoundBPM();
+    if (bpm > 0 && std::isfinite(bpm))
+        return bpm;
+    return false;
 }
 
 bool CLuaAudioDefs::SetSoundPanEnabled(CClientSound* sound, bool enabled) noexcept

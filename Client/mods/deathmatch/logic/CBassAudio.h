@@ -7,6 +7,8 @@
  *
  *****************************************************************************/
 
+#include <optional>
+
 #define CUT_OFF 5.0f  // Cut off point at which volume is regarded as 0 in the function e^-x
 
 enum eSoundEventType
@@ -100,7 +102,7 @@ public:
     float* GetFFTData(int iLength);
     float* GetWaveData(int iLength);
     DWORD  GetLevelData();
-    float  GetSoundBPM();
+    float  GetSoundBPM(const void* data, unsigned int length);
     void   SetSoundBPM(float fBPM) { m_fBPM = fBPM; }
 
     // Retrieves the error message for the most recent BASS function call in the current thread.
@@ -159,6 +161,7 @@ private:
 
     std::list<SSoundEventInfo> m_EventQueue;
     float                      m_fBPM;
+    std::optional<DWORD>       m_lastBpmFailure;
 
     void* m_uiCallbackId;
     HSYNC m_hSyncDownload;

@@ -1042,56 +1042,57 @@ DWORD CBassAudio::GetLevelData()
     return 0;
 }
 
-float CBassAudio::GetSoundBPM()
+float CBassAudio::GetSoundBPM(const void* data, unsigned int length)
 {
-    if (m_fBPM == 0.0f && !m_bStream)
+    if (m_fBPM > 0 || m_bStream || (!data && m_strPath.empty()))
+        return m_fBPM;
+
+    const DWORD now = GetTickCount32();
+    if (m_lastBpmFailure && now - *m_lastBpmFailure < FAILED_LOAD_RETRY_DELAY)
+        return 0;
+
+    const DWORD type = data ? BASS_FILE_MEM : BASS_FILE_NAME;
+    const DWORD flags = BASS_STREAM_DECODE | (data ? 0 : BASS_UNICODE);
+    WString     path;
+    if (!data)
     {
-        // Check failed cache before trying
-        const DWORD dwCurrentTime = GetTickCount32();
-        {
-            std::lock_guard<std::mutex> lock(ms_FailedFilesMutex);
-            const auto                  it = ms_FailedAudioFiles.find(m_strPath);
-            if (it != ms_FailedAudioFiles.end())
-            {
-                const DWORD dwTimeSinceFailure = dwCurrentTime - it->second;
-                if (dwTimeSinceFailure < FAILED_LOAD_RETRY_DELAY)
-                {
-                    return 0.0f;  // File failed recently, don't retry
-                }
-            }
-        }
-
-        float fData = 0.0f;
-
-        // open the same file as played but for bpm decoding detection
-        DWORD bpmChan = BASS_StreamCreateFile(false, FromUTF8(m_strPath), 0, 0, BASS_STREAM_DECODE | BASS_UNICODE);
-
-        if (!bpmChan)
-        {
-            bpmChan = BASS_MusicLoad(false, FromUTF8(m_strPath), 0, 0, BASS_MUSIC_DECODE | BASS_MUSIC_PRESCAN | BASS_UNICODE, 0);
-        }
-
-        if (bpmChan)
-        {
-            fData = BASS_FX_BPM_DecodeGet(bpmChan, 0, GetLength(), 0, BASS_FX_FREESOURCE, NULL, NULL);
-            BASS_FX_BPM_Free(bpmChan);
-        }
-
-        if (BASS_ErrorGetCode() != BASS_OK)
-        {
-            // Cache the failure to prevent repeated perf hits
-            {
-                std::lock_guard<std::mutex> lock(ms_FailedFilesMutex);
-                ms_FailedAudioFiles[m_strPath] = dwCurrentTime;
-            }
-            g_pCore->GetConsole()->Printf("BASS ERROR %d in BASS_FX_BPM_DecodeGet  path:%s  3d:%d  loop:%d", BASS_ErrorGetCode(), *m_strPath, m_b3D, m_bLoop);
-        }
-        else
-        {
-            m_fBPM = floor(fData);
-        }
+        path = FromUTF8(m_strPath);
+        data = path.c_str();
     }
 
+    // The query is synchronous. Its decoder borrows the entity's encoded
+    // bytes only during this call and never seeks on the playing channel.
+    HSTREAM stream = BASS_StreamCreateFile(type, data, 0, length, flags);
+    HMUSIC  music = stream ? 0 : BASS_MusicLoad(type, data, 0, length, flags | BASS_MUSIC_PRESCAN, 0);
+    DWORD   channel = stream ? stream : music;
+    int     error = BASS_ErrorGetCode();
+    if (channel)
+    {
+        const QWORD bytes = BASS_ChannelGetLength(channel, BASS_POS_BYTE);
+        double      seconds = 0;
+        if (bytes != static_cast<QWORD>(-1))
+            seconds = BASS_ChannelBytes2Seconds(channel, bytes);
+        error = BASS_ErrorGetCode();
+        if (seconds > 0)
+        {
+            const float bpm = BASS_FX_BPM_DecodeGet(channel, 0, seconds, 0, 0, nullptr, nullptr);
+            error = BASS_ErrorGetCode();
+            BASS_FX_BPM_Free(channel);
+            if (error == BASS_OK && std::isfinite(bpm) && bpm > 0)
+                m_fBPM = std::floor(bpm);
+        }
+        if (stream)
+            BASS_StreamFree(stream);
+        else
+            BASS_MusicFree(music);
+    }
+
+    if (!m_fBPM)
+    {
+        m_lastBpmFailure = now;
+        if (error != BASS_OK)
+            g_pCore->GetConsole()->Printf("BASS ERROR %d in BPM detection  path:%s  3d:%d  loop:%d", error, *m_strPath, m_b3D, m_bLoop);
+    }
     return m_fBPM;
 }
 

@@ -103,9 +103,9 @@ def main():
         methods = []
         buffer_methods = []
         buffer_signatures = {
-            "CBassAudio.cpp": ["bool CBassAudio::BeginLoadingMedia(", "CBassAudio::~CBassAudio("],
+            "CBassAudio.cpp": ["bool CBassAudio::BeginLoadingMedia(", "CBassAudio::~CBassAudio(", "float CBassAudio::GetSoundBPM("],
             "CClientSound.cpp": ["void CClientSound::ReleaseBuffer(", "bool CClientSound::AdoptBuffer(", "bool CClientSound::Play(void*",
-                                 "bool CClientSound::Play3D(void*"],
+                                 "bool CClientSound::Play3D(void*", "bool CClientSound::Play(const SString&", "float CClientSound::GetSoundBPM("],
             "CClientSoundManager.cpp": ["static std::unique_ptr<unsigned char[]> CopyRawAudio("],
         }
         for path, signatures in (

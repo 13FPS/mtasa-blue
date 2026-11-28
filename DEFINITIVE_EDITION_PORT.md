@@ -1,6 +1,6 @@
 # GTA San Andreas Definitive Edition: findings and port tracker
 
-## Current port status (2026-11-26)
+## Current port status (2026-11-28)
 
 **Full multiplayer on DE is still unavailable.** The real MTA Core, Deathmatch
 client and DE backend all built in Release/x64. MTA's menu, Settings, console,
@@ -9,6 +9,31 @@ before loading gameplay modules because the DE adapter returns no `CGame`.
 Remote gameplay also requires a DE multiplayer factory, multiplayer and
 renderer startup, and a compatible x64 client network module. Both documented
 Windows client network downloads checked for this port contain x86 DLLs.
+
+Deathmatch now releases the model reference if the render-object lookup fails.
+If the ped pool, player wrapper or task manager is unavailable, it rolls back
+creation. A failed recreation can retry on a later streamer pulse. During
+local-player startup, a refused task-manager lookup follows the normal startup
+error path and preserves another player's registration if ownership changed.
+All 48 startup and streaming scenarios passed on Windows and Linux with
+simulated game services. The November 26 revision failed 15 of the same
+scenarios on each platform. Both Release Deathmatch DLLs also
+loaded, exported `InitClient`, and unloaded in their respective Windows hosts.
+
+The DE player now tracks the occupied seat, looks up a weapon by type using
+the inventory slot, and reads and writes numeric voice IDs through the ped
+sound interface. Classic and DE now share the SDK checks for selecting the
+current attack task and removing a secondary task only if its type still
+matches. The x64 compiler reports 95 outstanding public player methods and
+two internal hooks, down from 100 public methods. The player still needs an
+owned implementation of `GetPedIntelligence()` for startup. Its intelligence
+class has two unimplemented methods and its task manager has eleven.
+
+The D3D12 frontend now stops copying pixels back to the CPU after verifying
+the menu at its current size. It keeps sampling when the initial frames are
+empty and checks again after a resize. In the Windows software-renderer test,
+both builds presented five frames across two sizes. GPU readback copies fell
+from five to two, and the captured images were byte-identical.
 
 Deathmatch now waits for its local player to finish initialization before
 it sends the server its in-game notice. Previously, a missing local ped or

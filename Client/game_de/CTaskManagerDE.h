@@ -1,7 +1,7 @@
 /****************************************************************************
  * PROJECT: Multi Theft Auto
  * LICENSE: See LICENSE in the repository root
- * PURPOSE: Reuse the real SDK secondary-task removal without a fake task graph
+ * PURPOSE: Query SDK task hierarchies and forward secondary-task removal
  ****************************************************************************/
 #pragma once
 #include "NativeTaskRemovalAccess.h"
@@ -11,13 +11,15 @@
 namespace mta::game_de
 {
     class CPedIntelligenceDE;
-    // Typed lookup and assignment still need a task provider. The SDK uses
-    // that lookup before requesting removal of a particular task type.
+    // The task provider supplies current borrowed roots for each query.
     class CTaskManagerDE : public CTaskManager
     {
     public:
         using CTaskManager::RemoveTaskSecondary;
-        void RemoveTaskSecondary(const int priority) override;
+        CTask* GetSimplestTask(int priority) override;
+        CTask* GetSimplestActiveTask() override;
+        CTask* FindTaskByType(int priority, int taskType) override;
+        void   RemoveTaskSecondary(const int priority) override;
 
     protected:
         CTaskManagerDE(NativeTaskRemovalAccess& access, const NativePedReferenceToken& token) noexcept : access(access), token(token) {}

@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 #requires -Version 7.0
-# Exercise the same-ped manager and current attack-task lookups using SDK wrappers.
+# Exercise same-ped intelligence and task-manager queries using SDK wrappers.
 [CmdletBinding()]
 param([ValidateNotNullOrEmpty()][ValidateSet('x86','x64')][string[]]$Architectures=@('x64'))
 
@@ -20,7 +20,7 @@ $record = [ordered]@{
     schema='mta_ped_intelligence_sdk_tests_v1';directory=$outputRoot;success=$false;
     recordedAt=[DateTimeOffset]::Now.ToString('o');sourceHashes=@();sourcesUnchanged=$true;
     generatedFixture=$null;results=@();failure=$null;scratchDirectory=$scratchRoot;scratchRemoved=$false;
-    scope='SDK manager borrowing, owner identity checks and typed attack-task queries with caller-supplied task wrappers.';
+    scope='SDK manager borrowing, owner identity checks, typed attack-task queries, and primary and active task hierarchies with caller-supplied wrappers.';
     nativeEngineCodeExecuted=$false;gameLaunched=$false;gameAttached=$false;installationChanged=$false;completeCGameReady=$false;
     pedIntelligenceSdkTested=$false;pedIntelligenceManagerProvenanceTested=$false;pedIntelligenceIdentityBookendsTested=$false;pedIntelligencePureSurfaceTested=$false
 }
@@ -259,13 +259,14 @@ try {
         $result['pedIntelligenceManagerProvenanceTested']=$stdout.Contains('Ped intelligence exact owner and token provenance fixture completed')
         $result['pedIntelligenceIdentityBookendsTested']=$stdout.Contains('Ped intelligence current identity bookends and refusals fixture completed')
         $result['pedIntelligencePureSurfaceTested']=$stdout.Contains('Two intelligence methods and task-manager factory obligations remain abstract')
+        $result['taskManagerHierarchyTested']=$stdout.Contains('Task manager selected and active SDK hierarchy queries completed')
         $expectedBits=if($architecture -eq 'x86'){32}else{64}
-        if($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -ne 39 -or $result.pointerBits -ne $expectedBits -or
+        if($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -ne 50 -or $result.pointerBits -ne $expectedBits -or -not $result.taskManagerHierarchyTested -or
             -not($result.pedIntelligenceSdkTested -and $result.pedIntelligenceManagerProvenanceTested -and $result.pedIntelligenceIdentityBookendsTested -and $result.pedIntelligencePureSurfaceTested)) {
             throw "$architecture ped intelligence SDK checks or required owner evidence failed"
         }
     }
-    foreach($marker in @('pedIntelligenceSdkTested','pedIntelligenceManagerProvenanceTested','pedIntelligenceIdentityBookendsTested','pedIntelligencePureSurfaceTested')) {
+    foreach($marker in @('pedIntelligenceSdkTested','pedIntelligenceManagerProvenanceTested','pedIntelligenceIdentityBookendsTested','pedIntelligencePureSurfaceTested','taskManagerHierarchyTested')) {
         $record[$marker]=@($record.results|Where-Object{-not $_[$marker]}).Count -eq 0
     }
     $record.success=$record.results.Count -eq $Architectures.Count -and $record.pedIntelligenceSdkTested -and $record.pedIntelligenceManagerProvenanceTested -and $record.pedIntelligenceIdentityBookendsTested -and $record.pedIntelligencePureSurfaceTested

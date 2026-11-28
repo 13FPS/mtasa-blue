@@ -48,8 +48,8 @@ function InterfaceMethods([string]$RelativePath) {
 
 
     $intelligence=@(InterfaceMethods 'Client/sdk/game/CPedIntelligence.h'|Where-Object{$_.name -notin @('GetTaskManager','GetTaskUseGun','GetFightTask')})
-    $manager=@(InterfaceMethods 'Client/sdk/game/CTaskManager.h'|Where-Object{$_.name -ne 'RemoveTaskSecondary'})
-    if($intelligence.Count -ne 2 -or $manager.Count -ne 11){throw 'Unexpected remaining intelligence/task-manager surface'}
+    $manager=@(InterfaceMethods 'Client/sdk/game/CTaskManager.h'|Where-Object{$_.name -notin @('RemoveTaskSecondary','GetSimplestTask','GetSimplestActiveTask','FindTaskByType')})
+    if($intelligence.Count -ne 2 -or $manager.Count -ne 8){throw 'Unexpected remaining intelligence/task-manager surface'}
     $lines=@('#pragma once','#include <utility>','#include <type_traits>','#include <cstdio>','#include <cstdlib>',
         'namespace ped_intelligence_fixture {',
         '[[noreturn]] inline void Unqualified(const char* method) noexcept {std::fprintf(stderr,"Unqualified intelligence fixture call: %s\n",method);std::abort();}',
@@ -72,6 +72,6 @@ function InterfaceMethods([string]$RelativePath) {
     $lines+='}'
     $lines|Set-Content -LiteralPath $OutputPath -Encoding utf8NoBOM
     [ordered]@{path=$OutputPath;sha256=(Get-FileHash -LiteralPath $OutputPath -Algorithm SHA256).Hash.ToLowerInvariant();
-        intelligenceInherited=3;intelligenceRejectors=2;intelligenceOmissionProbes=2;managerInherited=2;managerRejectors=11;
+        intelligenceInherited=3;intelligenceRejectors=2;intelligenceOmissionProbes=2;managerInherited=5;managerRejectors=8;
         completeProductionIntelligence=$false;nativeTaskFactoryImplemented=$false}
 }

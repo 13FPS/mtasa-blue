@@ -9,6 +9,7 @@
 #include "../../Client/game_de/CTaskManagerDE.h"
 #include "../../Client/game_de/NativeGameTimingAccess.h"
 #include <game/TaskAttack.h>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -134,18 +135,31 @@ namespace
         {
         }
         ~Manager() { ++destructions; }
+        CTask* GetTask(const int priority) override
+        {
+            ++primaryReads;
+            return priority >= 0 && priority < TASK_PRIORITY_MAX ? primary[priority] : nullptr;
+        }
+        CTask* GetActiveTask() override
+        {
+            ++activeReads;
+            return active;
+        }
         CTask* GetTaskSecondary(const int slot) override
         {
             Check(slot == TASK_SECONDARY_ATTACK, "query uses the attack slot");
             ++lookups;
             return attack;
         }
-        CTask*   attack = nullptr;
-        unsigned lookups = 0;
+        CTask*                                attack = nullptr;
+        unsigned                              lookups = 0;
+        std::array<CTask*, TASK_PRIORITY_MAX> primary{};
+        CTask*                                active = nullptr;
+        unsigned                              primaryReads = 0, activeReads = 0;
     };
 
     template <class Interface>
-    struct SimpleTask : Interface
+    struct TestTask : Interface
     {
         int                     type = NO_TASK_TYPE;
         int                     GetTaskType() override { return type; }
@@ -164,10 +178,35 @@ namespace
         void                    SetAsSecondaryPedTask(CPed*, int) override { std::abort(); }
         void                    Destroy() override { std::abort(); }
         void                    DestroyJustThis() override { std::abort(); }
-        bool                    ProcessPed(CPed*) override { std::abort(); }
-        bool                    SetPedPosition(CPed*) override { std::abort(); }
+    };
+    template <class Interface>
+    struct SimpleTask : TestTask<Interface>
+    {
+        bool ProcessPed(CPed*) override { std::abort(); }
+        bool SetPedPosition(CPed*) override { std::abort(); }
     };
     using FightTask = SimpleTask<CTaskSimpleFight>;
+    struct ComplexTask final : TestTask<CTaskComplex>
+    {
+        CTask*   child = nullptr;
+        unsigned reads = 0;
+        bool     refuse = false;
+        CTask*   GetSubTask() override
+        {
+            ++reads;
+            if (refuse)
+                throw std::runtime_error("subtask provider refused");
+            return child;
+        }
+        void   SetSubTask(CTask*) override { std::abort(); }
+        CTask* CreateFirstSubTask(CPed*) override { std::abort(); }
+        CTask* CreateNextSubTask(CPed*) override { std::abort(); }
+        CTask* ControlSubTask(CPed*) override { std::abort(); }
+    };
+    struct LeafTask final : SimpleTask<CTaskSimple>
+    {
+        CTask* GetSubTask() override { return nullptr; }
+    };
     struct UseGunTask final : SimpleTask<CTaskSimpleUseGun>
     {
         bool ControlGun(CPed*, CEntity*, char) override { std::abort(); }
@@ -225,7 +264,7 @@ namespace
         Manager                                manager(owner, owner.expected, deaths);
         ped_intelligence_fixture::Intelligence intelligence(owner, owner.expected, manager);
         CPedIntelligence&                      sdk = intelligence;
-        struct WithoutManager final : ped_intelligence_fixture::Intelligence
+        struct WithoutManager                  final : ped_intelligence_fixture::Intelligence
         {
             using Intelligence::Intelligence;
             CTaskManager* GetTaskManager() override { return nullptr; }
@@ -251,6 +290,51 @@ namespace
         ++owner.expected.version;
         Check(Refuses([&] { sdk.GetTaskUseGun(); }, ClockResult::OwnerConflict) && manager.lookups == 10 && !owner.removals,
               "a stale manager refuses before looking up the slot");
+    }
+    void TaskHierarchy()
+    {
+        Owner         owner;
+        unsigned      deaths = 0;
+        Manager       manager(owner, owner.expected, deaths);
+        CTaskManager& sdk = manager;
+        ComplexTask   root, middle;
+        LeafTask      leaf, replacement;
+        root.type = TASK_COMPLEX_USE_GOGGLES;
+        middle.type = TASK_COMPLEX_SEQUENCE;
+        leaf.type = TASK_SIMPLE_GOGGLES_ON;
+        replacement.type = TASK_SIMPLE_GOGGLES_OFF;
+        manager.primary[TASK_PRIORITY_DEFAULT] = &replacement;
+
+        Check(!sdk.GetSimplestTask(TASK_PRIORITY_PRIMARY) && !sdk.GetSimplestActiveTask(), "empty selected roots have no leaf");
+        manager.primary[TASK_PRIORITY_PRIMARY] = &root;
+        manager.active = &replacement;
+        root.child = &middle;
+        middle.child = &leaf;
+        Check(sdk.GetSimplestTask(TASK_PRIORITY_PRIMARY) == &leaf && root.reads == 1 && middle.reads == 1, "priority leaf follows each edge once");
+        Check(sdk.GetSimplestActiveTask() == &replacement && manager.activeReads == 2 && manager.primaryReads == 2, "active root uses its own provider");
+        Check(sdk.FindTaskByType(TASK_PRIORITY_PRIMARY, root.type) == &root && root.reads == 1, "a root match does not read its child");
+        Check(sdk.FindTaskByType(TASK_PRIORITY_PRIMARY, middle.type) == &middle && middle.reads == 1, "an interior match stops immediately");
+        Check(sdk.FindTaskByType(TASK_PRIORITY_PRIMARY, leaf.type) == &leaf, "search reaches a leaf of the selected priority");
+        Check(!sdk.FindTaskByType(TASK_PRIORITY_PRIMARY, replacement.type), "search does not cross into another priority or the active root");
+        middle.type = leaf.type;
+        Check(sdk.FindTaskByType(TASK_PRIORITY_PRIMARY, leaf.type) == &middle, "the first type match wins");
+        middle.child = nullptr;
+        Check(sdk.GetSimplestTask(TASK_PRIORITY_PRIMARY) == &middle, "a terminal complex wrapper is the deepest available task");
+        manager.active = &root;
+        root.child = &replacement;
+        Check(sdk.GetSimplestActiveTask() == &replacement, "a later query observes the new active hierarchy");
+        root.refuse = true;
+        bool refused = false;
+        try
+        {
+            sdk.GetSimplestActiveTask();
+        }
+        catch (const std::runtime_error& error)
+        {
+            refused = std::string(error.what()) == "subtask provider refused";
+        }
+        Check(refused && !owner.removals && !manager.lookups, "provider refusal propagates without touching other tasks");
+        std::puts("Task manager selected and active SDK hierarchy queries completed");
     }
     void Provenance()
     {
@@ -352,6 +436,7 @@ int main()
     {
         Borrowing();
         AttackTasks();
+        TaskHierarchy();
         Provenance();
         RefusalsAndBookends();
         std::printf("Passed %u ped intelligence SDK checks (%u-bit; opaque provider doubles only)\n", checks, static_cast<unsigned>(sizeof(void*) * 8));

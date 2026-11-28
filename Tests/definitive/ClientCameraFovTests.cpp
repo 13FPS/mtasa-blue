@@ -107,6 +107,20 @@ struct Row : CCam
 
 struct Camera : CCamera
 {
+    std::array<BYTE, 3> color{};
+    void                SetFadeColor(BYTE red, BYTE green, BYTE blue) override
+    {
+        Call('K');
+        color = {red, green, blue};
+    }
+    void Fade(float time, int direction) override
+    {
+        Call('E');
+        if (time != 0.5f || (direction != FADE_IN && direction != FADE_OUT))
+            throw std::runtime_error("wrong fade arguments");
+        lastFade = direction;
+    }
+    int      lastFade = -1;
     bool     transition = false;
     bool     transitionPoseAvailable = true;
     BYTE     selector = 0;
@@ -176,6 +190,17 @@ namespace SystemState
 }
 struct Game
 {
+    struct Hud
+    {
+        bool visible = false;
+        void SetComponentVisible(int, bool value)
+        {
+            Call('H');
+            visible = value;
+        }
+    };
+    Hud*              hud = nullptr;
+    Hud*              GetHud() { return hud; }
     CCamera*          camera = nullptr;
     SystemState::Enum state = SystemState::GS_INIT;
     CCamera*          GetCamera() { return camera; }
@@ -200,6 +225,19 @@ struct Settings
 };
 static Game*     g_pGame = nullptr;
 static Settings* g_pCore = nullptr;
+struct ClientGame
+{
+    auto* GetManager();
+    bool  initiallyFaded = true, hideAreaName = false;
+    void  SetInitiallyFadedOut(bool value)
+    {
+        Call('X');
+        initiallyFaded = value;
+    }
+    bool GetHudAreaNameDisabled() const { return hideAreaName; }
+};
+static ClientGame*   g_pClientGame = nullptr;
+static constexpr int HUD_AREA_NAME = 1;
 
 enum class EFixedCameraMode
 {
@@ -209,7 +247,11 @@ enum class EFixedCameraMode
 
 struct CClientCamera
 {
-    CCamera*                    m_pCamera = nullptr;
+    void     FadeIn(float time);
+    void     FadeOut(float time, BYTE red, BYTE green, BYTE blue);
+    bool     ApplyFade(bool fadeIn, float time, BYTE red, BYTE green, BYTE blue);
+    CCamera* m_pCamera = nullptr;
+#include "CameraAvailability.inl"
     bool                        m_viewModesRestored = false;
     std::uint8_t                m_lastVehicleViewMode = 0, m_lastPedViewMode = 0;
     void                        PersistViewModes();
@@ -243,14 +285,101 @@ struct CClientCamera
 };
 struct CStaticFunctionDefinitions
 {
+    struct Manager
+    {
+        CClientCamera* GetCamera() { return m_pCamera; }
+    };
+    static inline Manager        manager;
+    static inline Manager*       m_pManager = &manager;
+    static bool                  FadeCamera(bool fadeIn, float time, BYTE red, BYTE green, BYTE blue);
     static inline CClientCamera* m_pCamera;
     static bool                  GetCameraMatrix(CVector&, CVector&, float&, float&);
 };
+auto* ClientGame::GetManager()
+{
+    return CStaticFunctionDefinitions::m_pManager;
+}
+
+// Supply decoded fields to the production handler without a connection.
+struct NetBitStreamInterface
+{
+    std::array<BYTE, 4> bytes{};
+    size_t              count = 4, next = 0;
+    bool                Read(BYTE& value)
+    {
+        if (next == count)
+            return false;
+        value = bytes[next++];
+        return true;
+    }
+    bool Read(float& value)
+    {
+        value = 0.5f;
+        return true;
+    }
+};
+struct CCameraRPCs
+{
+    static inline CClientCamera* m_pCamera;
+    static void                  FadeCamera(NetBitStreamInterface&);
+};
 struct CLuaCameraDefs
 {
+    static inline auto* m_pManager = CStaticFunctionDefinitions::m_pManager;
+    static bool         SetCameraViewMode(std::optional<unsigned char>, std::optional<unsigned char>);
     static CLuaMultiReturn<float, float, float, float, float, float, float, float> GetCameraMatrix();
 };
 #include "CameraMethods.inl"
+
+static void CheckFade()
+{
+    Game          game;
+    Game::Hud     hud;
+    ClientGame    clientGame;
+    CClientCamera client;
+    Camera        camera;
+    g_pClientGame = &clientGame;
+    g_pGame = &game;
+    game.hud = &hud;
+    CStaticFunctionDefinitions::m_pCamera = CCameraRPCs::m_pCamera = &client;
+    calls.clear();
+    if (CStaticFunctionDefinitions::FadeCamera(true, 0.5f, 0, 0, 0) || !clientGame.initiallyFaded || !calls.empty())
+        throw std::runtime_error("unpublished camera reported a fade or changed the HUD");
+    if (CLuaCameraDefs::SetCameraViewMode(4, 3) || !CLuaCameraDefs::SetCameraViewMode({}, {}))
+        throw std::runtime_error("view mode request lost its camera availability or optional arguments");
+    client.m_pCamera = &camera;
+    if (!CLuaCameraDefs::SetCameraViewMode({}, 3) || camera.ped != 3 || camera.vehicle != 1 || !CLuaCameraDefs::SetCameraViewMode(4, {}) ||
+        camera.vehicle != 4 || camera.ped != 3)
+        throw std::runtime_error("requested view mode did not reach its camera");
+    NetBitStreamInterface incomplete{{0, 12, 24, 36}, 3};
+    CCameraRPCs::FadeCamera(incomplete);
+    if (!clientGame.initiallyFaded || !calls.empty())
+        throw std::runtime_error("incomplete fade-out changed the initial fade");
+    if (!CStaticFunctionDefinitions::FadeCamera(true, 0.5f, 0, 0, 0) || camera.lastFade != FADE_IN || calls != "EXH" || !hud.visible ||
+        clientGame.initiallyFaded)
+        throw std::runtime_error("accepted fade-in did not restore the area name");
+    calls.clear();
+    CStaticFunctionDefinitions::m_pCamera = nullptr;
+    NetBitStreamInterface fadeOut{{0, 12, 24, 36}};
+    CCameraRPCs::FadeCamera(fadeOut);
+    if (camera.lastFade != FADE_OUT || camera.color != std::array<BYTE, 3>{12, 24, 36} || calls != "KEXH" || hud.visible)
+        throw std::runtime_error("fade-out lost its color, order or HUD state");
+    calls.clear();
+    clientGame.hideAreaName = true;
+    NetBitStreamInterface fadeIn{{1}, 1};
+    CCameraRPCs::FadeCamera(fadeIn);
+    if (camera.lastFade != FADE_IN || calls != "EXH" || hud.visible)
+        throw std::runtime_error("fade-in overrode the disabled area name");
+    calls.clear();
+    game.hud = nullptr;
+    CStaticFunctionDefinitions::m_pCamera = &client;
+    if (!CStaticFunctionDefinitions::FadeCamera(true, 0.5f, 0, 0, 0) || calls != "EX")
+        throw std::runtime_error("unavailable HUD prevented the camera fade");
+    g_pClientGame = nullptr;
+    g_pGame = nullptr;
+    CStaticFunctionDefinitions::m_pCamera = CCameraRPCs::m_pCamera = nullptr;
+    std::puts("Passed camera publication, fade color and HUD side effects for script and RPC requests");
+}
 
 static void Check(float value, const std::string& expectedCalls)
 {
@@ -457,6 +586,7 @@ int main()
         }
         if (refuse)
             throw std::runtime_error("sample refusal was masked");
+        CheckFade();
         std::printf("Passed %u Lua camera matrix FOV scenarios, roll round trips and absent camera defaults\n", checks);
         return 0;
     }

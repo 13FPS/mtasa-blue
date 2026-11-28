@@ -45,6 +45,9 @@ def main():
             env.pop("CL", None)
             env.pop("_CL_", None)
             camera = source(LOGIC + "CClientCamera.cpp")
+            camera_header = source(LOGIC + "CClientCamera.h")
+            availability = [line.strip() for line in camera_header.splitlines() if "HasGameCamera() const" in line]
+            (work / "CameraAvailability.inl").write_text("\n".join(availability))
             helpers = camera[camera.index("namespace\n{"):camera.index("    inline CMatrix& ScratchMatrix()")]
             degrees = method(source("Shared/mods/deathmatch/logic/Utils.h"), "inline float ConvertDegreesToRadiansNoWrap(float")
             (work / "FixedCameraMath.inl").write_text(degrees + "\n" + helpers + "}\n", encoding="utf-8")
@@ -64,20 +67,28 @@ def main():
             if '{"getCameraMatrix", ArgumentParserWarn<false, GetCameraMatrix>}' not in lua:
                 raise ValueError("Lua no longer registers the selected function")
             functions = source(LOGIC + "CStaticFunctionDefinitions.cpp")
+            rpc = source(LOGIC + "rpc/CCameraRPCs.cpp")
             gta_matrix = "bool CClientCamera::GetGtaMatrix(" if "bool CClientCamera::GetGtaMatrix(" in camera else "CMatrix CClientCamera::GetGtaMatrix() const"
             methods = ("bool CClientCamera::IsInCameraTransition() const", gta_matrix, "bool CClientCamera::GetMatrix(",
                        "const CMatrix& CClientCamera::AcquirePulseMatrix() const", "void CClientCamera::InvalidateCachedTransforms() const",
                        "void CClientCamera::PersistViewModes()", "void CClientCamera::SetFixedTarget(",
                        "void CClientCamera::GetFixedTarget(", "void CClientCamera::GetPosition(",
+                       "void CClientCamera::FadeIn(", "void CClientCamera::FadeOut(",
                        "void CClientCamera::SetCameraVehicleViewMode(", "void CClientCamera::SetCameraPedViewMode(",
                        "eVehicleCamMode CClientCamera::GetCameraVehicleViewMode()", "ePedCamMode CClientCamera::GetCameraPedViewMode()")
             if args.source_commit and "CMatrix CClientCamera::GetInterpolatedCameraMatrix() const" in camera:
                 methods += ("CMatrix CClientCamera::GetInterpolatedCameraMatrix() const",)
+            if "bool CClientCamera::ApplyFade(" in camera:
+                methods += ("bool CClientCamera::ApplyFade(",)
             code = [*(method(camera, signature) for signature in methods), fov,
                     method(functions, "bool CStaticFunctionDefinitions::GetCameraMatrix("),
+                    method(functions, "bool CStaticFunctionDefinitions::FadeCamera("),
+                    method(rpc, "void CCameraRPCs::FadeCamera("),
+                    method(lua, "bool CLuaCameraDefs::SetCameraViewMode("),
                     method(lua, "CLuaMultiReturn<float, float, float, float, float, float, float, float> CLuaCameraDefs::GetCameraMatrix()")]
             (work / "CameraMethods.inl").write_text("\n".join(code), encoding="utf-8")
             for cls, exercised in (("CCamera", {"GetActiveCam", "GetCam", "GetTransitionFOV", "IsInTransition", "GetMatrix", "GetTransitionMatrix",
+                                                "Fade", "SetFadeColor",
                                                 "SetCameraVehicleViewMode", "SetCameraPedViewMode", "GetCameraVehicleViewMode", "GetCameraPedViewMode"}),
                                    ("CCam", {"GetFOV", "GetFront", "GetUp", "GetSource"})):
                 sdk = source(f"Client/sdk/game/{cls}.h")

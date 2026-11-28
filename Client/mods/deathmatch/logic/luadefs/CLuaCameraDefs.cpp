@@ -401,16 +401,24 @@ int CLuaCameraDefs::SetCameraClip(lua_State* luaVM)
     argStream.ReadBool(bObjects, true);
     argStream.ReadBool(bVehicles, true);
 
-    m_pManager->GetCamera()->SetCameraClip(bObjects, bVehicles);
+    if (argStream.HasErrors())
+    {
+        m_pScriptDebugging->LogCustom(luaVM, argStream.GetFullErrorMessage());
+        lua_pushboolean(luaVM, false);
+        return 1;
+    }
 
-    lua_pushboolean(luaVM, true);
+    auto* camera = m_pManager ? m_pManager->GetCamera() : nullptr;
+    lua_pushboolean(luaVM, camera && camera->SetCameraClip(bObjects, bVehicles));
     return 1;
 }
 
 int CLuaCameraDefs::GetCameraClip(lua_State* luaVM)
 {
-    bool bObjects, bVehicles;
-    m_pManager->GetCamera()->GetCameraClip(bObjects, bVehicles);
+    bool  bObjects = true, bVehicles = true;
+    auto* camera = m_pManager ? m_pManager->GetCamera() : nullptr;
+    if (camera)
+        camera->GetCameraClip(bObjects, bVehicles);
 
     lua_pushboolean(luaVM, bObjects);
     lua_pushboolean(luaVM, bVehicles);
@@ -419,14 +427,16 @@ int CLuaCameraDefs::GetCameraClip(lua_State* luaVM)
 
 bool CLuaCameraDefs::SetCameraViewMode(std::optional<unsigned char> ucVehicleViewMode, std::optional<unsigned char> ucPedViewMode)
 {
-    CClientCamera* pCamera = g_pClientGame->GetManager()->GetCamera();
+    if (!ucVehicleViewMode && !ucPedViewMode)
+        return true;
+    auto* camera = m_pManager ? m_pManager->GetCamera() : nullptr;
+    if (!camera || !camera->HasGameCamera())
+        return false;
 
     if (ucVehicleViewMode)
-        pCamera->SetCameraVehicleViewMode((eVehicleCamMode)ucVehicleViewMode.value());
-
+        camera->SetCameraVehicleViewMode(static_cast<eVehicleCamMode>(*ucVehicleViewMode));
     if (ucPedViewMode)
-        pCamera->SetCameraPedViewMode((ePedCamMode)ucPedViewMode.value());
-
+        camera->SetCameraPedViewMode(static_cast<ePedCamMode>(*ucPedViewMode));
     return true;
 }
 

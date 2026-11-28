@@ -67,6 +67,7 @@ public:
 
     void FadeIn(float fTime);
     void FadeOut(float fTime, unsigned char ucRed, unsigned char ucGreen, unsigned char ucBlue);
+    bool ApplyFade(bool bFadeIn, float fTime, unsigned char ucRed, unsigned char ucGreen, unsigned char ucBlue);
 
     CClientPlayer* GetFocusedPlayer() { return m_pFocusedPlayer; };
     void           SetFocus(CClientEntity* pEntity, eCamMode eMode, bool bSmoothTransition = false);
@@ -77,11 +78,12 @@ public:
     void ShakeCamera(float radius, float x, float y, float z) noexcept;
     void ResetShakeCamera() noexcept;
 
+    bool            HasGameCamera() const noexcept { return m_pCamera != nullptr; }
     void            SetCameraVehicleViewMode(eVehicleCamMode eMode);
     void            SetCameraPedViewMode(ePedCamMode eMode);
     eVehicleCamMode GetCameraVehicleViewMode();
     ePedCamMode     GetCameraPedViewMode();
-    void            SetCameraClip(bool bObjects, bool bVehicles);
+    bool            SetCameraClip(bool bObjects, bool bVehicles);
     void            ResetCameraClip();
     void            GetCameraClip(bool& bObjects, bool& bVehicles);
 

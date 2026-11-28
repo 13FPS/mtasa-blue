@@ -163,37 +163,9 @@ void CCameraRPCs::FadeCamera(NetBitStreamInterface& bitStream)
     if (!bitStream.Read(ucFadeIn) || !bitStream.Read(fFadeTime))
         return;
 
-    // Validate pointers before use
-    if (!m_pCamera || !g_pClientGame)
+    unsigned char ucRed = 0, ucGreen = 0, ucBlue = 0;
+    if (!ucFadeIn && (!bitStream.Read(ucRed) || !bitStream.Read(ucGreen) || !bitStream.Read(ucBlue)))
         return;
-
-    g_pClientGame->SetInitiallyFadedOut(false);
-
-    if (ucFadeIn)
-    {
-        m_pCamera->FadeIn(fFadeTime);
-
-        // Validate game and HUD pointers
-        if (g_pGame && g_pGame->GetHud())
-        {
-            g_pGame->GetHud()->SetComponentVisible(HUD_AREA_NAME, !g_pClientGame->GetHudAreaNameDisabled());
-        }
-    }
-    else
-    {
-        unsigned char ucRed = 0;
-        unsigned char ucGreen = 0;
-        unsigned char ucBlue = 0;
-
-        if (!bitStream.Read(ucRed) || !bitStream.Read(ucGreen) || !bitStream.Read(ucBlue))
-            return;
-
-        m_pCamera->FadeOut(fFadeTime, ucRed, ucGreen, ucBlue);
-
-        // Validate game and HUD pointers
-        if (g_pGame && g_pGame->GetHud())
-        {
-            g_pGame->GetHud()->SetComponentVisible(HUD_AREA_NAME, false);
-        }
-    }
+    if (m_pCamera)
+        m_pCamera->ApplyFade(ucFadeIn != 0, fFadeTime, ucRed, ucGreen, ucBlue);
 }

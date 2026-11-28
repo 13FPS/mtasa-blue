@@ -5179,26 +5179,8 @@ bool CStaticFunctionDefinitions::SetCameraInterior(unsigned char ucInterior)
 
 bool CStaticFunctionDefinitions::FadeCamera(bool bFadeIn, float fFadeTime, unsigned char ucRed, unsigned char ucGreen, unsigned char ucBlue)
 {
-    CClientCamera* pCamera = m_pManager->GetCamera();
-    if (!pCamera || !g_pClientGame)
-        return false;
-
-    g_pClientGame->SetInitiallyFadedOut(false);
-
-    if (bFadeIn)
-    {
-        pCamera->FadeIn(fFadeTime);
-        if (g_pGame && g_pGame->GetHud())
-            g_pGame->GetHud()->SetComponentVisible(HUD_AREA_NAME, !g_pClientGame->GetHudAreaNameDisabled());
-    }
-    else
-    {
-        pCamera->FadeOut(fFadeTime, ucRed, ucGreen, ucBlue);
-        if (g_pGame && g_pGame->GetHud())
-            g_pGame->GetHud()->SetComponentVisible(HUD_AREA_NAME, false);
-    }
-
-    return true;
+    auto* camera = m_pManager ? m_pManager->GetCamera() : nullptr;
+    return camera && camera->ApplyFade(bFadeIn, fFadeTime, ucRed, ucGreen, ucBlue);
 }
 
 bool CStaticFunctionDefinitions::GetCursorPosition(CVector2D& vecCursor, CVector& vecWorld)

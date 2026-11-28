@@ -552,6 +552,25 @@ void CClientCamera::FadeOut(float fTime, unsigned char ucRed, unsigned char ucGr
     m_pCamera->Fade(fTime, FADE_OUT);
 }
 
+bool CClientCamera::ApplyFade(bool bFadeIn, float fTime, unsigned char ucRed, unsigned char ucGreen, unsigned char ucBlue)
+{
+    // The client camera can exist before the game publishes its SDK camera.
+    // Preserve the initial fade and HUD until a camera accepts the request.
+    if (!m_pCamera || !g_pClientGame)
+        return false;
+
+    if (bFadeIn)
+        FadeIn(fTime);
+    else
+        FadeOut(fTime, ucRed, ucGreen, ucBlue);
+
+    g_pClientGame->SetInitiallyFadedOut(false);
+    auto* hud = g_pGame ? g_pGame->GetHud() : nullptr;
+    if (hud)
+        hud->SetComponentVisible(HUD_AREA_NAME, bFadeIn && !g_pClientGame->GetHudAreaNameDisabled());
+    return true;
+}
+
 void CClientCamera::SetFocus(CClientEntity* pEntity, eCamMode eMode, bool bSmoothTransition)
 {
     if (!m_pCamera)
@@ -792,11 +811,12 @@ ePedCamMode CClientCamera::GetCameraPedViewMode()
     return (ePedCamMode)m_pCamera->GetCameraPedViewMode();
 }
 
-void CClientCamera::SetCameraClip(bool bObjects, bool bVehicles)
+bool CClientCamera::SetCameraClip(bool bObjects, bool bVehicles)
 {
     if (!m_pCamera)
-        return;
+        return false;
     m_pCamera->SetCameraClip(bObjects, bVehicles);
+    return true;
 }
 
 void CClientCamera::ResetCameraClip()

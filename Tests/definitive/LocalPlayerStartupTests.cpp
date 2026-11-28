@@ -32,7 +32,7 @@ struct Scenario
     int nativeResets = 0, animations = 0, vehicleReleases = 0;
     bool throwAdd = false, throwTasks = false, throwRender = false, requested = true;
     int remoteAdds = 0, remoteRemoves = 0, storageAdds = 0, streamOutEvents = 0;
-    std::function<void()> onAcquire, onStream, onFocus, onDialog, onNotice, onVehicleRelease;
+    std::function<void()> onAcquire, onTasks, onStream, onFocus, onDialog, onNotice, onVehicleRelease;
 } scenario;
 
 struct CVector { CVector(float, float, float) {} };
@@ -43,6 +43,7 @@ struct Intelligence
     Tasks tasks;
     Tasks* GetTaskManager()
     {
+        if (scenario.onTasks) scenario.onTasks();
         if (scenario.throwTasks) throw std::runtime_error("task lookup refused");
         return scenario.hasTasks ? &tasks : nullptr;
     }
@@ -506,10 +507,16 @@ static void CheckGame(const std::string& name)
     const bool lostHandle = name == "lost-handle-during-stream";
     if (lostHandle)
         scenario.onStream = [] { pools.handle = nullptr; native.model = 17; };
-    const bool refuse = name == "repeated-refusal" || name == "reentrant-refusal" || scenario.withdrawStream || transferred || lostHandle;
+    const bool validateStartup = name.rfind("startup-", 0) == 0;
+    const bool replacedDuringLookup = name == "startup-reassigned-task-refusal" || name == "startup-reassigned-task-success";
+    if (replacedDuringLookup)
+        scenario.onTasks = [&] { pools.row.pClientEntity = &replacementOwner; native.stored = &replacementOwner; };
+    scenario.throwTasks = name == "startup-throw-task" || name == "startup-reassigned-task-refusal";
+    scenario.throwRender = name == "startup-throw-render";
+    const bool refuse = name == "repeated-refusal" || name == "reentrant-refusal" || scenario.withdrawStream || transferred || lostHandle || validateStartup;
     if (refuse)
     {
-        scenario.init = scenario.withdrawStream || transferred || lostHandle;
+        scenario.init = scenario.withdrawStream || transferred || lostHandle || validateStartup;
         scenario.onDialog = [&] { gate.EnterJoined(); game.DoPulses(); };
     }
     scenario.connected = name != "offline-then-online";
@@ -529,12 +536,19 @@ static void CheckGame(const std::string& name)
                "failed local startup advanced the session");
         Expect(scenario.created == 1 && scenario.deleted == 1 && scenario.dialogs == 1 && scenario.unloads == 1 && scenario.resets == 1,
                "failed startup must dispose the candidate and request unload once");
-        const auto* expectedOwner = transferred ? &replacementOwner : nullptr;
+        const auto* expectedOwner = transferred || replacedDuringLookup ? &replacementOwner : nullptr;
         Expect(pedManager.m_StreamedIn.empty() && !scenario.references && pools.row.pClientEntity == expectedOwner && native.stored == expectedOwner,
                "failed candidate left a reference in a live service");
         if (lostHandle)
             Expect(native.model == 17 && !scenario.nativeResets && !scenario.animations && scenario.invalidations == 1,
                    "handle loss must release the CPU registration without resetting the stale native ped");
+        if (validateStartup)
+        {
+            Expect(!scenario.restored && !scenario.streamEvents && !scenario.nativeResets && native.model == 16,
+                   "refused or reassigned startup ped was modified or published");
+            Expect(scenario.registrations == int(!scenario.throwRender) && scenario.invalidations == int(name == "startup-throw-task"),
+                   "startup refusal must clear only the candidate's own association");
+        }
         if (name == "reentrant-refusal") Expect(entered, "model callback did not run");
         return;
     }
@@ -643,7 +657,7 @@ int main(int argc, char** argv)
         const std::string name = argv[1];
         if (name.rfind("remote-", 0) == 0)
             CheckRemotePed(name);
-        else if (name == "online" || name == "offline-then-online" || name == "server-starting" || name == "reentrant-success" ||
+        else if (name.rfind("startup-", 0) == 0 || name == "online" || name == "offline-then-online" || name == "server-starting" || name == "reentrant-success" ||
             name == "reentrant-focus" || name == "reentrant-refusal" || name == "repeated-refusal" || name == "withdrawn-stream-in" ||
             name == "transferred-during-stream" || name == "lost-handle-during-stream" || name == "waiting-for-game")
             CheckGame(name);

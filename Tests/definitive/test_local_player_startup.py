@@ -24,7 +24,8 @@ CASES = ("init-refusal", "missing-pools", "pool-replaced", "missing-ped", "wrong
          "remote-success", "remote-missing-pool", "remote-missing-ped", "remote-wrong-ped", "remote-missing-intelligence",
          "remote-missing-tasks", "remote-throw-add", "remote-throw-tasks", "remote-model-refusal",
          "remote-recreate-failure", "remote-recreate-model-refusal", "remote-reentrant-recreate",
-         "remote-throw-render", "remote-recreate-throw-render")
+         "remote-throw-render", "remote-recreate-throw-render", "startup-throw-task", "startup-throw-render",
+         "startup-reassigned-task-refusal", "startup-reassigned-task-success")
 
 
 def method(source, owner, name):

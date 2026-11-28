@@ -9,6 +9,7 @@
  *****************************************************************************/
 
 #include "StdInc.h"
+#include <stdexcept>
 #include <utility>
 #include "CPedTargetClientLookup.h"
 #include <CPedPositionInterpolation.h>
@@ -3909,28 +3910,44 @@ void CClientPed::_CreateModel()
 
 void CClientPed::_CreateLocalModel()
 {
-    // Finish the blocking model request before attaching this client to GTA's existing ped.
-    if (!AcquireRequestedModel("CClientPed::_CreateLocalModel"))
+    CPools*       pools = nullptr;
+    CPlayerPed*   player = nullptr;
+    CTaskManager* tasks = nullptr;
+    // GTA's local ped occupies registry slot 0 and has handle 1. The SDK can
+    // replace its current association during the task-manager lookup.
+    auto ownedPlayer = [&]() -> CPlayerPed*
     {
-        NotifyUnableToCreate();
-        return;
-    }
-    auto* pools = g_pGame->GetPools();
-    if (!pools || !g_pGame->InitLocalPlayer(this))
+        if (!pools || pools != g_pGame->GetPools())
+            return nullptr;
+        auto* candidate = dynamic_cast<CPlayerPed*>(pools->GetPedFromRef(1));
+        auto* row = pools->GetPed(size_t{0});
+        return row && row->pEntity == candidate && row->pClientEntity == this ? candidate : nullptr;
+    };
+    try
     {
-        ReleaseLoadedModel();
-        NotifyUnableToCreate();
-        return;
+        if (AcquireRequestedModel("CClientPed::_CreateLocalModel"))
+        {
+            pools = g_pGame->GetPools();
+            if (pools && g_pGame->InitLocalPlayer(this))
+            {
+                player = ownedPlayer();
+                auto* intelligence = player ? player->GetPedIntelligence() : nullptr;
+                tasks = intelligence ? intelligence->GetTaskManager() : nullptr;
+                if (tasks && ownedPlayer() != player)
+                    tasks = nullptr;
+            }
+            else
+                pools = nullptr;
+        }
     }
-
-    // Handle 1 is GTA's local ped in registry slot 0. A previous connection can leave
-    // its wrapper there, so the wrapper and its current client association must both match.
-    auto* player = dynamic_cast<CPlayerPed*>(pools->GetPedFromRef(1));
-    auto* row = pools->GetPed(size_t{0});
-    auto* intelligence = player && row && row->pEntity == player && row->pClientEntity == this ? player->GetPedIntelligence() : nullptr;
-    auto* tasks = intelligence ? intelligence->GetTaskManager() : nullptr;
+    catch (const std::runtime_error&)
+    {
+        // A DE provider refusal follows the normal local-player startup failure path.
+        tasks = nullptr;
+    }
     if (!tasks)
     {
+        auto* row = pools && pools == g_pGame->GetPools() ? pools->GetPed(size_t{0}) : nullptr;
         if (row && row->pClientEntity == this)
             pools->InvalidateLocalPlayerClientEntity();
         ReleaseLoadedModel();

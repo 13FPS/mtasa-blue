@@ -89,35 +89,23 @@ void CClientSoundManager::DoPulse()
 {
     UpdateVolume();
 
-    CClientCamera* pCamera = m_pClientManager->GetCamera();
+    CVector vecCameraPosition, vecLookAt;
+    bool    haveListener = false;
 
-    CVector vecCameraPosition, vecPosition, vecLookAt, vecFront, vecVelocity;
-    pCamera->GetPosition(vecCameraPosition);
-    pCamera->GetFixedTarget(vecLookAt);
-    vecFront = vecLookAt - vecCameraPosition;
-
-    CClientPlayer* p_LocalPlayer = m_pClientManager->GetPlayerManager()->GetLocalPlayer();
-    if (p_LocalPlayer)
-    {
-        p_LocalPlayer->GetMoveSpeed(vecVelocity);
-
-        if (pCamera->IsInFixedMode())
-            vecPosition = vecCameraPosition;
-        else
-            p_LocalPlayer->GetPosition(vecPosition);
-    }
-    else
-    {
-        // Make sure the players position at least has something (I'd be surprised if we get here though)
-        vecPosition = vecCameraPosition;
-    }
-
-    // Update volume position and velocity from all sounds
     list<CClientSound*>::iterator iter = m_Sounds.begin();
     for (; iter != m_Sounds.end(); ++iter)
     {
         CClientSound* pSound = *iter;
-        pSound->Process3D(vecPosition, vecCameraPosition, vecLookAt);
+        // 2D playback and queued stops can run before a camera or local player
+        // exists. Obtain one listener pose when the first spatial sound needs it.
+        if (!haveListener && pSound->IsSound3D())
+        {
+            CClientCamera* camera = m_pClientManager->GetCamera();
+            camera->GetPosition(vecCameraPosition);
+            camera->GetFixedTarget(vecLookAt);
+            haveListener = true;
+        }
+        pSound->Process3D(vecCameraPosition, vecLookAt);
 
         // Delete sound if finished
         if (pSound->IsFinished())
@@ -130,7 +118,8 @@ void CClientSoundManager::DoPulse()
         }
     }
 
-    UpdateDistanceStreaming(vecCameraPosition);
+    if (haveListener)
+        UpdateDistanceStreaming(vecCameraPosition);
     ProcessStopQueues();
 }
 

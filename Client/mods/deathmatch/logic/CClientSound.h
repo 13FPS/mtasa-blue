@@ -102,7 +102,7 @@ public:
     bool IsSoundStream() { return m_bStream; }
 
 protected:
-    void Process3D(const CVector& vecPlayerPosition, const CVector& vecCameraPosition, const CVector& vecLookAt);
+    void Process3D(const CVector& vecCameraPosition, const CVector& vecLookAt);
     void BeginSimulationOfPlayPosition();
     void EndSimulationOfPlayPositionAndApply();
     void DistanceStreamIn();

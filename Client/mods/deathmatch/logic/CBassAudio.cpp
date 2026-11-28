@@ -1208,7 +1208,7 @@ BOOL CBassAudio::GetFxParameters(uint iFxEffect, void* params)
 //
 // Must be call every frame
 //
-void CBassAudio::DoPulse(const CVector& vecPlayerPosition, const CVector& vecCameraPosition, const CVector& vecLookAt)
+void CBassAudio::DoPulse(const CVector& vecCameraPosition, const CVector& vecLookAt)
 {
     // If the sound is a stream, handle results from other threads
     if (m_bStream)
@@ -1221,7 +1221,7 @@ void CBassAudio::DoPulse(const CVector& vecPlayerPosition, const CVector& vecCam
 
     // Update 3D attenuation and panning
     if (m_b3D)
-        Process3D(vecPlayerPosition, vecCameraPosition, vecLookAt);
+        Process3D(vecCameraPosition, vecLookAt);
 
     // Apply any pending play request
     if (m_bPendingPlay)
@@ -1232,7 +1232,7 @@ void CBassAudio::DoPulse(const CVector& vecPlayerPosition, const CVector& vecCam
     }
 }
 
-void CBassAudio::Process3D(const CVector& vecPlayerPosition, const CVector& vecCameraPosition, const CVector& vecLookAt)
+void CBassAudio::Process3D(const CVector& vecCameraPosition, const CVector& vecLookAt)
 {
     assert(m_b3D && m_pSound);
 

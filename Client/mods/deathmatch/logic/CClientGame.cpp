@@ -323,7 +323,6 @@ CClientGame::CClientGame(bool bLocalPlay) : m_ServerInfo(new CServerInfo())
     g_pGame->SetPreWeaponFireHandler(CClientGame::PreWeaponFire);
     g_pGame->SetPostWeaponFireHandler(CClientGame::PostWeaponFire);
     g_pGame->SetTaskSimpleBeHitHandler(CClientGame::StaticTaskSimpleBeHitHandler);
-    g_pGame->GetAudioEngine()->SetWorldSoundHandler(CClientGame::StaticWorldSoundHandler);
     g_pCore->SetMessageProcessor(CClientGame::StaticProcessMessage);
     g_pCore->GetKeyBinds()->SetKeyStrokeHandler(CClientGame::StaticKeyStrokeHandler);
     g_pCore->GetKeyBinds()->SetCharacterKeyHandler(CClientGame::StaticCharacterKeyHandler);
@@ -420,11 +419,18 @@ CClientGame::CClientGame(bool bLocalPlay) : m_ServerInfo(new CServerInfo())
         {TASK_COMPLEX_IN_WATER, {false, _("Being chased by a shark"), TASK_SIMPLE_SWIM}},
         {TASK_SIMPLE_CHOKING, {true, _("Choking to death in")}},
     };
+
+    // A sound can dispatch Lua or write to the script log as soon as the engine
+    // accepts the handler. Both must be ready for the first event.
+    m_pWorldSoundEngine = g_pGame->GetAudioEngine();
+    m_pWorldSoundEngine->SetWorldSoundHandler(CClientGame::StaticWorldSoundHandler);
 }
 
 CClientGame::~CClientGame()
 {
     m_bBeingDeleted = true;
+    // Stopping effects and destroying entities can themselves produce sounds.
+    m_pWorldSoundEngine->SetWorldSoundHandler(nullptr);
     // Remove active projectile references to local player
     if (auto pLocalPlayer = g_pClientGame->GetLocalPlayer())
         g_pGame->GetProjectileInfo()->RemoveEntityReferences(pLocalPlayer->GetGameEntity());
@@ -538,7 +544,6 @@ CClientGame::~CClientGame()
     g_pGame->SetPostWeaponFireHandler(NULL);
     g_pGame->SetTaskSimpleBeHitHandler(NULL);
     g_pGame->GetPools()->GetPtrNodeSingleLinkPool().ResetCapacity();
-    g_pGame->GetAudioEngine()->SetWorldSoundHandler(NULL);
     g_pCore->SetMessageProcessor(NULL);
     g_pCore->GetKeyBinds()->SetKeyStrokeHandler(NULL);
     g_pCore->GetKeyBinds()->SetCharacterKeyHandler(NULL);
@@ -6635,15 +6640,14 @@ bool CClientGame::WorldSoundHandler(const SWorldSoundEvent& event)
     if (m_bShowSound)
         m_pScriptDebugging->LogInformation(NULL, "%s - World sound group:%d index:%d", *GetLocalTimeString(false, true), event.uiGroup, event.uiIndex);
 
-    // Audio events without a game entity could default to the root element, but the
-    // best approach is to avoid spamming the event with the barely notable sounds (without a source).
-    // Warning: Canceling sounds emitted by an audio entity (like vehicles do) will cause massive spam
+    // World sounds can arrive before pools are available or without an MTA
+    // entity. Deliver those events to the root so scripts can still cancel them.
     CClientEntity* pEntity = nullptr;
 
-    if (event.pGameEntity)
+    if (event.pGameEntity && g_pGame)
     {
-        CPools* pPools = g_pGame->GetPools();
-        pEntity = pPools->GetClientEntity((DWORD*)event.pGameEntity);
+        if (CPools* pPools = g_pGame->GetPools())
+            pEntity = pPools->GetClientEntity(reinterpret_cast<DWORD*>(event.pGameEntity));
     }
 
     if (!pEntity)

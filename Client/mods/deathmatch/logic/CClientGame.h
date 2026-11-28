@@ -49,6 +49,7 @@
 #define MIN_PUSH_ANTISPAM_RATE          1500
 #define INVALID_DOWNLOAD_PRIORITY_GROUP (INT_MIN)
 
+class CAudioEngine;
 class CClientModelCacheManager;
 class CDebugHookManager;
 class CResourceFileDownloadManager;
@@ -733,6 +734,7 @@ private:
 
     CClientManager*            m_pManager;
     CClientCamera*             m_pCamera;
+    CAudioEngine*              m_pWorldSoundEngine;  // Unregister from this engine before teardown can produce sound.
     CClientGUIManager*         m_pGUIManager;
     CClientMarkerManager*      m_pMarkerManager;
     CClientObjectManager*      m_pObjectManager;

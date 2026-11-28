@@ -64,12 +64,17 @@ def main():
         (work / "ClientVariables.generated.inl").write_text("\n".join(method(variables, sig) for sig in (
             "CClientVariables::CClientVariables()", "CClientVariables::~CClientVariables()",
             "CXMLNode* CClientVariables::Node(const std::string& strVariable)", "bool CClientVariables::Exists(const std::string& strVariable)",
+            "bool CClientVariables::Get(const std::string& strVariable, CVector2D& val)", "void CClientVariables::Set(const std::string& strVariable, CVector2D val)",
+            "void CClientVariables::ClampValue(const std::string& strVariable, CVector2D minValue, CVector2D maxValue)",
             "void CClientVariables::ClampValue(const std::string& strVariable, float fMinValue, float fMaxValue)",
             "void CClientVariables::ClampValue(const std::string& strVariable, int iMinValue, int iMaxValue)")))
-        for header in ("CSingleton.h", "xml/CXMLNode.h", "xml/CXMLFile.h", "CVector.h", "CVector2D.h", "CChat.h"):
+        for header in ("CSingleton.h", "xml/CXMLNode.h", "xml/CXMLFile.h", "CChat.h"):
             (work / header).parent.mkdir(parents=True, exist_ok=True)
             (work / header).touch()
+        for header in ("SharedUtil.Defines.h", "CVector.h", "CVector2D.h", "CVector4D.h"):
+            (work / header).write_text(source("Shared/sdk/" + header), encoding="utf-8")
         (work / "ApplyGameSettings.generated.inl").write_text(method(core, "void CCore::ApplyGameSettings()"))
+        (work / "ApplyConsoleSettings.generated.inl").write_text(method(core, "void CCore::ApplyConsoleSettings()"))
         (work / "XmlScalars.generated.inl").write_text("\n".join(method(xml, prefix) for prefix in (
             "bool CXMLNodeImpl::GetTagContent(bool& bContent)", "bool CXMLNodeImpl::GetTagContent(int& iContent)", "bool CXMLNodeImpl::GetTagContent(unsigned int& uiContent)",
             "bool CXMLNodeImpl::GetTagContent(float& fContent)", "void CXMLNodeImpl::SetTagContent(bool bContent)",
@@ -99,7 +104,7 @@ def main():
         if not record["compile"]:
             record["cases"] = {case: run(case, [test, case]) for case in (
                 "saved", "unreadable", "ranges", "migration", "profile-floats", "profile-integers", "integer-startup", "controls-load", "controls-numbers",
-                "controls-defaults", "controls-invalid-nick", "controls-volumes")}
+                "controls-defaults", "controls-invalid-nick", "controls-volumes", "console-layout", "profile-vector2d")}
             record["success"] = not any(record["cases"].values())
     receipt = output / "result.json"
     receipt.write_text(json.dumps(record, indent=2) + "\n")

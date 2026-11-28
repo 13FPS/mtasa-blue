@@ -81,23 +81,15 @@ bool CClientVariables::Get(const std::string& strVariable, CVector& val)
 
 bool CClientVariables::Get(const std::string& strVariable, CVector2D& val)
 {
-    std::stringstream ss;
-    std::string       strVal;
-
-    if (!Node(strVariable))
+    CXMLNode* node = Find(strVariable);
+    if (!node)
         return false;
-    strVal = Node(strVariable)->GetTagContent();
-    ss.str(strVal);
-
-    try
-    {
-        ss >> val.fX >> val.fY;
-    }
-    catch (...)
-    {
+    // A truncated size or scale must not partially replace a working GUI layout.
+    std::istringstream input(node->GetTagContent());
+    CVector2D          parsed;
+    if (!(input >> parsed.fX >> parsed.fY) || !std::isfinite(parsed.fX) || !std::isfinite(parsed.fY) || !(input >> std::ws).eof())
         return false;
-    }
-
+    val = parsed;
     return true;
 }
 
@@ -229,7 +221,8 @@ void CClientVariables::ClampValue(const std::string& strVariable, CColor minValu
 void CClientVariables::ClampValue(const std::string& strVariable, CVector2D minValue, CVector2D maxValue)
 {
     CVector2D temp;
-    CVARS_GET(strVariable, temp);
+    if (!Get(strVariable, temp))
+        return;
     temp.fX = Clamp(minValue.fX, temp.fX, maxValue.fX);
     temp.fY = Clamp(minValue.fY, temp.fY, maxValue.fY);
     CVARS_SET(strVariable, temp);

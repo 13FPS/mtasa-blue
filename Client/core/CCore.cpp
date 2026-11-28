@@ -4969,10 +4969,12 @@ void CCore::ApplyConsoleSettings()
         return;
 
     CVector2D vec;
-    CVARS_GET("console_pos", vec);
-    pConsole->SetPosition(vec);
-    CVARS_GET("console_size", vec);
-    pConsole->SetSize(vec);
+    // The window already has its initial layout. Restore each saved part
+    // only when the corresponding pair of coordinates is available.
+    if (CVARS_GET("console_pos", vec))
+        pConsole->SetPosition(vec);
+    if (CVARS_GET("console_size", vec))
+        pConsole->SetSize(vec);
 }
 
 void CCore::ApplyGameSettings()

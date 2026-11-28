@@ -6,7 +6,9 @@
 #include <cstdlib>
 #include <iostream>
 #include <list>
+#include <sstream>
 #include <string_view>
+#include <SharedUtil.Defines.h>
 #include <core/CCVarsInterface.h>
 #include <game/CControllerConfigManager.h>
 #include <game/CSettings.h>
@@ -128,14 +130,28 @@ struct Game
     CControllerConfigManager* GetControllerConfigManager() { return &controller; }
     SettingsReceiver*         GetSettings() { return &settings; }
 };
+struct CConsole
+{
+    CVector2D position{24, 48}, size{400, 300};
+    void      SetPosition(CVector2D& value) { position = value; }
+    void      SetSize(CVector2D& value) { size = value; }
+};
+struct ConsoleGui
+{
+    CConsole  console;
+    CConsole* GetConsole() { return &console; }
+};
 struct CCore
 {
     Game*         m_pGame;
     CMultiplayer* m_pMultiplayer;
+    ConsoleGui*   m_pLocalGUI = nullptr;
+    void          ApplyConsoleSettings();
     void          ApplyGameSettings();
 };
 #define CGameSettings SettingsReceiver
 #include "ApplyGameSettings.generated.inl"
+#include "ApplyConsoleSettings.generated.inl"
 #undef CGameSettings
 #include "MouseControlsDialogTests.inl"
 
@@ -172,7 +188,7 @@ int main(int argc, char** argv)
         xml =
             "<c><invert_mouse>1bad</invert_mouse><grass>0bad</grass><aspect_ratio>3bad</aspect_ratio>"
             "<fast_clothes_loading>broken</fast_clothes_loading><steer_with_mouse> 1 </steer_with_mouse></c>";
-    else if (name == "controls-numbers" || name == "profile-floats" || name == "profile-integers")
+    else if (name == "controls-numbers" || name == "profile-floats" || name == "profile-integers" || name == "console-layout" || name == "profile-vector2d")
         xml = "<c/>";
     else if (name == "controls-volumes")
         xml = "<c><mastervolume>0</mastervolume><mtavolume>0.6</mtavolume><voicevolume>broken</voicevolume></c>";
@@ -189,6 +205,42 @@ int main(int argc, char** argv)
     root.m_pNode = document.RootElement();
     auto& variables = CClientVariables::GetSingleton();
     variables.Load();
+    if (name == "profile-vector2d")
+    {
+        const CVector2D original(50, 40);
+        CVector2D       value = original;
+        if (variables.Get("pair", value) || variables.Exists("pair") || !(value == original))
+            return 1;
+        for (const char* text : {"25", "25 bad", "25 40bad", "25 40 60", "", "nan 4", "1e99 8"})
+        {
+            variables.Set("pair", text);
+            variables.ClampValue("pair", CVector2D(0, 0), CVector2D(100, 100));
+            if (variables.Get("pair", value) || !(value == original) || root.FindSubNode("pair")->GetTagContent() != text)
+                return 1;
+        }
+        variables.Set("pair", "  -1.25\t+2e2   ");
+        if (!variables.Get("pair", value) || !(value == CVector2D(-1.25f, 200)))
+            return 1;
+        variables.ClampValue("pair", CVector2D(0, 0), CVector2D(100, 100));
+        return variables.Get("pair", value) && value == CVector2D(0, 100) ? 0 : 1;
+    }
+    if (name == "console-layout")
+    {
+        ConsoleGui gui;
+        CCore      core{nullptr, nullptr, &gui};
+        core.ApplyConsoleSettings();
+        if (!(gui.console.position == CVector2D(24, 48)) || !(gui.console.size == CVector2D(400, 300)) || variables.Exists("console_size"))
+            return 1;
+        variables.Set("console_pos", CVector2D(80, 160));
+        variables.Set("console_size", "123 broken");
+        core.ApplyConsoleSettings();
+        if (!(gui.console.position == CVector2D(80, 160)) || !(gui.console.size == CVector2D(400, 300)))
+            return 1;
+        variables.Set("console_pos", "40");
+        variables.Set("console_size", CVector2D(600, 500));
+        core.ApplyConsoleSettings();
+        return gui.console.position == CVector2D(80, 160) && gui.console.size == CVector2D(600, 500) ? 0 : 1;
+    }
     if (name == "profile-integers")
     {
         int      number = -13;

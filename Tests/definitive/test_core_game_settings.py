@@ -16,14 +16,16 @@ ROOT = Path(__file__).resolve().parents[2]
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-commit", type=str)
-    commit = parser.parse_args().source_commit
+    parser.add_argument("--arch", choices=("x64", "x86"), default="x64", help="Windows target architecture")
+    args = parser.parse_args()
+    commit = args.source_commit
     if commit and not re.fullmatch(r"[0-9a-fA-F]{7,40}", commit):
         parser.error("Expected a hexadecimal commit ID")
     output = ROOT / "Build/mta-core-game-settings" / uuid4().hex
     output.mkdir(parents=True)
     scratch = ROOT / "Build/tmp/core-game-settings"
     scratch.mkdir(parents=True, exist_ok=True)
-    record = {"sourceCommit": commit, "inputs": {}, "cases": {}, "success": False}
+    record = {"sourceCommit": commit, "inputs": {}, "cases": {}, "success": False, "architecture": args.arch if os.name == "nt" else "host"}
 
     def source(path):
         data = subprocess.check_output(["git", "show", f"{commit}:{path}"], cwd=ROOT) if commit else (ROOT / path).read_bytes()
@@ -85,7 +87,7 @@ def main():
             vswhere = Path(os.environ["ProgramFiles(x86)"]) / "Microsoft Visual Studio/Installer/vswhere.exe"
             vs = subprocess.check_output([vswhere, "-latest", "-products", "*", "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
                                           "-property", "installationPath"], text=True).strip()
-            (work / "build.cmd").write_text(f'@echo off\ncall "{vs}/Common7/Tools/VsDevCmd.bat" -no_logo -arch=x64 -host_arch=x64\n'
+            (work / "build.cmd").write_text(f'@echo off\ncall "{vs}/Common7/Tools/VsDevCmd.bat" -no_logo -arch={args.arch} -host_arch=x64\n'
                                              f'if errorlevel 1 exit /b 1\ncl /nologo /std:c++17 /EHsc /DWIN32 /I. {fixture.name} tinyxml2.cpp /Fe:test.exe\n')
             command, test = [env["COMSPEC"], "/d", "/c", "build.cmd"], work / "test.exe"
         else:
@@ -96,7 +98,7 @@ def main():
         record["compile"] = run("build", command)
         if not record["compile"]:
             record["cases"] = {case: run(case, [test, case]) for case in (
-                "saved", "unreadable", "ranges", "migration", "profile-floats", "controls-load", "controls-numbers",
+                "saved", "unreadable", "ranges", "migration", "profile-floats", "profile-integers", "integer-startup", "controls-load", "controls-numbers",
                 "controls-defaults", "controls-invalid-nick", "controls-volumes")}
             record["success"] = not any(record["cases"].values())
     receipt = output / "result.json"

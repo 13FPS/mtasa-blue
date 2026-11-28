@@ -12,8 +12,10 @@
 #pragma once
 
 #include <string>
+#include <cerrno>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #include "CSingleton.h"
 #include <core/CCVarsInterface.h>
 #include <xml/CXMLNode.h>
@@ -42,18 +44,31 @@ public:
     ~CClientVariables();
 
     // Get queries
-    bool Get(const std::string& strVariable, bool& val) override { return ReadScalar(strVariable, val); }
+    bool Get(const std::string& strVariable, bool& val) override
+    {
+        CXMLNode* node = Find(strVariable);
+        if (!node)
+            return false;
+        // Settings stores toggles as one digit. A numeric prefix can enable
+        // a control even when the rest of its profile entry is unreadable.
+        const std::string text = node->GetTagContent();
+        const auto        digit = text.find_first_not_of(Whitespace);
+        if (digit == std::string::npos || (text[digit] != '0' && text[digit] != '1') || text.find_first_not_of(Whitespace, digit + 1) != std::string::npos)
+            return false;
+        val = text[digit] == '1';
+        return true;
+    }
     bool Get(const std::string& strVariable, std::string& val)
     {
         SANGET;
         val = Node(strVariable)->GetTagContent();
         return !val.empty();
     };
-    bool Get(const std::string& strVariable, int& val) override { return ReadScalar(strVariable, val); }
-    bool Get(const std::string& strVariable, unsigned int& val) override { return ReadScalar(strVariable, val); }
+    bool Get(const std::string& strVariable, int& val) override { return ReadInteger(strVariable, val); }
+    bool Get(const std::string& strVariable, unsigned int& val) override { return ReadInteger(strVariable, val); }
     bool Get(const std::string& strVariable, float& val) override
     {
-        CXMLNode* node = m_pStorage ? m_pStorage->FindSubNode(strVariable.c_str()) : nullptr;
+        CXMLNode* node = Find(strVariable);
         if (!node)
             return false;
 
@@ -62,7 +77,7 @@ public:
         const std::string text = node->GetTagContent();
         char*             end = nullptr;
         const float       value = std::strtof(text.c_str(), &end);
-        if (end == text.c_str() || !std::isfinite(value) || text.find_first_not_of(" \t\r\n\f\v", end - text.c_str()) != std::string::npos)
+        if (end == text.c_str() || !std::isfinite(value) || text.find_first_not_of(Whitespace, end - text.c_str()) != std::string::npos)
             return false;
         val = value;
         return true;
@@ -126,12 +141,27 @@ public:
     void ValidateValues();
 
 private:
+    static constexpr const char* Whitespace = " \t\r\n\f\v";
+    // Reading a missing setting must leave it available for one-time migration from the game.
+    CXMLNode* Find(const std::string& name) const { return m_pStorage ? m_pStorage->FindSubNode(name.c_str()) : nullptr; }
+
     template <class T>
-    bool ReadScalar(const std::string& name, T& value) const
+    bool ReadInteger(const std::string& name, T& value) const
     {
-        // Reading a missing setting must leave it available for one-time migration from the game.
-        CXMLNode* node = m_pStorage ? m_pStorage->FindSubNode(name.c_str()) : nullptr;
-        return node && node->GetTagContent(value);
+        CXMLNode* node = Find(name);
+        if (!node)
+            return false;
+        // Profiles historically accept base-0 integers. Parse wide enough to
+        // round-trip every unsigned setting on Windows, where long is 32 bits.
+        const std::string text = node->GetTagContent();
+        char*             end = nullptr;
+        errno = 0;
+        const long long parsed = std::strtoll(text.c_str(), &end, 0);
+        if (end == text.c_str() || errno == ERANGE || text.find_first_not_of(Whitespace, end - text.c_str()) != std::string::npos ||
+            parsed < (std::numeric_limits<T>::min)() || parsed > (std::numeric_limits<T>::max)())
+            return false;
+        value = static_cast<T>(parsed);
+        return true;
     }
     CXMLNode* Node(const std::string& strVariable);
     void      LoadDefaults();

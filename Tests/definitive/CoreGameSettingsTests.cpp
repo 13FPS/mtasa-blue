@@ -168,7 +168,11 @@ int main(int argc, char** argv)
         xml =
             "<c><invert_mouse>1</invert_mouse><steer_with_mouse>bad</steer_with_mouse><classic_controls>0</classic_controls>"
             "<vertical_aim_sensitivity>bad</vertical_aim_sensitivity></c>";
-    else if (name == "controls-numbers" || name == "profile-floats")
+    else if (name == "integer-startup")
+        xml =
+            "<c><invert_mouse>1bad</invert_mouse><grass>0bad</grass><aspect_ratio>3bad</aspect_ratio>"
+            "<fast_clothes_loading>broken</fast_clothes_loading><steer_with_mouse> 1 </steer_with_mouse></c>";
+    else if (name == "controls-numbers" || name == "profile-floats" || name == "profile-integers")
         xml = "<c/>";
     else if (name == "controls-volumes")
         xml = "<c><mastervolume>0</mastervolume><mtavolume>0.6</mtavolume><voicevolume>broken</voicevolume></c>";
@@ -185,6 +189,52 @@ int main(int argc, char** argv)
     root.m_pNode = document.RootElement();
     auto& variables = CClientVariables::GetSingleton();
     variables.Load();
+    if (name == "profile-integers")
+    {
+        int      number = -13;
+        unsigned whole = 17;
+        bool     toggle = true;
+        if (variables.Get("n", number) || variables.Get("n", whole) || variables.Get("n", toggle) || variables.Exists("n"))
+            return 1;
+        for (const char* text : {"", " ", "junk", "3bad", "2.5", "1 0", "0x", "999999999999999999999999"})
+        {
+            variables.Set("n", text);
+            if (variables.Get("n", number) || number != -13 || variables.Get("n", whole) || whole != 17 || variables.Get("n", toggle) || !toggle)
+                return 1;
+        }
+        for (const auto& [text, expected] : {std::pair{"  +0x20\t", 32}, {"010", 8}, {"-2147483648", INT_MIN}, {"2147483647", INT_MAX}})
+        {
+            variables.Set("n", text);
+            if (!variables.Get("n", number) || number != expected)
+                return 1;
+        }
+        for (const char* text : {"2147483648", "-2147483649"})
+        {
+            variables.Set("n", text);
+            if (variables.Get("n", number) || number != INT_MAX)
+                return 1;
+        }
+        variables.Set("n", UINT_MAX);
+        if (!variables.Get("n", whole) || whole != UINT_MAX)
+            return 1;
+        for (const char* text : {"4294967296", "-1"})
+        {
+            variables.Set("n", text);
+            if (variables.Get("n", whole) || whole != UINT_MAX)
+                return 1;
+        }
+        for (const char* text : {"0bad", "10", "2", "-1"})
+        {
+            variables.Set("n", text);
+            if (variables.Get("n", toggle) || !toggle)
+                return 1;
+        }
+        variables.Set("n", " 0\t");
+        if (!variables.Get("n", toggle) || toggle)
+            return 1;
+        variables.Set("n", "1");
+        return variables.Get("n", toggle) && toggle ? 0 : 1;
+    }
     if (name == "profile-floats")
     {
         float value = 0.375f;
@@ -226,7 +276,9 @@ int main(int argc, char** argv)
     const auto& c = game.controller;
     const auto& s = game.settings;
     bool        ok;
-    if (name == "saved")
+    if (name == "integer-startup")
+        ok = !c.inverted && c.steering && s.grass && s.aspect == ASPECT_RATIO_AUTO && multiplayer.clothes == CMultiplayer::FAST_CLOTHES_AUTO;
+    else if (name == "saved")
         ok = c.inverted && !c.flight && c.steering && c.classic && c.sameAim && c.aim == 0.002f && s.shadows && s.aspect == ASPECT_RATIO_16_9 && !s.adjust &&
              !s.grass && s.pedShadows && s.radio == 8 && s.effects == 24 && multiplayer.heat && !multiplayer.smoke &&
              multiplayer.clothes == CMultiplayer::FAST_CLOTHES_ON;

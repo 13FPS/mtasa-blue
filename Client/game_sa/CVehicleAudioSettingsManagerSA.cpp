@@ -14,36 +14,11 @@
 #include "CVehicleAudioSettingsManagerSA.h"
 #include "CVehicleSA.h"
 #include <array>
-#include <cstring>
 
 extern CGameSA* pGame;
 
 const auto (&ORIGINAL_AUDIO_SETTINGS)[VEHICLES_COUNT] = *reinterpret_cast<const tVehicleAudioSettings (*)[VEHICLES_COUNT]>(0x860AF0);
 tVehicleAudioSettings const* pNextVehicleAudioSettings = nullptr;
-
-namespace
-{
-    constexpr char RADIO_TYPE_RANDOM = 2;
-    constexpr char RADIO_NUM_RANDOM = 13;
-
-    tVehicleAudioSettings GetNormalizedAudioSettings(const CVehicleAudioSettingsEntry& settings)
-    {
-        auto normalizedSettings = static_cast<const CVehicleAudioSettingsEntrySA&>(settings).GetInterface();
-        if (normalizedSettings.m_nRadioType == RADIO_TYPE_RANDOM)
-            normalizedSettings.m_nRadioID = RADIO_NUM_RANDOM;
-
-        return normalizedSettings;
-    }
-
-    tVehicleAudioSettings GetNormalizedAudioSettings(const CAEVehicleAudioEntitySAInterface& audioInterface)
-    {
-        auto normalizedSettings = audioInterface.m_nSettings;
-        if (normalizedSettings.m_nRadioType == RADIO_TYPE_RANDOM)
-            normalizedSettings.m_nRadioID = RADIO_NUM_RANDOM;
-
-        return normalizedSettings;
-    }
-}
 
 CVehicleAudioSettingsManagerSA::CVehicleAudioSettingsManagerSA()
 {
@@ -54,7 +29,7 @@ std::unique_ptr<CVehicleAudioSettingsEntry> CVehicleAudioSettingsManagerSA::Crea
 {
     auto        settings = std::make_unique<CVehicleAudioSettingsEntrySA>();
     const auto& fromSetting = GetVehicleModelAudioSettingsData(modelId);
-    settings->Assign(fromSetting);
+    settings->CopyFrom(fromSetting);
     return settings;
 }
 
@@ -78,7 +53,15 @@ size_t CVehicleAudioSettingsManagerSA::GetVehicleModelAudioSettingsID(uint32_t m
 
 void CVehicleAudioSettingsManagerSA::SetNextSettings(CVehicleAudioSettingsEntry const* pSettings) noexcept
 {
-    pNextVehicleAudioSettings = &static_cast<CVehicleAudioSettingsEntrySA const*>(pSettings)->GetInterface();
+    if (const auto* native = dynamic_cast<const CVehicleAudioSettingsEntrySA*>(pSettings))
+        pNextVehicleAudioSettings = &native->GetInterface();
+    else if (pSettings)
+    {
+        // Native entries remain live until consumption. Other backends expose
+        // SDK fields only, so keep their translated storage in this manager.
+        m_nextSettings.CopyFrom(*pSettings);
+        pNextVehicleAudioSettings = &m_nextSettings.GetInterface();
+    }
 }
 
 void CVehicleAudioSettingsManagerSA::SetNextSettings(uint32_t modelId) noexcept
@@ -100,9 +83,8 @@ bool CVehicleAudioSettingsManagerSA::HasPendingSettingsChange(CVehicle* pVehicle
     if (!pAudioInterface)
         return true;
 
-    const auto currentSettings = GetNormalizedAudioSettings(*pAudioInterface);
-    const auto desiredSettings = GetNormalizedAudioSettings(settings);
-    return std::memcmp(&currentSettings, &desiredSettings, sizeof(desiredSettings)) != 0;
+    const CVehicleAudioSettingsEntrySA current(&pAudioInterface->m_nSettings);
+    return !current.HasSamePlaybackSettings(settings);
 }
 
 void CVehicleAudioSettingsManagerSA::ResetModelSettings(uint32_t modelId) noexcept

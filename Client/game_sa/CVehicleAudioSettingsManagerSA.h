@@ -41,4 +41,5 @@ private:
 private:
     // Array with the model audio settings entries
     std::array<CVehicleAudioSettingsEntrySA, VEHICLES_COUNT> m_modelEntrys;
+    CVehicleAudioSettingsEntrySA                             m_nextSettings;
 };

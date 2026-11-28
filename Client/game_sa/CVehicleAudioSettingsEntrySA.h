@@ -44,10 +44,6 @@ public:
     const tVehicleAudioSettings& GetInterface() const noexcept { return m_Settings; };
 
     void Assign(const tVehicleAudioSettings& settings) noexcept { m_Settings = settings; }
-    void Assign(const CVehicleAudioSettingsEntry& settings) noexcept
-    {
-        m_Settings = static_cast<const CVehicleAudioSettingsEntrySA&>(settings).GetInterface();
-    };
 
     VehicleSoundType::Enum GetSoundType() const noexcept override { return m_Settings.m_eVehicleSoundType; };
     short                  GetEngineOnSoundBankID() const noexcept override { return m_Settings.m_nEngineOnSoundBankId; };

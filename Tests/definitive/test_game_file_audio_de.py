@@ -29,12 +29,16 @@ def main():
     scratch.mkdir(parents=True, exist_ok=True)
     fixture = Path(__file__).with_name("GameFileAudioDETests.cpp")
     policy_fixture = Path(__file__).with_name("AudioEngineDETests.cpp")
+    vehicle_fixture = Path(__file__).with_name("VehicleAudioSettingsTests.cpp")
+    vehicle_manager = ROOT / "Client/game_sa/CVehicleAudioSettingsManagerSA.cpp"
+    client_vehicle = ROOT / "Client/mods/deathmatch/logic/CClientVehicle.cpp"
     reader = ROOT / "Client/sdk/game/CAudioContainerFiles.cpp"
     header = ROOT / "Client/sdk/game/CGame.h"
     manager = ROOT / "Client/mods/deathmatch/logic/CClientSoundManager.cpp"
     bass_dll = ROOT / "Bin/mods/deathmatch/x64/bass.dll"
     bass_lib = ROOT / "vendor/bass/lib/x64/bass.lib"
-    inputs = [fixture, policy_fixture, Path(__file__), fixture.with_name("GTASfxPlaybackFixture.h"), fixture.with_name("AudioContainerSyntheticArchives.h"),
+    inputs = [fixture, policy_fixture, vehicle_fixture, vehicle_manager, client_vehicle, ROOT / "Client/sdk/game/CVehicleAudioSettingsEntry.h",
+              ROOT / "Client/game_sa/CVehicleAudioSettingsEntrySA.h", Path(__file__), fixture.with_name("GTASfxPlaybackFixture.h"), fixture.with_name("AudioContainerSyntheticArchives.h"),
               manager, reader, reader.with_suffix(".h"), header, ROOT / "Client/game_de/CGameFileAudioDE.h", ROOT / "Client/game_de/CGameModelLodResetDE.h",
               ROOT / "Client/sdk/game/CAudioEngine.h", ROOT / "Client/sdk/game/CAudioEngineSoundPolicy.h", ROOT / "Client/sdk/game/CAESoundManager.h",
               ROOT / "Client/game_de/CAudioEngineDE.h"]
@@ -48,6 +52,14 @@ def main():
         start = source.index("static void SetInitialGTASFXVolume(")
         end = source.index("int CClientSoundManager::GetFxEffectFromName(", start)
         (work / "GTASfxPlayback.generated.inl").write_text(source[start:end])
+        methods = []
+        for path, signature in [(vehicle_manager, "void CVehicleAudioSettingsManagerSA::SetNextSettings(CVehicleAudioSettingsEntry"),
+                                (vehicle_manager, "bool CVehicleAudioSettingsManagerSA::HasPendingSettingsChange("),
+                                (client_vehicle, "void CClientVehicle::ApplyAudioSettings(")]:
+            source = path.read_text()
+            start = source.index(signature)
+            methods.append(source[start:source.index("\n}", start) + 2])
+        (work / "VehicleAudioApplication.generated.inl").write_text("\n\n".join(methods))
         # Leave the audio method to the production DE override. Fail on any unexpected SDK call.
         methods = []
         for signature in re.findall(r"virtual\s+([^;{}]+);", header.read_text()):
@@ -68,9 +80,10 @@ def main():
             shutil.copyfile(bass_dll, work / "bass.dll")
             archive_options.extend(["/DMTA_TEST_BASS_DECODE", "/external:I" + str(ROOT / "vendor/bass"), str(bass_lib)])
         policy_options = [*options, str(policy_fixture), "/Fe:sound-policy-test.exe"]
+        vehicle_options = [*options, str(vehicle_fixture), "/Fe:vehicle-audio-test.exe"]
+        commands = [subprocess.list2cmdline(["cl", *opts]) for opts in (archive_options, policy_options, vehicle_options)]
         (work / "build.cmd").write_text(f'@echo off\ncall "{vs}/Common7/Tools/VsDevCmd.bat" -no_logo -arch=x64 -host_arch=x64\n'
-                                        "if errorlevel 1 exit /b 1\n" + subprocess.list2cmdline(["cl", *archive_options]) +
-                                        "\nif errorlevel 1 exit /b 1\n" + subprocess.list2cmdline(["cl", *policy_options]) + "\n")
+                                        "if errorlevel 1 exit /b 1\n" + "\nif errorlevel 1 exit /b 1\n".join(commands) + "\n")
         env = dict(os.environ, TMP=folder, TEMP=folder)
         env.pop("CL", None)
         env.pop("_CL_", None)
@@ -83,6 +96,7 @@ def main():
         if result["compile"] == 0:
             exe = work / "audio-test.exe"
             result["cases"]["soundPolicy"] = run("soundPolicy", [work / "sound-policy-test.exe"])
+            result["cases"]["vehicleAudio"] = run("vehicleAudio", [work / "vehicle-audio-test.exe"])
             result["cases"]["synthetic"] = run("synthetic", [exe])
             if selected:
                 result["selectedArchiveRoot"] = str(selected)

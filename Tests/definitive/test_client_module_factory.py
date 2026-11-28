@@ -49,7 +49,8 @@ def main():
                                   "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", "installationPath"], text=True).strip()
     exe = output / "factory-host.exe"
     receipt = {"success": False, "loaderBaseline": pin(loader), "architecture": arch, "factoryHostSource": pin(HOST),
-               "sdk": pin(ROOT / "Client/sdk/core/CClientBase.h"), "inputs": []}
+               "runner": pin(Path(__file__)), "sdk": pin(ROOT / "Client/sdk/core/CClientBase.h"),
+               "moduleLoader": pin(ROOT / "Client/core/StartupModule.h"), "inputs": []}
     scratch = (ROOT / "Build/tmp").resolve()
     scratch.mkdir(parents=True, exist_ok=True)
     try:
@@ -71,10 +72,11 @@ def main():
             assert pe(client) == (machine, magic, True)
             compiler_setup = Path(vs) / "Common7/Tools/VsDevCmd.bat"
             build = work / "build.cmd"
-            flags = ["/nologo", "/std:c++17", "/EHsc", "/O2", "/MT", "/W3", "/DWIN32", "/DNOMINMAX", "/DWIN32_LEAN_AND_MEAN",
+            flags = ["/nologo", "/std:c++17", "/EHsc", "/O2", "/MT", "/W4", "/WX", "/DWIN32", "/DNOMINMAX", "/DWIN32_LEAN_AND_MEAN",
                      "/D_CRT_SECURE_NO_WARNINGS", "/D_SCL_SECURE_NO_WARNINGS", "/D_TIMESPEC_DEFINED",
-                     "/I" + str(ROOT / "Client/sdk"), "/I" + str(ROOT / "Shared/sdk"), "/I" + str(ROOT / "vendor"),
-                     "/I" + str(ROOT / "vendor/sparsehash/src/windows"), "/I" + str(ROOT / "vendor/sparsehash/src"),
+                     "/external:W0", "/external:I" + str(ROOT / "Client/sdk"), "/external:I" + str(ROOT / "Shared/sdk"),
+                     "/external:I" + str(ROOT / "vendor"), "/external:I" + str(ROOT / "vendor/sparsehash/src/windows"),
+                     "/external:I" + str(ROOT / "vendor/sparsehash/src"),
                      str(HOST), "/Fo" + str(work / "host.obj"), "/Fe" + str(exe)]
             build.write_text(f'@echo off\ncall "{compiler_setup}" -no_logo -arch={arch} -host_arch=x64\n'
                              "if errorlevel 1 exit /b 1\n" + subprocess.list2cmdline(["cl", *flags]) + "\n")
@@ -88,9 +90,10 @@ def main():
             with (output / "run.log").open("wb") as log:
                 subprocess.run([exe, client], cwd=work, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=60, check=True)
             assert pin(client)["sha256"] == next(p["sha256"] for p in receipt["inputs"] if Path(p["path"]).name == "client.dll")
-        receipt.update(success=True, host=pin(exe), machine=hex(machine), optionalMagic=hex(magic),
-                       runLog=pin(output / "run.log"), factoryCalls=2, sameNonNullClient=True, frameCallbacks=4,
-                       clientUnloaded=True, sessionInitialized=False, sessionModulesLoaded=False)
+        receipt.update(success=True, host=pin(exe), hostAndClientMachine=hex(machine), hostAndClientOptionalMagic=hex(magic),
+                       compileLog=pin(output / "compile.log"), runLog=pin(output / "run.log"), factoryCalls=2,
+                       sameNonNullClient=True, frameCallbacks=4, clientUnloaded=True, sessionInitialized=False,
+                       sessionModulesAbsentAtCheckpoints=True)
     finally:
         (output / "result.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
     print(arch, (output / "run.log").read_text().strip())

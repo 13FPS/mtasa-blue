@@ -40,6 +40,8 @@ int wmain(int argc, wchar_t** argv)
         MtaStartup::Module module;
         Check(module.Load(path.wstring()), "could not load the client for this host architecture");
         using InitClientFn = CClientBase*(__cdecl*)();
+        // GetProcAddress erases the signature. Core uses this exact cdecl type.
+#pragma warning(suppress : 4191)
         const auto initClient = reinterpret_cast<InitClientFn>(GetProcAddress(module.Get(), "InitClient"));
         Check(initClient != nullptr, "InitClient export missing");
         CClientBase* client = initClient();

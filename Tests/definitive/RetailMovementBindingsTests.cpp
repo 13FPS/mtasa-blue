@@ -28,6 +28,10 @@ int main(int argc, char** argv)
         return 2;
 
     bool ok = Check("missing file", Retail::Read(file), {});
+    for (const auto* encoding : {"utf-8", "utf-16-le", "utf-16-be", "utf-32-le", "utf-32-be"})
+        ok &= Check(encoding, Retail::Read(file.parent_path() / (std::string(encoding) + ".cfg")), {{"forwards", "k"}, {"sprint", "lshift"}});
+    for (const auto* invalid : {"short-unit", "embedded-nul", "unpaired-high", "unpaired-low", "missing-low", "invalid-scalar", "surrogate-scalar"})
+        ok &= Check(invalid, Retail::Read(file.parent_path() / (std::string(invalid) + ".cfg")), {});
     ok &= Check("empty", Retail::Parse(" \r\n\t"), {});
     ok &= Check("default rows",
                 Retail::Parse("44 HID_MAPPING_PED_MOVE_X 0 -1\n29 HID_MAPPING_PED_MOVE_Y 1 -1\n54 HID_MAPPING_SPRINT 0 -1\n"

@@ -54,10 +54,10 @@ void SeedForwardAlternates(const std::filesystem::path& file)
     WriteBindingFixture(file, bytes);
 }
 
-void CheckMovementFile(const std::string& bytes, const std::vector<const char*>& forwards = {"i"})
+void CheckMovementFile(const std::string& bytes, const std::vector<const char*>& forwards = {"i"},
+                       const std::array<const char*, 6>& keys = {"i", "k", "j", "l", "u", "o"})
 {
     constexpr std::array<const char*, 6> controls{"forwards", "backwards", "left", "right", "sprint", "walk"};
-    constexpr std::array<const char*, 6> keys{"i", "k", "j", "l", "u", "o"};
     Check(bytes.find("<definitive_keybinds version=\"1\"") != std::string::npos && bytes.find("<binds>") != std::string::npos &&
               bytes.find("</definitive_keybinds>") != std::string::npos,
           "atomic Apply writes the generated versioned movement document");
@@ -226,7 +226,8 @@ void BindingPersistenceSettings(Owned& owned, const std::filesystem::path& root,
     auto& observed = *owned.observed;
     auto* window = observed.settingsWindow;
     auto* grid = observed.settingsGrid;
-    Check(window && grid && observed.settingsApply && observed.settingsCancel, "durable view reuses the actual MTA Settings window grid and callbacks");
+    Check(window && grid && observed.settingsApply && observed.settingsCancel && observed.settingsDefaults,
+          "durable view reuses the actual MTA Settings window, grid and restore-defaults button");
     const auto process = Export<Console::ProcessMessage>(owned.core, "MTA_ProcessDEFrontendConsoleMessage");
     const auto message = [&](UINT type, WPARAM key)
     {
@@ -312,6 +313,12 @@ void BindingPersistenceSettings(Owned& owned, const std::filesystem::path& root,
         };
         inspectColumns({"i", "z", "x", "c"});
         const auto original = ReadBindingFixture(file);
+        ClickRestoreDefaults(owned);
+        Check(window->IsVisible() && std::string(grid->GetItemText(rows[0], 2)) == "w" && ReadBindingFixture(file) == original,
+              "staged defaults leave the existing seven-key profile on disk");
+        button(observed.settingsCancel);
+        open();
+        inspectColumns({"i", "z", "x", "c"});
         applyAndReopen();
         inspectColumns({"i", "z", "x", "c"});
         Check(ReadBindingFixture(file) == original, "no-op Apply preserves interleaved movement XML byte for byte including six alternates");
@@ -368,6 +375,15 @@ void BindingPersistenceSettings(Owned& owned, const std::filesystem::path& root,
     {
         open();
         inspect(applied);
+        if (restarted)
+        {
+            ClickRestoreDefaults(owned);
+            button(observed.settingsApply);
+            Check(!window->IsVisible(), "Apply commits the staged defaults through the durable movement transaction");
+            open();
+            inspect(defaults);
+            CheckMovementFile(ReadBindingFixture(file), {"w"}, defaults);
+        }
         grid->SetSelectedItem(rows[0], 2, true);
         Check(grid->Event_OnDoubleClick() && message(WM_CHAR, 'P'), "durable view retains a genuine modal capture for normal hide cleanup");
         settingsCaptureRetainedForCleanup = true;

@@ -6,6 +6,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -19,6 +20,10 @@ namespace DefinitiveRetailMovementBindings
         const char* control;
         const char* key;
     };
+
+    // MTA uses these bindings when the retail controls file has no applicable entry.
+    inline constexpr std::array<Binding, 6> MtaDefaults = {
+        {{"forwards", "w"}, {"backwards", "s"}, {"left", "a"}, {"right", "d"}, {"sprint", "lshift"}, {"walk", "rshift"}}};
 
     inline constexpr std::size_t MaxFileBytes = 64 * 1024;
 
@@ -69,11 +74,64 @@ namespace DefinitiveRetailMovementBindings
             line.remove_prefix(word.size());
             return word;
         }
+
+        inline bool DecodeMappingText(std::string_view& text, std::string& decoded)
+        {
+            // The profile exporter preserves the original BOM. Mapping names,
+            // numbers and separators are ASCII; non-ASCII text can occur in comments.
+            struct Encoding
+            {
+                std::string_view bom;
+                unsigned int     width;
+                bool             littleEndian;
+            };
+            static constexpr Encoding encodings[] = {
+                {{"\xFF\xFE\0\0", 4}, 4, true}, {{"\0\0\xFE\xFF", 4}, 4, false}, {"\xFF\xFE", 2, true}, {"\xFE\xFF", 2, false}, {"\xEF\xBB\xBF", 1, false}};
+            for (const auto& encoding : encodings)
+            {
+                if (text.substr(0, encoding.bom.size()) != encoding.bom)
+                    continue;
+                text.remove_prefix(encoding.bom.size());
+                if (encoding.width == 1)
+                    break;
+                if (text.size() % encoding.width)
+                    return false;
+                decoded.reserve(text.size() / encoding.width);
+                bool needsLowSurrogate = false;
+                while (!text.empty())
+                {
+                    std::uint32_t unit = 0;
+                    for (unsigned int i = 0; i < encoding.width; ++i)
+                        unit = (unit << 8) | static_cast<unsigned char>(text[encoding.littleEndian ? encoding.width - 1 - i : i]);
+                    text.remove_prefix(encoding.width);
+                    if (!unit || unit > 0x10ffff)
+                        return false;
+                    if (needsLowSurrogate)
+                    {
+                        if (unit < 0xdc00 || unit > 0xdfff)
+                            return false;
+                        needsLowSurrogate = false;
+                        continue;
+                    }
+                    if (unit >= 0xd800 && unit <= 0xdfff)
+                    {
+                        if (encoding.width != 2 || unit >= 0xdc00)
+                            return false;
+                        needsLowSurrogate = true;
+                    }
+                    decoded.push_back(unit < 128 ? static_cast<char>(unit) : '?');
+                }
+                text = decoded;
+                return !needsLowSurrogate;
+            }
+            return text.find('\0') == std::string_view::npos;
+        }
     }
 
     inline std::vector<Binding> Parse(std::string_view contents)
     {
-        if (contents.size() > MaxFileBytes || contents.find('\0') != std::string_view::npos)
+        std::string decoded;
+        if (contents.size() > MaxFileBytes || !Detail::DecodeMappingText(contents, decoded))
             return {};
 
         struct Slot

@@ -58,7 +58,7 @@
 #include "DefinitiveFrontendBindings.h"
 #include "DefinitiveFrontendBindingPersistence.h"
 #if defined(_WIN64) && defined(MTA_WITH_DEFINITIVE_ADAPTER)
-#include "DefinitiveRetailMovementBindings.h"
+    #include "DefinitiveRetailMovementBindings.h"
 #endif
 #include "DefinitivePersistentFrontend.h"
 #include "FrontendCursorLeaseOwner.h"
@@ -2136,12 +2136,10 @@ namespace
     // This generated file contains only the six controls owned by the retained
     // frontend. Base commands, other controls and application CVars remain in
     // the ordinary package configuration and are never written through here.
-    constexpr DefinitiveRetailMovementBindings::Binding frontendMovementDefaults[] = {{"forwards", "w"}, {"backwards", "s"},   {"left", "a"},
-                                                                                      {"right", "d"},    {"sprint", "lshift"}, {"walk", "rshift"}};
-    bool                                                PersistedFrontendControl(const std::string& name)
+    using DefinitiveRetailMovementBindings::MtaDefaults;
+    bool PersistedFrontendControl(const std::string& name)
     {
-        return std::any_of(std::begin(frontendMovementDefaults), std::end(frontendMovementDefaults),
-                           [&](const auto& binding) { return name == binding.control; });
+        return std::any_of(MtaDefaults.begin(), MtaDefaults.end(), [&](const auto& binding) { return name == binding.control; });
     }
     fs::path FrontendRetailKeyboardPath()
     {
@@ -2186,10 +2184,8 @@ namespace
             return true;
         for (const auto& binding : DefinitiveRetailMovementBindings::Read(path))
         {
-            const auto stock = std::find_if(std::begin(frontendMovementDefaults), std::end(frontendMovementDefaults),
-                                            [&](const auto& item) { return !strcmp(item.control, binding.control); });
-            if (stock == std::end(frontendMovementDefaults) || HasExplicitFrontendMovement(configured, target, *stock) ||
-                target.GTAControlExists(binding.key, binding.control))
+            const auto stock = std::find_if(MtaDefaults.begin(), MtaDefaults.end(), [&](const auto& item) { return !strcmp(item.control, binding.control); });
+            if (stock == MtaDefaults.end() || HasExplicitFrontendMovement(configured, target, *stock) || target.GTAControlExists(binding.key, binding.control))
                 continue;
             if (!target.AddGTAControl(binding.key, binding.control))
                 return false;

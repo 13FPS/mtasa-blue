@@ -472,6 +472,7 @@ protected:
 
 private:
     void        CreateBindsTabGUI(CGUI* manager, CGUITab* tab, const CVector2D& panelSize);
+    bool        ReadFrontendRowControl(int row, SBindableGTAControl*& control) const;
     static bool IsFrontendControl(const SBindableGTAControl* control) noexcept;
     void        CreateInterfaceTabGUI();
     void        UpdateChatColorPreview(eChatColorType eType);
@@ -507,6 +508,7 @@ private:
     unsigned int m_uiCaptureKey;
     bool         m_bCaptureKey;
     bool         m_bCaptureAxis;
+    bool         m_bFrontendDefaultsStaged = false;
 
     bool m_bIsModLoaded;
 

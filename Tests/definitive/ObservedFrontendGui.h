@@ -19,6 +19,7 @@ public:
     CGUITabPanel*            settingsTabs = nullptr;
     CGUIButton*              settingsApply = nullptr;
     CGUIButton*              settingsCancel = nullptr;
+    CGUIButton*              settingsDefaults = nullptr;
     std::vector<std::string> settingsButtons;
     std::string              lastMessageBoxTitle;
 
@@ -32,6 +33,7 @@ public:
         settingsTabs = nullptr;
         settingsApply = nullptr;
         settingsCancel = nullptr;
+        settingsDefaults = nullptr;
         settingsButtons.clear();
     }
 
@@ -52,6 +54,8 @@ public:
             settingsApply = button;
         if (std::strcmp(caption, "Cancel") == 0)
             settingsCancel = button;
+        if (std::strcmp(caption, "Restore MTA defaults") == 0)
+            settingsDefaults = button;
     }
 
     void SetSkin(const char* szName) override { actual.SetSkin(szName); }

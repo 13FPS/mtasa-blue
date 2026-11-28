@@ -75,6 +75,7 @@ namespace
     bool                     runtimeCase = false, runtimeRetentionVerified = false, runtimeFailureCleanupVerified = false;
     bool                     localInputAdmissionVerified = false, localInputWrongImageVerified = false;
     bool                     bindingPersistenceVerified = false, bindingPersistenceRestartVerified = false;
+    bool                     movementDefaultsReloadVerified = false;
     bool                     bindingPersistenceSaveFailureVerified = false, bindingPersistenceAdmissionVerified = false;
     std::string              initialRuntimeForward;
     Runtime::Snapshot        runtimeTerminal{};
@@ -389,6 +390,12 @@ namespace
         owned.gui->ProcessMouseInput(CGUI_MI_MOUSEDOWN, 0, 0, LeftButton);
         owned.gui->ProcessMouseInput(CGUI_MI_MOUSEUP, 0, 0, LeftButton);
     }
+    void ClickRestoreDefaults(Owned& owned)
+    {
+        // The real Binds tab has an internal content pane outside the SDK parent chain.
+        // Click the button center in the same fixed 1280x1024 layout as the menu navigation.
+        Click(owned, 921, 739);
+    }
     void CheckIsolation(bool backendExpected)
     {
         Check((GetModuleHandleW(L"game_de.dll") != nullptr) == backendExpected && !GetModuleHandleW(L"game_sa.dll") &&
@@ -502,6 +509,7 @@ namespace
                << ",\"localInputWrongImageVerified\":" << (localInputWrongImageVerified ? "true" : "false") << ",\"localInputNativeMovementVerified\":false"
                << ",\"bindingPersistenceVerified\":" << (bindingPersistenceVerified ? "true" : "false")
                << ",\"bindingPersistenceRestartVerified\":" << (bindingPersistenceRestartVerified ? "true" : "false")
+               << ",\"movementDefaultsReloadVerified\":" << (movementDefaultsReloadVerified ? "true" : "false")
                << ",\"bindingPersistenceSaveFailureVerified\":" << (bindingPersistenceSaveFailureVerified ? "true" : "false")
                << ",\"bindingPersistenceAdmissionVerified\":" << (bindingPersistenceAdmissionVerified ? "true" : "false")
                << ",\"runtimeNativeViewVerified\":false,\"runtimeTerminal\":[";
@@ -582,12 +590,12 @@ namespace
                     static_cast<void*>(tabs), static_cast<void*>(observed.settingsApply), static_cast<void*>(observed.settingsCancel),
                     observed.settingsButtons.size());
         Check(window != nullptr, "actual configured bindings constructed the existing SETTINGS window");
-        Check(grid && tabs && observed.settingsApply && observed.settingsCancel,
+        Check(grid && tabs && observed.settingsApply && observed.settingsCancel && observed.settingsDefaults,
               "actual configured bindings own a complete existing grid, tab and session buttons");
         Check(!window->IsVisible(), "actual configured bindings settings window remains initially hidden");
         Check(tabs->GetTabCount() == 1 && tabs->GetSelectedTab()->GetText() == "Binds" && grid->GetColumnCount() == 5 &&
-                  observed.settingsButtons == std::vector<std::string>{"Apply (session only)", "Cancel"},
-              "only the existing Binds grid and session Apply/Cancel are constructed; unavailable tabs and defaults stay absent");
+                  observed.settingsButtons == std::vector<std::string>{"Apply (session only)", "Cancel", "Restore MTA defaults"},
+              "the Binds tab offers session Apply, Cancel and restore MTA defaults");
         const auto open = [&]
         {
             Click(owned, 230, 716);
@@ -689,6 +697,15 @@ namespace
         for (std::size_t index = 0; index < controls.size(); ++index)
             Check(grid->GetItemText(rows[index], primaryColumn) == replacement[index],
                   "reopening reloads applied movement keys from the actual retained MTA binding manager");
+        ClickRestoreDefaults(owned);
+        constexpr std::array<const char*, 6> defaults{"w", "s", "a", "d", "lshift", "rshift"};
+        for (std::size_t i = 0; i < controls.size(); ++i)
+        {
+            Check(std::string(grid->GetItemText(rows[i], primaryColumn)) == defaults[i] && std::string(realBinds[i]->boundKey->szKey) == replacement[i],
+                  "restoring MTA defaults stages each primary without changing its live bind");
+            for (int column = 3; column <= 5; ++column)
+                Check(std::string(grid->GetItemText(rows[i], column)) == " ", "restoring MTA defaults clears the visible alternates");
+        }
         beginCapture(0);
         Check(message(WM_KEYDOWN, 'P') && grid->GetItemText(rows[0], primaryColumn) == std::string("p"),
               "another real key can be staged before testing Cancel");
@@ -1367,7 +1384,7 @@ namespace
                 const auto hidden = RuntimeState(owned);
                 // A fresh persisted owner loads the base and movement XML, then
                 // commits a new manager for each of the four alternate-key Applies.
-                const unsigned bindingManagers = persistenceRestart ? 6u : (persistence ? 2u : 1u);
+                const unsigned bindingManagers = persistenceRestart ? (view == 2 ? 7u : 6u) : (persistence ? 2u : 1u);
                 RuntimeHidden(hidden, view, bindingManagers);
                 if (interaction)
                     RuntimeLoggerRetained(root, true);
@@ -1615,7 +1632,19 @@ int wmain(int argc, wchar_t** argv)
                 owned.observed.reset();
                 RuntimeSessionCase(owned, root, mode, startup, frontend, "w", true);
                 Check(bindingPersistenceRestartVerified, "a newly constructed Core reloads disk bindings and retains edits across both Settings views");
-                CheckMovementFile(ReadBindingFixture(file), {"i", "x", "b", "arrow_u", "n"});
+                const auto restored = ReadBindingFixture(file);
+                CheckMovementFile(restored, {"w"}, {"w", "s", "a", "d", "lshift", "rshift"});
+                owned.startup = owned.beginRuntime(Runtime::ApiVersion);
+                const auto path = file.wstring();
+                const auto reload = Export<Runtime::EnableBindingPersistenceAtPath>(owned.core, "MTA_EnableDEFrontendRuntimeBindingPersistenceAtPathV1");
+                Check(owned.startup &&
+                          reload(owned.startup, Runtime::ApiVersion, path.data(), static_cast<std::uint32_t>(path.size())) == Frontend::Status::Ok &&
+                          RuntimeState(owned)[Runtime::BindCount] == kPersistenceProfileBindCount && ReadBindingFixture(file) == restored,
+                      "fresh Core reloads the restored movement document with the six primary keys and all unrelated base records");
+                Check(owned.shutdownRuntime(owned.startup) == Frontend::Status::Ok && owned.releaseRuntime(owned.startup) == Frontend::Status::Ok,
+                      "retire the fresh Core used to reload restored bindings");
+                owned.startup = nullptr;
+                movementDefaultsReloadVerified = true;
             }
             bool legacyUnchanged = true;
             for (std::uint32_t index = 0; index < legacy.size(); ++index)

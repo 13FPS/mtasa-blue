@@ -311,7 +311,7 @@ try {
                     $runtime[1] -ne 4 -or $runtime[3] -ne 1 -or $runtime[5] -ne 0) {
                     throw "Actual runtime service/backend retirement differs: $case"
                 }
-                $expectedManagers=if($case -eq 'runtime-persistence'){6}else{1}
+                $expectedManagers=if($case -eq 'runtime-persistence'){7}else{1}
                 if ($successfulRuntime -and ($runtime[43] -ne $expectedManagers -or $runtime[44] -ne 1 -or $runtime[45] -ne $expectedManagers -or
                     $runtime[46] -ne 2 -or $runtime[47] -ne 2 -or $runtime[48] -ne 2 -or $runtime[49] -ne 0 -or
                     $runtime[51] -ne 1 -or $hostResult.actualSessionBindingsSettingsVerified -ne $true -or
@@ -319,7 +319,8 @@ try {
                     throw 'Actual runtime two-view configuration/bindings retention differs.'
                 }
                 if ($case -eq 'runtime-persistence' -and ($hostResult.bindingPersistenceVerified -ne $true -or
-                    $hostResult.bindingPersistenceRestartVerified -ne $true -or $hostResult.bindingPersistenceSaveFailureVerified -ne $true -or
+                    $hostResult.bindingPersistenceRestartVerified -ne $true -or $hostResult.movementDefaultsReloadVerified -ne $true -or
+                    $hostResult.bindingPersistenceSaveFailureVerified -ne $true -or
                     $hostResult.bindingPersistenceAdmissionVerified -ne $true)) {
                     throw 'Actual optional durable movement persistence or atomic failure proof differs.'
                 }

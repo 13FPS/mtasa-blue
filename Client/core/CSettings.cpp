@@ -17,6 +17,7 @@
 #include <game/CGame.h>
 #include <game/CSettings.h>
 #include "CSteamClient.h"
+#include "DefinitiveRetailMovementBindings.h"
 #include "DXHook/CProxyDirect3DDevice9.h"
 
 using namespace std;
@@ -2126,9 +2127,6 @@ void CSettings::CreateGUI()
 
 void CSettings::CreateBindsTabGUI(CGUI* manager, CGUITab* tab, const CVector2D& panelSize)
 {
-    // Both startup policies use the original MTA grid, columns and capture
-    // callback. The frontend omits the GTA-defaults action rather than offering
-    // a button whose implementation requires an unavailable controller config.
     m_pBindsList = reinterpret_cast<CGUIGridList*>(manager->CreateGridList(tab, false));
     const float bindsListTop = 15.0f;
     m_pBindsList->SetPosition(CVector2D(kSettingsTabHorizontalPadding * 0.5f, bindsListTop));
@@ -2140,20 +2138,16 @@ void CSettings::CreateBindsTabGUI(CGUI* manager, CGUITab* tab, const CVector2D& 
     for (int k = 0; k < SecKeyNum; k++)
         m_hSecKeys[k] = m_pBindsList->AddColumn(_("ALT. KEY"), 0.24f);
 
-    float availableBindsHeight = panelSize.fY - bindsListTop - 20.0f;
-    if (!IsFrontendBindings())
-    {
-        m_pBindsDefButton = reinterpret_cast<CGUIButton*>(manager->CreateButton(tab, _("Load defaults")));
-        m_pBindsDefButton->SetClickHandler(GUI_CALLBACK(&CSettings::OnBindsDefaultClick, this));
-        m_pBindsDefButton->AutoSize(NULL, 20.0f, 8.0f);
-        CVector2D buttonSize;
-        m_pBindsDefButton->GetSize(buttonSize);
-        const float bottomPadding = 32.0f;
-        const float buttonY = std::max(0.0f, panelSize.fY - buttonSize.fY - bottomPadding - 4.0f);
-        m_pBindsDefButton->SetPosition(CVector2D(std::max(0.0f, panelSize.fX - buttonSize.fX - bottomPadding), buttonY));
-        m_pBindsDefButton->SetZOrderingEnabled(false);
-        availableBindsHeight = buttonY - bindsListTop - 10.0f;
-    }
+    m_pBindsDefButton = reinterpret_cast<CGUIButton*>(manager->CreateButton(tab, IsFrontendBindings() ? _("Restore MTA defaults") : _("Load defaults")));
+    m_pBindsDefButton->SetClickHandler(GUI_CALLBACK(&CSettings::OnBindsDefaultClick, this));
+    m_pBindsDefButton->AutoSize(NULL, 20.0f, 8.0f);
+    CVector2D buttonSize;
+    m_pBindsDefButton->GetSize(buttonSize);
+    const float bottomPadding = 32.0f;
+    const float buttonY = std::max(0.0f, panelSize.fY - buttonSize.fY - bottomPadding - 4.0f);
+    m_pBindsDefButton->SetPosition(CVector2D(std::max(0.0f, panelSize.fX - buttonSize.fX - bottomPadding), buttonY));
+    m_pBindsDefButton->SetZOrderingEnabled(false);
+    const float availableBindsHeight = buttonY - bindsListTop - 10.0f;
     const float minimumHeight = 120.0f;
     const float maximumHeight = std::max(minimumHeight, panelSize.fY - bindsListTop - 20.0f);
     const float height = std::clamp(availableBindsHeight, minimumHeight, maximumHeight);
@@ -3000,10 +2994,30 @@ bool CSettings::OnControlsDefaultClick(CGUIElement* pElement)
 //
 bool CSettings::OnBindsDefaultClick(CGUIElement* pElement)
 {
-    // No caller, including a retained callback, may promote the frontend's
-    // configured-only records into reads of the classic controller defaults.
     if (IsFrontendBindings())
-        return false;
+    {
+        if (m_bCaptureKey || !m_pBindsList)
+            return false;
+        for (int row = 0; row < m_pBindsList->GetRowCount(); ++row)
+        {
+            SBindableGTAControl* control = nullptr;
+            if (!ReadFrontendRowControl(row, control))
+                return false;
+            if (!control)
+                continue;
+            const auto& defaults = DefinitiveRetailMovementBindings::MtaDefaults;
+            const auto  key =
+                std::find_if(defaults.begin(), defaults.end(), [control](const auto& binding) { return !strcmp(binding.control, control->szControl); });
+            if (key == defaults.end())
+                return false;
+            m_pBindsList->SetItemText(row, m_hPriKey, key->key);
+            for (auto column : m_hSecKeys)
+                m_pBindsList->SetItemText(row, column, CORE_SETTINGS_NO_KEY);
+        }
+        // Apply must also discard any alternates outside the four visible cells.
+        m_bFrontendDefaultsStaged = true;
+        return true;
+    }
     // Load the default binds
     CCore::GetSingleton().GetKeyBinds()->LoadDefaultBinds();
 
@@ -3415,7 +3429,22 @@ void CSettings::UpdateChatColorPreview(eChatColorType eType)
     m_pChatColorPreview[eType]->SetProperty("ImageColours", szValue);
 }
 
-// Saves the keybinds
+bool CSettings::ReadFrontendRowControl(int row, SBindableGTAControl*& control) const
+{
+    control = nullptr;
+    const auto type = static_cast<KeyBindType>(reinterpret_cast<std::intptr_t>(m_pBindsList->GetItemData(row, m_hBind)));
+    if (type == KeyBindType::GTA_CONTROL)
+    {
+        auto* bind = static_cast<CGTAControlBind*>(m_pBindsList->GetItemData(row, m_hPriKey));
+        control = bind ? bind->control : nullptr;
+        return IsFrontendControl(control);
+    }
+    // Unbound rows carry their control directly. Section headings have no associated control.
+    if (type == KeyBindType::UNDEFINED)
+        control = static_cast<SBindableGTAControl*>(m_pBindsList->GetItemData(row, m_hPriKey));
+    return !control || IsFrontendControl(control);
+}
+
 bool CSettings::StageFrontendBindingEdits(CKeyBinds& target)
 {
     if (!IsFrontendBindings() || m_bCaptureKey || !m_pBindsList)
@@ -3425,25 +3454,13 @@ bool CSettings::StageFrontendBindingEdits(CKeyBinds& target)
     std::vector<CKeyBinds::ControlBindingOrder> controls;
     for (int row = 0; row < m_pBindsList->GetRowCount(); ++row)
     {
-        const auto           type = static_cast<KeyBindType>(reinterpret_cast<std::intptr_t>(m_pBindsList->GetItemData(row, m_hBind)));
         SBindableGTAControl* control = nullptr;
-        if (type == KeyBindType::GTA_CONTROL)
-        {
-            auto* bind = static_cast<CGTAControlBind*>(m_pBindsList->GetItemData(row, m_hPriKey));
-            control = bind ? bind->control : nullptr;
-        }
-        else if (type == KeyBindType::UNDEFINED)
-            control = static_cast<SBindableGTAControl*>(m_pBindsList->GetItemData(row, m_hPriKey));
-        else
-            continue;
-        // Section headings have no bind data and use the default row type.
-        if (!control && type == KeyBindType::UNDEFINED)
-            continue;
-        if (!IsFrontendControl(control) ||
-            std::any_of(controls.begin(), controls.end(), [control](const CKeyBinds::ControlBindingOrder& edit) { return edit.control == control; }))
+        if (!ReadFrontendRowControl(row, control))
             return false;
-        std::list<CGTAControlBind*> existing;
-        target.GetBoundControls(control, existing);
+        if (!control)
+            continue;
+        if (std::any_of(controls.begin(), controls.end(), [control](const CKeyBinds::ControlBindingOrder& edit) { return edit.control == control; }))
+            return false;
         controls.push_back({control, {}});
         auto&      keys = controls.back().keys;
         const auto appendKey = [&](const SBindableKey* key)
@@ -3465,6 +3482,10 @@ bool CSettings::StageFrontendBindingEdits(CKeyBinds& target)
 
         // The grid shows the first four records per control. Keep any remaining
         // alternates behind those cells in the same order as the saved XML.
+        if (m_bFrontendDefaultsStaged)
+            continue;
+        std::list<CGTAControlBind*> existing;
+        target.GetBoundControls(control, existing);
         size_t slot = 0;
         for (auto* bind : existing)
         {
@@ -4040,7 +4061,10 @@ void CSettings::SetVisible(bool bVisible)
     // Reopening also rebuilds the grid. End capture before either transition
     // so its selected-cell pointer cannot outlive the old staged rows.
     if (IsFrontendBindings())
+    {
         CancelFrontendCapture();
+        m_bFrontendDefaultsStaged = false;
+    }
     // Hide / show the form
     m_pWindow->SetVisible(bVisible);
 

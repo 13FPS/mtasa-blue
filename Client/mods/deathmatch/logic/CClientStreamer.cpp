@@ -400,8 +400,9 @@ void CClientStreamer::Restream(bool bMovedFar)
     while (!m_ToStreamOut.empty())
     {
         CClientStreamElement* pElement = m_ToStreamOut.front();
-        // Make sure we have no stream-references
-        if (pElement->GetTotalStreamReferences() == 0)
+        // Position, dimension and sync state can change between enqueue and
+        // this pulse. Keep a resident element if it is back in range already.
+        if (pElement->IsStreamedIn() && pElement->GetTotalStreamReferences() == 0 && !pElement->IsModelStreamInWanted())
         {
             // Stream out 1 of them per frame
             pElement->InternalStreamOut();

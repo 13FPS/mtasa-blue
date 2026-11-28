@@ -366,6 +366,40 @@ static void TestRecreation(const std::string& scenario)
     entity.onEvent = {};
 }
 
+static void TestQueuedStreamOut(const std::string& scenario)
+{
+    CClientStreamer streamer([] { return false; }, 80, 300, 300);
+    CClientObject   object(streamer);
+    auto&           camera = manager.camera.position;
+    game.model.ready = true;
+    streamer.DoPulse(camera);
+    Require(object.IsStreamedIn() && game.objects == 1, "expected a resident object");
+    if (scenario == "queued-sector-return")
+    {
+        object.UpdateStreamPosition({900, 0, 0});
+        object.UpdateStreamPosition(camera);
+    }
+    else if (scenario == "queued-view-return")
+    {
+        streamer.SetDimension(1);
+        streamer.SetDimension(0);
+    }
+    else
+    {
+        object.SetDimension(1);
+        if (scenario == "queued-dimension-return")
+            object.SetDimension(0);
+    }
+    streamer.DoPulse(camera);
+    if (scenario == "queued-wrong-dimension")
+    {
+        Require(!object.IsStreamedIn() && !game.model.references && object.events.size() == 2, "an ineligible object stayed resident");
+        return;
+    }
+    Require(object.IsStreamedIn() && game.objects == 1 && game.model.references == 1 && object.events == std::vector<std::string>{"onClientElementStreamIn"},
+            "an obsolete removal unloaded a resident object");
+}
+
 static void TestGrid(const std::string& scenario)
 {
     CClientStreamer streamer([] { return false; }, 80, 300, 300);
@@ -531,7 +565,9 @@ int main(int argc, char** argv)
     try
     {
         const std::string scenario = argv[1];
-        if (scenario.rfind("grid-", 0) == 0)
+        if (scenario.rfind("queued-", 0) == 0)
+            TestQueuedStreamOut(scenario);
+        else if (scenario.rfind("grid-", 0) == 0)
             TestGrid(scenario);
         else if (scenario.rfind("vehicle-", 0) == 0)
             TestRecreation<CClientVehicle>(scenario);

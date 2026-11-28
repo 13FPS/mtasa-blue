@@ -1,11 +1,13 @@
 // Compile the actual Lua camera matrix/FOV functions over controlled SDK replies.
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <numbers>
+#include <optional>
 #include <stdexcept>
 #include <string>
 constexpr float FLOAT_EPSILON = 0.0001f;
@@ -33,6 +35,22 @@ static void Call(char op)
 
 struct Row : CCam
 {
+    mutable CVector front{0, 0, 2}, up{0, 3, 1}, source{17, -3, 5};
+    CVector*        GetFront() const override
+    {
+        Call('D');
+        return &front;
+    }
+    CVector* GetUp() const override
+    {
+        Call('U');
+        return &up;
+    }
+    CVector* GetSource() const override
+    {
+        Call('S');
+        return &source;
+    }
     float value = 0;
     float GetFOV() const override
     {
@@ -44,8 +62,26 @@ struct Row : CCam
 
 struct Camera : CCamera
 {
-    bool transition = false;
-    BYTE selector = 0;
+    bool     transition = false;
+    BYTE     selector = 0;
+    BYTE     vehicle = 1;
+    BYTE     ped = 1;
+    void     SetCameraVehicleViewMode(BYTE mode) override { vehicle = mode; }
+    void     SetCameraPedViewMode(BYTE mode) override { ped = mode; }
+    BYTE     GetCameraVehicleViewMode() override { return vehicle; }
+    BYTE     GetCameraPedViewMode() override { return ped; }
+    CMatrix* GetMatrix(CMatrix* output) override
+    {
+        Call('M');
+        *output = CMatrix(CVector(9, 2, 1));
+        return output;
+    }
+    bool GetTransitionMatrix(CMatrix& output) const override
+    {
+        Call('B');
+        output = CMatrix(CVector(8, 4, 2));
+        return true;
+    }
     Row  rows[3];
     bool IsInTransition() const override
     {
@@ -70,13 +106,57 @@ struct Camera : CCamera
 #include "UnusedCCamera.inl"
 };
 
+namespace SystemState
+{
+    enum Enum
+    {
+        GS_INIT,
+        GS_PLAYING_GAME
+    };
+}
+struct Game
+{
+    CCamera*          camera = nullptr;
+    SystemState::Enum state = SystemState::GS_INIT;
+    CCamera*          GetCamera() { return camera; }
+    SystemState::Enum GetSystemState() const { return state; }
+};
+struct Settings
+{
+    std::string vehicle{"4"}, ped{"3"};
+    unsigned    reads = 0, writes = 0, saves = 0;
+    Settings*   GetCVars() { return this; }
+    void        Get(const std::string& key, std::string& output)
+    {
+        ++reads;
+        output = key == "camera_vehicle_view" ? vehicle : ped;
+    }
+    void Set(const std::string& key, int value)
+    {
+        ++writes;
+        (key == "camera_vehicle_view" ? vehicle : ped) = std::to_string(value);
+    }
+    void SaveConfig() { ++saves; }
+};
+static Game*     g_pGame = nullptr;
+static Settings* g_pCore = nullptr;
+
 struct CClientCamera
 {
-    CCamera* m_pCamera = nullptr;
-    bool     IsInCameraTransition() const;
-    float    GetAccurateFOV() const;
-    void     GetPosition(CVector& p) const { p = CVector(1, 2, 3); }
-    void     GetFixedTarget(CVector& p, float* roll) const
+    CCamera*        m_pCamera = nullptr;
+    bool            m_viewModesRestored = false;
+    std::uint8_t    m_lastVehicleViewMode = 0, m_lastPedViewMode = 0;
+    void            PersistViewModes();
+    void            SetCameraVehicleViewMode(eVehicleCamMode);
+    void            SetCameraPedViewMode(ePedCamMode);
+    eVehicleCamMode GetCameraVehicleViewMode();
+    ePedCamMode     GetCameraPedViewMode();
+    CMatrix         GetGtaMatrix() const;
+    CMatrix         GetInterpolatedCameraMatrix() const;
+    bool            IsInCameraTransition() const;
+    float           GetAccurateFOV() const;
+    void            GetPosition(CVector& p) const { p = CVector(1, 2, 3); }
+    void            GetFixedTarget(CVector& p, float* roll) const
     {
         p = CVector(4, 5, 6);
         *roll = 7;
@@ -103,10 +183,62 @@ static void Check(float value, const std::string& expectedCalls)
     ++checks;
 }
 
+static void CheckStartupAndPose()
+{
+    Game          game;
+    Settings      settings;
+    CClientCamera client;
+    Camera        camera;
+    g_pCore = &settings;
+    client.PersistViewModes();
+    g_pGame = &game;
+    game.state = SystemState::GS_PLAYING_GAME;
+    client.PersistViewModes();
+    if (settings.reads || settings.saves || client.m_viewModesRestored)
+        throw std::runtime_error("settings accessed before camera publication");
+    game.state = SystemState::GS_INIT;
+    game.camera = &camera;
+    client.PersistViewModes();
+    if (settings.reads || client.m_viewModesRestored)
+        throw std::runtime_error("settings accessed before playing");
+    game.state = SystemState::GS_PLAYING_GAME;
+    client.PersistViewModes();
+    if (settings.reads != 2 || settings.saves || settings.writes || camera.vehicle != 4 || camera.ped != 3 || !client.m_viewModesRestored)
+        throw std::runtime_error("stored camera views were lost or not restored");
+    camera.vehicle = 2;
+    client.PersistViewModes();
+    client.PersistViewModes();
+    if (settings.saves != 1 || settings.vehicle != "2" || settings.ped != "3")
+        throw std::runtime_error("live view change was not persisted exactly once");
+    calls.clear();
+    const CMatrix matrix = client.GetGtaMatrix();
+#if defined(_WIN64)
+    const std::string poseCalls = "IACDUS";
+#else
+    const std::string poseCalls = "IACMDUS";
+#endif
+    if (calls != poseCalls || matrix.vPos != CVector(17, -3, 5) || matrix.vFront != CVector(0, 0, 1) || matrix.vUp != CVector(0, 1, 0) ||
+        matrix.vRight != CVector(-1, 0, 0))
+        throw std::runtime_error("incorrect active camera pose: " + calls);
+    camera.transition = true;
+    calls.clear();
+    if (client.GetGtaMatrix().vPos != CVector(8, 4, 2) || calls != "IB")
+        throw std::runtime_error("transition matrix dispatch changed");
+    camera.transition = false;
+    camera.selector = 255;
+    calls.clear();
+    if (client.GetGtaMatrix().vPos != CVector() || calls != "IAC")
+        throw std::runtime_error("absent row produced a pose");
+    g_pGame = nullptr;
+    g_pCore = nullptr;
+    std::puts("Passed late camera publication, view persistence and active/transition pose checks");
+}
+
 int main()
 {
     try
     {
+        CheckStartupAndPose();
         CClientCamera client;
         CStaticFunctionDefinitions::m_pCamera = &client;
         Check(DEFAULT_FOV, "");

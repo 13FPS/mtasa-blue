@@ -25,7 +25,7 @@ namespace mta::game_de
         CPoolsDE&               targetPools;
         NativeGameTimingAccess& targetOwner;
     };
-    // Twenty-seven camera methods stay pure. This controlled-ped observation
+    // Other camera methods stay pure. This controlled-ped observation
     // cannot stand in for general GetEntity or a complete camera/game factory.
     static_assert(std::is_abstract_v<CCameraTargetDE> && std::is_base_of_v<CCameraWidescreenDE, CCameraTargetDE> &&
                   !std::is_copy_constructible_v<CCameraTargetDE> && !std::is_move_constructible_v<CCameraTargetDE> &&

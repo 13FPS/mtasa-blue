@@ -59,11 +59,17 @@ def main():
             if '{"getCameraMatrix", ArgumentParserWarn<false, GetCameraMatrix>}' not in lua:
                 raise ValueError("Lua no longer registers the selected function")
             functions = source(LOGIC + "CStaticFunctionDefinitions.cpp")
-            code = [method(camera, "bool CClientCamera::IsInCameraTransition() const"), fov,
+            methods = ("bool CClientCamera::IsInCameraTransition() const", "CMatrix CClientCamera::GetGtaMatrix() const",
+                       "CMatrix CClientCamera::GetInterpolatedCameraMatrix() const", "void CClientCamera::PersistViewModes()",
+                       "void CClientCamera::SetCameraVehicleViewMode(", "void CClientCamera::SetCameraPedViewMode(",
+                       "eVehicleCamMode CClientCamera::GetCameraVehicleViewMode()", "ePedCamMode CClientCamera::GetCameraPedViewMode()")
+            code = [*(method(camera, signature) for signature in methods), fov,
                     method(functions, "bool CStaticFunctionDefinitions::GetCameraMatrix("),
                     method(lua, "CLuaMultiReturn<float, float, float, float, float, float, float, float> CLuaCameraDefs::GetCameraMatrix()")]
             (work / "CameraMethods.inl").write_text("\n".join(code), encoding="utf-8")
-            for cls, exercised in (("CCamera", {"GetActiveCam", "GetCam", "GetTransitionFOV", "IsInTransition"}), ("CCam", {"GetFOV"})):
+            for cls, exercised in (("CCamera", {"GetActiveCam", "GetCam", "GetTransitionFOV", "IsInTransition", "GetMatrix", "GetTransitionMatrix",
+                                                "SetCameraVehicleViewMode", "SetCameraPedViewMode", "GetCameraVehicleViewMode", "GetCameraPedViewMode"}),
+                                   ("CCam", {"GetFOV", "GetFront", "GetUp", "GetSource"})):
                 sdk = source(f"Client/sdk/game/{cls}.h")
                 signatures = re.findall(r"^\s*virtual\s+([^;]+?)\s*= 0;", sdk, re.M)
                 bodies = [sig.strip() + " override { std::abort(); }" for sig in signatures if re.search(r"(\w+)\(", sig)[1] not in exercised]

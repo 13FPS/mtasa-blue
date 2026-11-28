@@ -146,14 +146,19 @@ CClientCamera::CClientCamera(CClientManager* pManager) : ClassInit(this), CClien
 // MTA never uses, so they reset every session; keep them in the client settings instead.
 void CClientCamera::PersistViewModes()
 {
+    // The game can publish its camera after the client manager is constructed.
+    // Wait for the real view modes before restoring or saving user preferences.
+    if (!m_pCamera && g_pGame)
+        m_pCamera = g_pGame->GetCamera();
+    if (!m_pCamera)
+        return;
+
     if (!m_viewModesRestored)
     {
         // The camera is reinitialised while the game world comes up; restoring any earlier would
         // get overwritten and the change tracker below would persist the defaults back
         if (!g_pGame || g_pGame->GetSystemState() != SystemState::GS_PLAYING_GAME)
             return;
-
-        m_viewModesRestored = true;
 
         // Read as text and validate strictly; the settings file is hand editable, and a lenient
         // numeric read would turn garbage or an empty value into mode zero
@@ -182,6 +187,7 @@ void CClientCamera::PersistViewModes()
 
         m_lastVehicleViewMode = static_cast<std::uint8_t>(GetCameraVehicleViewMode());
         m_lastPedViewMode = static_cast<std::uint8_t>(GetCameraPedViewMode());
+        m_viewModesRestored = true;
 
         // Heal missing or mangled entries and flush right away; waiting for the quit save
         // would lose them if the game does not close cleanly
@@ -933,11 +939,15 @@ CMatrix CClientCamera::GetGtaMatrix() const
         return CMatrix();
 
     CMatrix matResult;
+#if !defined(_WIN64)
+    // Classic also repairs invalid camera state while reading its global matrix.
     m_pCamera->GetMatrix(&matResult);
+#endif
+    // Front and up determine right in OrthoNormalize. The active SDK row
+    // therefore supplies the complete pose for the 64-bit client.
     matResult.vFront = *pCam->GetFront();
     matResult.vUp = *pCam->GetUp();
     matResult.vPos = *pCam->GetSource();
-    matResult.vRight = -matResult.vRight;  // Camera has this the other way
     matResult.OrthoNormalize(CMatrix::AXIS_FRONT, CMatrix::AXIS_UP);
     return matResult;
 }

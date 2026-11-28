@@ -1846,11 +1846,35 @@ namespace
 
     void Cases()
     {
-        Access               access;
-        CameraBasicsObserver camera(access);
-        CCamera&             sdk = camera;
+        struct PolicyCamera : CameraBasicsObserver
+        {
+            using CameraBasicsObserver::CameraBasicsObserver;
+            std::uint8_t     state = 0;
+            mutable unsigned reads = 0;
+            unsigned         writes = 0;
+            bool             objects = false;
+            bool             vehicles = false;
+            std::uint8_t     GetTransitionState() const override
+            {
+                ++reads;
+                return state;
+            }
+            void SetCameraClip(bool clipObjects, bool clipVehicles) override
+            {
+                ++writes;
+                objects = clipObjects;
+                vehicles = clipVehicles;
+            }
+        };
+        Access       access;
+        PolicyCamera camera(access);
+        CCamera&     sdk = camera;
+        sdk.ResetCameraClip();
+        Check(camera.writes == 1 && camera.objects && camera.vehicles, "reset clips both objects and vehicles in one camera setter call");
         for (unsigned value = 0; value != 256; ++value)
         {
+            camera.state = static_cast<std::uint8_t>(value);
+            Check(sdk.IsInTransition() == (value != 0) && camera.reads == value + 1, "transition predicate uses the current SDK state exactly once");
             access.active = static_cast<std::uint8_t>(value);
             const auto calls = access.activeCalls;
             Check(sdk.GetActiveCam() == value && access.activeCalls == calls + 1 && !access.fovCalls && !access.restoreCalls,

@@ -25,8 +25,7 @@ namespace mta::game_de
         static void                      Require(ClockResult, const char*);
         NativeCameraSphereVisibleAccess& widescreenOwner;
     };
-    // Seven actual methods are implemented; the other twenty-eight remain
-    // pure. A completed bool pair is not a complete CCamera/CGame factory.
+    // The camera stays abstract until the remaining SDK operations are available.
     static_assert(std::is_abstract_v<CCameraWidescreenDE> && std::is_base_of_v<CCameraCamsDE, CCameraWidescreenDE> &&
                   !std::is_copy_constructible_v<CCameraWidescreenDE> && !std::is_move_constructible_v<CCameraWidescreenDE> &&
                   !std::has_virtual_destructor_v<CCameraWidescreenDE>);

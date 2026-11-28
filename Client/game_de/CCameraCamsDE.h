@@ -37,7 +37,7 @@ namespace mta::game_de
         std::array<std::unique_ptr<CCamTargetSetterDE>, 3> products{};
         std::atomic<bool>                                  publicationClosed{false};
     };
-    // Thirty actual camera methods remain pure. This is neither a complete
+    // Remaining camera methods keep this abstract. This is neither a complete
     // CCamera nor a CGame::GetCamera publication, and base deletion is invalid.
     static_assert(std::is_abstract_v<CCameraCamsDE> && std::is_base_of_v<CCameraSphereVisibleDE, CCameraCamsDE> &&
                   !std::is_copy_constructible_v<CCameraCamsDE> && !std::is_move_constructible_v<CCameraCamsDE> &&

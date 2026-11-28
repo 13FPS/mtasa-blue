@@ -1,4 +1,4 @@
-# Strict actual SDK receivers: camera4/35 and Cam5/13 inherited methods.
+# Strict actual SDK receivers: camera6/35 and Cam5/13 inherited methods.
 # Every unrelated hook aborts, so a factory/vector/setter shortcut fails.
 function Get-CameraBasicsSdkMethods([string]$Root,[string]$RelativePath) {
     $text=[IO.File]::ReadAllText((Join-Path $Root $RelativePath))
@@ -13,11 +13,11 @@ function Get-CameraBasicsSdkMethods([string]$Root,[string]$RelativePath) {
 function Write-CameraBasicsFixture([string]$RepositoryRoot,[string]$OutputPath) {
     $source='Client/sdk/game/CCamera.h'
     $all=@(Get-CameraBasicsSdkMethods $RepositoryRoot $source)
-    $provided=@($all|Where-Object {$_.name -in @('IsSphereVisible','GetActiveCam','Restore','RestoreWithJumpCut')})
-    $rejected=@($all|Where-Object {$_.name -notin @('IsSphereVisible','GetActiveCam','Restore','RestoreWithJumpCut')})
-    if($all.Count -ne 35 -or $provided.Count -ne 4 -or $rejected.Count -ne 31){throw 'Actual camera35-method partition changed'}
+    $provided=@($all|Where-Object {$_.name -in @('IsSphereVisible','GetActiveCam','Restore','RestoreWithJumpCut','IsInTransition','ResetCameraClip')})
+    $rejected=@($all|Where-Object {$_.name -notin @('IsSphereVisible','GetActiveCam','Restore','RestoreWithJumpCut','IsInTransition','ResetCameraClip')})
+    if($all.Count -ne 35 -or $provided.Count -ne 6 -or $rejected.Count -ne 29){throw 'Actual camera35-method partition changed'}
     $lines=@('#pragma once','#include <cstdlib>','#pragma warning(push)','#pragma warning(disable : 4100)',
-        'class CameraBasicsObserver final : public mta::game_de::CCameraSphereVisibleDE {public:',
+        'class CameraBasicsObserver : public mta::game_de::CCameraSphereVisibleDE {public:',
         'explicit CameraBasicsObserver(mta::game_de::NativeCameraSphereVisibleAccess& owner) noexcept : CCameraSphereVisibleDE(owner) {}')
     $lines+=@($rejected|ForEach-Object {$_.signature+' override {std::abort();}'})
     $lines+=@('};','#pragma warning(pop)')
@@ -125,10 +125,10 @@ function Write-CamTargetSetterFixture([string]$RepositoryRoot,[string]$OutputPat
 function Write-CameraCamsFixture([string]$RepositoryRoot,[string]$OutputPath) {
     $source='Client/sdk/game/CCamera.h'
     $all=@(Get-CameraBasicsSdkMethods $RepositoryRoot $source)
-    $names=@('IsSphereVisible','GetActiveCam','Restore','RestoreWithJumpCut','GetCam')
+    $names=@('IsSphereVisible','GetActiveCam','Restore','RestoreWithJumpCut','IsInTransition','ResetCameraClip','GetCam')
     $provided=@($all|Where-Object {$_.name -in $names})
     $rejected=@($all|Where-Object {$_.name -notin $names})
-    if($all.Count -ne 35 -or $provided.Count -ne 5 -or $rejected.Count -ne 30){throw 'Actual camera products35-method partition changed'}
+    if($all.Count -ne 35 -or $provided.Count -ne 7 -or $rejected.Count -ne 28){throw 'Actual camera products35-method partition changed'}
     $lines=@('#pragma once','#include <cstdlib>','#pragma warning(push)','#pragma warning(disable : 4100)',
         'class CameraCamsObserver final : public mta::game_de::CCameraCamsDE {public:',
         'CameraCamsObserver(mta::game_de::CPoolsDE& pools,mta::game_de::NativeGameTimingAccess& owner) : CCameraCamsDE(pools,owner) {}')
@@ -143,10 +143,10 @@ function Write-CameraCamsFixture([string]$RepositoryRoot,[string]$OutputPath) {
 function Write-CameraWidescreenFixture([string]$RepositoryRoot,[string]$OutputPath) {
     $source='Client/sdk/game/CCamera.h'
     $all=@(Get-CameraBasicsSdkMethods $RepositoryRoot $source)
-    $names=@('IsSphereVisible','GetActiveCam','Restore','RestoreWithJumpCut','GetCam','SetWidescreen','GetWidescreen')
+    $names=@('IsSphereVisible','GetActiveCam','Restore','RestoreWithJumpCut','IsInTransition','ResetCameraClip','GetCam','SetWidescreen','GetWidescreen')
     $provided=@($all|Where-Object {$_.name -in $names})
     $rejected=@($all|Where-Object {$_.name -notin $names})
-    if($all.Count -ne 35 -or $provided.Count -ne 7 -or $rejected.Count -ne 28){throw 'Actual widescreen camera35-method partition changed'}
+    if($all.Count -ne 35 -or $provided.Count -ne 9 -or $rejected.Count -ne 26){throw 'Actual widescreen camera35-method partition changed'}
     $lines=@('#pragma once','#include <cstdlib>','#pragma warning(push)','#pragma warning(disable : 4100)',
         'class CameraWidescreenObserver final : public mta::game_de::CCameraWidescreenDE {public:',
         'CameraWidescreenObserver(mta::game_de::CPoolsDE& pools,mta::game_de::NativeGameTimingAccess& owner) : CCameraWidescreenDE(pools,owner) {}')
@@ -161,10 +161,10 @@ function Write-CameraWidescreenFixture([string]$RepositoryRoot,[string]$OutputPa
 function Write-CameraTargetFixture([string]$RepositoryRoot,[string]$OutputPath) {
     $source='Client/sdk/game/CCamera.h'
     $all=@(Get-CameraBasicsSdkMethods $RepositoryRoot $source)
-    $names=@('IsSphereVisible','GetActiveCam','Restore','RestoreWithJumpCut','GetCam','SetWidescreen','GetWidescreen','GetTargetEntity')
+    $names=@('IsSphereVisible','GetActiveCam','Restore','RestoreWithJumpCut','IsInTransition','ResetCameraClip','GetCam','SetWidescreen','GetWidescreen','GetTargetEntity')
     $provided=@($all|Where-Object {$_.name -in $names})
     $rejected=@($all|Where-Object {$_.name -notin $names})
-    if($all.Count -ne 35 -or $provided.Count -ne 8 -or $rejected.Count -ne 27){throw 'Actual main-target camera35-method partition changed'}
+    if($all.Count -ne 35 -or $provided.Count -ne 10 -or $rejected.Count -ne 25){throw 'Actual main-target camera35-method partition changed'}
     $lines=@('#pragma once','#include <cstdlib>','#pragma warning(push)','#pragma warning(disable : 4100)',
         'class CameraTargetObserver final : public mta::game_de::CCameraTargetDE {public:',
         'CameraTargetObserver(mta::game_de::CPoolsDE& pools,mta::game_de::NativeGameTimingAccess& owner) : CCameraTargetDE(pools,owner) {}')

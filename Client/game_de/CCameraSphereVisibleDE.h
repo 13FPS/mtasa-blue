@@ -27,6 +27,8 @@ namespace mta::game_de
         BYTE GetActiveCam() override;
         void Restore() override;
         void RestoreWithJumpCut() override;
+        bool IsInTransition() const override;
+        void ResetCameraClip() override;
 
     protected:
         explicit CCameraSphereVisibleDE(NativeCameraSphereVisibleAccess& owner) noexcept : cameraOwner(owner) {}
@@ -34,7 +36,6 @@ namespace mta::game_de
     private:
         NativeCameraSphereVisibleAccess& cameraOwner;
     };
-    // These bounded operations supply neither a full camera nor Reset/Fade,
-    // target or transform ownership. All remaining actual SDK methods stay pure.
+    // Reading the transition state and applying clipping still require a backend.
     static_assert(std::is_abstract_v<CCameraSphereVisibleDE> && std::is_base_of_v<CCamera, CCameraSphereVisibleDE>);
 }

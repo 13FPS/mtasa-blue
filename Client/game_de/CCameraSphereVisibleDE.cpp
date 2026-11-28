@@ -9,6 +9,17 @@
 
 namespace mta::game_de
 {
+    bool CCameraSphereVisibleDE::IsInTransition() const
+    {
+        return GetTransitionState() != 0;
+    }
+
+    void CCameraSphereVisibleDE::ResetCameraClip()
+    {
+        // MTA's default enables collision with both objects and vehicles.
+        SetCameraClip(true, true);
+    }
+
     BYTE CCameraSphereVisibleDE::GetActiveCam()
     {
         std::uint8_t value = 0;

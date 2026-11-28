@@ -2,7 +2,7 @@
 #requires -Version 7.0
 # Exercise actual camera Restore/raw selector and const Cam FOV; native provenance uses the focused owner fixture.
 [CmdletBinding()]
-param()
+param([ValidateSet('x86','x64')][string[]]$Architectures = @('x86','x64'))
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -107,11 +107,11 @@ try {
     $record['cameraWidescreenGeneratedFixture']=Write-CameraWidescreenFixture $taskRoot $widescreenGenerated
     $mainTargetGenerated=Join-Path $scratchRoot 'CameraTargetFixture.generated.h'
     $record['cameraMainTargetGeneratedFixture']=Write-CameraTargetFixture $taskRoot $mainTargetGenerated
-    if($record.cameraMainTargetGeneratedFixture.rejectingMethods -ne 27 -or @($record.cameraMainTargetGeneratedFixture.inheritedProductionMethods).Count -ne 8){throw 'Actual main-target camera SDK35-method partition changed'}
+    if($record.cameraMainTargetGeneratedFixture.rejectingMethods -ne 25 -or @($record.cameraMainTargetGeneratedFixture.inheritedProductionMethods).Count -ne 10){throw 'Actual main-target camera SDK35-method partition changed'}
     Copy-Item -LiteralPath $mainTargetGenerated -Destination (Join-Path $outputRoot ([IO.Path]::GetFileName($mainTargetGenerated)))
-    if($record.cameraWidescreenGeneratedFixture.rejectingMethods -ne 28 -or @($record.cameraWidescreenGeneratedFixture.inheritedProductionMethods).Count -ne 7){throw 'Actual widescreen camera SDK35-method partition changed'}
+    if($record.cameraWidescreenGeneratedFixture.rejectingMethods -ne 26 -or @($record.cameraWidescreenGeneratedFixture.inheritedProductionMethods).Count -ne 9){throw 'Actual widescreen camera SDK35-method partition changed'}
     Copy-Item -LiteralPath $widescreenGenerated -Destination (Join-Path $outputRoot ([IO.Path]::GetFileName($widescreenGenerated)))
-    if($record.cameraProductsGeneratedFixture.rejectingMethods -ne 30 -or @($record.cameraProductsGeneratedFixture.inheritedProductionMethods).Count -ne 5){throw 'Actual camera products SDK35-method partition changed'}
+    if($record.cameraProductsGeneratedFixture.rejectingMethods -ne 28 -or @($record.cameraProductsGeneratedFixture.inheritedProductionMethods).Count -ne 7){throw 'Actual camera products SDK35-method partition changed'}
     Copy-Item -LiteralPath $productsGenerated -Destination (Join-Path $outputRoot ([IO.Path]::GetFileName($productsGenerated)))
     $record['camGeneratedFixture']=Write-CamFovFixture $taskRoot $camGenerated
     $record['rowGeneratedFixture']=Write-CamRowFixture $taskRoot $rowGenerated
@@ -127,7 +127,7 @@ try {
     if(@($record.pedGeneratedFixture.inheritedPooledMethods).Count -ne 1 -or -not $record.pedGeneratedFixture.sharedVirtualPedBase){throw 'Actual pooled ped SDK composition changed'}
     Copy-Item -LiteralPath $targetGenerated -Destination (Join-Path $outputRoot ([IO.Path]::GetFileName($targetGenerated)))
     Copy-Item -LiteralPath $pedGenerated -Destination (Join-Path $outputRoot ([IO.Path]::GetFileName($pedGenerated)))
-    if($record.cameraGeneratedFixture.rejectingMethods -ne 31 -or @($record.cameraGeneratedFixture.inheritedProductionMethods).Count -ne 4){throw 'Actual camera SDK35-method partition changed'}
+    if($record.cameraGeneratedFixture.rejectingMethods -ne 29 -or @($record.cameraGeneratedFixture.inheritedProductionMethods).Count -ne 6){throw 'Actual camera SDK35-method partition changed'}
     if($record.camGeneratedFixture.rejectingMethods -ne 8 -or @($record.camGeneratedFixture.inheritedProductionMethods).Count -ne 5){throw 'Actual Cam SDK13-method partition changed'}
     if($record.rowGeneratedFixture.rejectingMethods -ne 2 -or @($record.rowGeneratedFixture.inheritedProductionMethods).Count -ne 11){throw 'Actual retained Cam SDK13-method partition changed'}
     Copy-Item -LiteralPath $rowGenerated -Destination (Join-Path $outputRoot ([IO.Path]::GetFileName($rowGenerated)))
@@ -141,7 +141,7 @@ try {
     $visualStudio = [IO.File]::ReadAllText($discovery.stdout).Trim()
     if ($discovery.exitCode -ne 0 -or $discovery.timedOut -or -not $visualStudio) { throw 'Visual Studio x86/x64 tools are required.' }
     $developerCommand = Join-Path $visualStudio 'Common7/Tools/VsDevCmd.bat'
-    foreach ($architecture in @('x86','x64')) {
+    foreach ($architecture in $Architectures) {
         $directory = Join-Path $outputRoot $architecture
         [IO.Directory]::CreateDirectory($directory) | Out-Null
         # Capture toolchain paths only; a full environment dump could contain
@@ -200,7 +200,7 @@ try {
         $result['cameraProviderRefusalTransportTested']=$text.Contains('Actual camera provider refusal transport fixture completed')
 
         $expectedBits = if ($architecture -eq 'x86') { 32 } else { 64 }
-        if ($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -ne 3665 -or $result.pointerBits -ne $expectedBits -or -not $result.actualCameraBasicsSdkTested -or -not $result.actualCameraJumpCutSdkTested -or -not $result.actualCameraFovWriteSdkTested -or -not $result.actualCameraDirectionSdkTested -or -not $result.actualCameraRowBorrowSdkTested -or -not $result.actualCameraHistorySdkTested -or -not $result.actualCameraTargetSdkTested -or -not $result.actualPedPooledInterfaceSdkTested -or -not $result.actualCameraTargetSetterSdkTested -or -not $result.actualCameraGetCamSdkTested -or -not $result.actualCameraWidescreenSdkTested -or -not $result.actualCameraMainTargetSdkTested -or -not $result.actualCamFovSdkTested -or -not $result.cameraProviderRefusalTransportTested) {
+        if ($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -ne 3922 -or $result.pointerBits -ne $expectedBits -or -not $result.actualCameraBasicsSdkTested -or -not $result.actualCameraJumpCutSdkTested -or -not $result.actualCameraFovWriteSdkTested -or -not $result.actualCameraDirectionSdkTested -or -not $result.actualCameraRowBorrowSdkTested -or -not $result.actualCameraHistorySdkTested -or -not $result.actualCameraTargetSdkTested -or -not $result.actualPedPooledInterfaceSdkTested -or -not $result.actualCameraTargetSetterSdkTested -or -not $result.actualCameraGetCamSdkTested -or -not $result.actualCameraWidescreenSdkTested -or -not $result.actualCameraMainTargetSdkTested -or -not $result.actualCamFovSdkTested -or -not $result.cameraProviderRefusalTransportTested) {
             throw "$architecture actual camera basics SDK checks failed or summary/pointer-width evidence was missing."
         }
     }
@@ -219,7 +219,7 @@ try {
     $record.actualCameraMainTargetSdkTested=@($record.results|Where-Object{-not $_.actualCameraMainTargetSdkTested}).Count -eq 0
     $record['actualCamFovSdkTested']=@($record.results|Where-Object{-not $_.actualCamFovSdkTested}).Count -eq 0
     $record['cameraProviderRefusalTransportTested']=@($record.results|Where-Object{-not $_.cameraProviderRefusalTransportTested}).Count -eq 0
-    $record.success = $record.results.Count -eq 2 -and $record.actualCameraBasicsSdkTested -and $record.actualCameraJumpCutSdkTested -and $record.actualCameraFovWriteSdkTested -and $record.actualCameraDirectionSdkTested -and $record.actualCameraRowBorrowSdkTested -and $record.actualCameraHistorySdkTested -and $record.actualCameraTargetSdkTested -and $record.actualPedPooledInterfaceSdkTested -and $record.actualCameraTargetSetterSdkTested -and $record.actualCameraGetCamSdkTested -and $record.actualCameraWidescreenSdkTested -and $record.actualCameraMainTargetSdkTested -and $record.actualCamFovSdkTested -and $record.cameraProviderRefusalTransportTested
+    $record.success = $record.results.Count -eq $Architectures.Count -and $record.actualCameraBasicsSdkTested -and $record.actualCameraJumpCutSdkTested -and $record.actualCameraFovWriteSdkTested -and $record.actualCameraDirectionSdkTested -and $record.actualCameraRowBorrowSdkTested -and $record.actualCameraHistorySdkTested -and $record.actualCameraTargetSdkTested -and $record.actualPedPooledInterfaceSdkTested -and $record.actualCameraTargetSetterSdkTested -and $record.actualCameraGetCamSdkTested -and $record.actualCameraWidescreenSdkTested -and $record.actualCameraMainTargetSdkTested -and $record.actualCamFovSdkTested -and $record.cameraProviderRefusalTransportTested
 } catch { AddFailure ($_.Exception.ToString()) }
 finally {
     foreach ($name in $previousEnvironment.Keys) {

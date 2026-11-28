@@ -31,9 +31,10 @@ for DE transition dispatch and pose tests. Run
 To exercise the getters offline, build the Release x64 Game DE target and run
 `python Tests/definitive/test_game_camera_audio_de.py "<Game DE object directory>"`
 from the repository root. The host links the normal production objects and
-supplies test receivers for the remaining abstract methods. It checks service
-identity, callback delivery, isolation between games and rejection of expired
-bindings. The public adapter continues to return a null `CGame` pointer.
+supplies test receivers for the remaining abstract methods. Through the SDK
+getters it checks a rolled DE camera transition, a refused camera sample,
+world-sound cancellation and isolation between two games. The public adapter
+continues to return a null `CGame` pointer.
 
 `SetAsyncLoadingFromScript`, `SuspendASyncLoading` and `IsASyncLoadingEnabled`
 now use the same MTA-owned loading policy as the classic backend. DE uses a

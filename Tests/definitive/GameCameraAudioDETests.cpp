@@ -1,7 +1,9 @@
 // Exercise the normal DE game objects with two independent sets of SDK services.
 #include "../../Client/game_de/CGameCameraAudioDE.h"
 #include "../../Client/game_de/CAudioEngineDE.h"
-#include <game/CCamera.h>
+#include "../../Client/game_de/CCameraTransitionDE.h"
+#include "../../Client/game_de/CPoolsDE.h"
+#include <CMatrix.h>
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
@@ -16,12 +18,30 @@ namespace
             throw std::runtime_error(message);
     }
 
-    class Camera final : public CCamera
+    class Pools final : public CPoolsDE
     {
     public:
-        void  SetShakeForce(float force) override { shake = force; }
-        float GetShakeForce() override { return shake; }
-        float shake = 0;
+        explicit Pools(NativeGameTimingAccess& owner) : CPoolsDE(owner) {}
+#include "Pools.generated.inl"
+    };
+
+    struct Transition final : CameraTransitionSource
+    {
+        ClockResult ReadCameraTransition(CameraTransitionSample& out) const noexcept override
+        {
+            ++reads;
+            out = sample;
+            return status;
+        }
+        CameraTransitionSample sample{};
+        ClockResult            status = ClockResult::Ok;
+        mutable unsigned       reads = 0;
+    };
+
+    class Camera final : public CCameraTransitionDE
+    {
+    public:
+        Camera(Pools& pools, NativeGameTimingAccess& owner, const Transition& source) : CCameraTransitionDE(pools, owner, source) {}
 #include "Camera.generated.inl"
     };
 
@@ -81,7 +101,7 @@ namespace
     }
 
     template <class Lookup>
-    bool StaleGameRefused(Lookup lookup)
+    bool Refused(Lookup lookup)
     {
         try
         {
@@ -104,7 +124,9 @@ int main()
         const NativeGameTimingReader       timing;
         const NativeStreamingFileIdsReader streaming;
         const NativeGameStateReader        state;
-        Camera                             camera, otherCamera;
+        Pools                              pools(owner);
+        Transition                         transition;
+        Camera                             camera(pools, owner, transition);
         SoundManager                       manager, otherManager;
         Audio                              audio(manager), otherAudio(otherManager);
         Game                               first(camera, audio, timing, clock, owner, streaming, state);
@@ -124,27 +146,42 @@ int main()
         const SWorldSoundEvent event{2, 3, nullptr, {}};
         game.GetAudioEngine()->SetWorldSoundHandler(&Veto);
         Check(!audio.CanPlayWorldSound(event), "game did not install sound callback");
-        game.GetCamera()->SetShakeForce(0.75f);
+        // Test the same rolled transition through CGame that a client would
+        // observe. Only the sample input comes from the test.
+        transition.sample = {1, 47.5f, CVector(8, 2, 3), CVector(8, 6, 3), CVector(1, 0, 0)};
+        CMatrix pose;
+        Check(game.GetCamera()->GetTransitionMatrix(pose) && transition.reads == 1 && pose.vPos == CVector(8, 2, 3) && pose.vFront == CVector(0, 1, 0) &&
+                  pose.vUp == CVector(1, 0, 0) && pose.vRight == CVector(0, 0, -1),
+              "wrong DE transition pose through CGame");
 
         {
-            Game   second(otherCamera, otherAudio, timing, clock, owner, streaming, state);
-            CGame& another = second;
+            Access     otherOwner;
+            CClockDE   otherClock(otherOwner);
+            Pools      otherPools(otherOwner);
+            Transition otherTransition;
+            Camera     otherCamera(otherPools, otherOwner, otherTransition);
+            Game       second(otherCamera, otherAudio, timing, otherClock, otherOwner, streaming, state);
+            CGame&     another = second;
             another.GetShaderReplacementStats(stats);
             Check(stats.uiTotalTextures == 0, "texture registry leaked across games");
             Check(another.GetCamera() == &otherCamera && another.GetAudioEngine() == &otherAudio, "shared provider across games");
-            Check(another.GetCamera()->GetShakeForce() == 0 && otherAudio.CanPlayWorldSound(event), "shared service state");
+            Check(!another.GetCamera()->IsInTransition() && otherTransition.reads == 1 && transition.reads == 1 && otherAudio.CanPlayWorldSound(event),
+                  "shared service state");
             another.GetAudioEngine()->SetWorldSoundEnabled(2, 3, false, true);
             Check(!otherAudio.CanPlayWorldSound(event) && game.GetAudioEngine()->IsWorldSoundEnabled(2, 3), "shared mute state");
             Check(another.GetAESoundManager() == &otherManager && otherManager.cancellations == 1 && manager.cancellations == 0, "wrong cancellation owner");
             another.GetAESoundManager()->CancelSoundsInBankSlot(2, 3);
             Check(otherManager.cancellations == 2, "direct SDK cancellation reached a different sound manager");
         }
-        Check(game.GetCamera()->GetShakeForce() == 0.75f, "camera identity changed");
+        Check(game.GetCamera()->GetTransitionFOV() == 47.5f && transition.reads == 2, "lost first game's transition");
+        transition.status = ClockResult::Stopped;
+        const auto before = pose.To4x4Array();
+        Check(Refused([&] { game.GetCamera()->GetTransitionMatrix(pose); }) && pose.To4x4Array() == before && transition.reads == 3,
+              "refused transition published a pose");
         game.GetAudioEngine()->SetWorldSoundHandler(nullptr);
         Check(audio.CanPlayWorldSound(event), "cleared handler still active");
 
-        // Prepared-services validation compares opaque identities only. A call
-        // into a native service or a fixture playback sink aborts this host.
+        // Prepared-services validation compares opaque identities only.
         auto& services = owner.current;
         services.generation = 1;
         services.clock = &clock;
@@ -161,10 +198,9 @@ int main()
         CGame& bound = prepared;
         Check(bound.GetCamera() == &camera && bound.GetAudioEngine() == &audio && bound.GetAESoundManager() == &manager, "prepared lookup lost provider");
         ++services.generation;
-        Check(StaleGameRefused([&] { bound.GetCamera(); }) && StaleGameRefused([&] { bound.GetAudioEngine(); }) &&
-                  StaleGameRefused([&] { bound.GetAESoundManager(); }),
+        Check(Refused([&] { bound.GetCamera(); }) && Refused([&] { bound.GetAudioEngine(); }) && Refused([&] { bound.GetAESoundManager(); }),
               "expired generation accepted");
-        std::puts("Game SDK camera/audio identity, dispatch, isolation, unregister and stale generation passed");
+        std::puts("CGame DE camera transition pose, source refusal, audio dispatch, game isolation, unregister and stale generation passed");
         return 0;
     }
     catch (const std::exception& e)

@@ -89,8 +89,9 @@ void CClientSoundManager::DoPulse()
 {
     UpdateVolume();
 
-    CVector vecCameraPosition, vecLookAt;
-    bool    haveListener = false;
+    CMatrix        matrix;
+    const CMatrix* listener = nullptr;
+    bool           listenerRequested = false;
 
     list<CClientSound*>::iterator iter = m_Sounds.begin();
     for (; iter != m_Sounds.end(); ++iter)
@@ -98,14 +99,23 @@ void CClientSoundManager::DoPulse()
         CClientSound* pSound = *iter;
         // 2D playback and queued stops can run before a camera or local player
         // exists. Obtain one listener pose when the first spatial sound needs it.
-        if (!haveListener && pSound->IsSound3D())
+        if (!listenerRequested && pSound->IsSound3D())
         {
+            listenerRequested = true;
             CClientCamera* camera = m_pClientManager->GetCamera();
-            camera->GetPosition(vecCameraPosition);
-            camera->GetFixedTarget(vecLookAt);
-            haveListener = true;
+            if (camera && camera->GetMatrix(matrix) && matrix.vPos.IsValid() && matrix.vFront.IsValid() && matrix.vUp.IsValid())
+            {
+                // GTA aligns the camera from front and up. Script-supplied matrices can carry
+                // a conflicting third axis, so derive the same screen-right direction here.
+                const float frontLength = matrix.vFront.Normalize();
+                matrix.vRight = matrix.vFront;
+                matrix.vRight.CrossProduct(&matrix.vUp);
+                const float rightLength = matrix.vRight.Normalize();
+                if (frontLength > 0 && rightLength > 0 && std::isfinite(frontLength) && std::isfinite(rightLength))
+                    listener = &matrix;
+            }
         }
-        pSound->Process3D(vecCameraPosition, vecLookAt);
+        pSound->Process3D(listener);
 
         // Delete sound if finished
         if (pSound->IsFinished())
@@ -118,8 +128,8 @@ void CClientSoundManager::DoPulse()
         }
     }
 
-    if (haveListener)
-        UpdateDistanceStreaming(vecCameraPosition);
+    if (listener)
+        UpdateDistanceStreaming(listener->vPos);
     ProcessStopQueues();
 }
 

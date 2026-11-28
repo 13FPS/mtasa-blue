@@ -732,7 +732,7 @@ bool CClientSound::GetFxEffectParameters(uint uiFxEffect, void* params)
 // m_pAudio->DoPulse needs to be called for non-3D sounds also.
 //
 ////////////////////////////////////////////////////////////
-void CClientSound::Process3D(const CVector& vecCameraPosition, const CVector& vecLookAt)
+void CClientSound::Process3D(const CMatrix* listener)
 {
     // Update 3D things if required
     if (m_b3D)
@@ -789,7 +789,7 @@ void CClientSound::Process3D(const CVector& vecCameraPosition, const CVector& ve
     if (!m_pAudio)
         return;
 
-    m_pAudio->DoPulse(vecCameraPosition, vecLookAt);
+    m_pAudio->DoPulse(listener);
 
     // Trigger script events for things
     SSoundEventInfo eventInfo;

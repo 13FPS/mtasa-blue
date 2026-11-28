@@ -20,6 +20,7 @@
 #include <bass_fx.h>
 #include <atomic>
 #include <condition_variable>
+#include <limits>
 #include <chrono>
 
 void CALLBACK BPMCallback(int handle, float bpm, void* user);
@@ -1208,7 +1209,7 @@ BOOL CBassAudio::GetFxParameters(uint iFxEffect, void* params)
 //
 // Must be call every frame
 //
-void CBassAudio::DoPulse(const CVector& vecCameraPosition, const CVector& vecLookAt)
+void CBassAudio::DoPulse(const CMatrix* listener)
 {
     // If the sound is a stream, handle results from other threads
     if (m_bStream)
@@ -1220,11 +1221,11 @@ void CBassAudio::DoPulse(const CVector& vecCameraPosition, const CVector& vecLoo
         return;
 
     // Update 3D attenuation and panning
-    if (m_b3D)
-        Process3D(vecCameraPosition, vecLookAt);
+    if (m_b3D && listener)
+        Process3D(*listener);
 
-    // Apply any pending play request
-    if (m_bPendingPlay)
+    // A new spatial channel needs its first gain and pan before playback.
+    if (m_bPendingPlay && (!m_b3D || listener))
     {
         m_bPendingPlay = false;
         if (!m_bPaused)
@@ -1232,28 +1233,27 @@ void CBassAudio::DoPulse(const CVector& vecCameraPosition, const CVector& vecLoo
     }
 }
 
-void CBassAudio::Process3D(const CVector& vecCameraPosition, const CVector& vecLookAt)
+void CBassAudio::Process3D(const CMatrix& listener)
 {
     assert(m_b3D && m_pSound);
 
-    float fDistance = DistanceBetweenPoints3D(vecCameraPosition, m_vecPosition);
+    float fDistance = DistanceBetweenPoints3D(listener.vPos, m_vecPosition);
     if (m_bPan)
     {
         // Limit panning when getting close to the min distance
         float fPanSharpness = UnlerpClamped(m_fMinDistance, fDistance, m_fMinDistance * 2);
         float fPanLimit = Lerp(0.35f, fPanSharpness, 1.0f);
 
-        // Pan
-        CVector vecLook = vecLookAt - vecCameraPosition;
-        CVector vecSound = m_vecPosition - vecCameraPosition;
-        vecLook.fZ = vecSound.fZ = 0.0f;
-        vecLook.Normalize();
-        vecSound.Normalize();
-
-        vecLook.CrossProduct(&vecSound);
-        // The length of the cross product (which is simply fZ in this case)
-        // is equal to the sine of the angle between the vectors
-        float fPan = Clamp(-fPanLimit, -vecLook.fZ, fPanLimit);
+        // Pan by the source azimuth in the listener's own horizontal plane.
+        // This keeps the level-camera pan for elevated sounds while following camera roll.
+        const CVector offset = m_vecPosition - listener.vPos;
+        const float   right = offset.DotProduct(&listener.vRight);
+        const float   front = offset.DotProduct(&listener.vFront);
+        const float   planeDistance = std::hypot(right, front);
+        // Directly overhead and coincident sources have no stereo direction.
+        const float fPan = planeDistance > std::max(FLOAT_EPSILON, fDistance * std::numeric_limits<float>::epsilon())
+                               ? Clamp(-fPanLimit, right / planeDistance, fPanLimit)
+                               : 0.0f;
 
         BASS_ChannelSetAttribute(m_pSound, BASS_ATTRIB_PAN, fPan);
     }

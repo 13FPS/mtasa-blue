@@ -85,7 +85,7 @@ public:
     void    SetPan(float fPan);
     bool    SetLooped(bool bLoop);
 
-    void   DoPulse(const CVector& vecCameraPosition, const CVector& vecLookAt);
+    void   DoPulse(const CMatrix* listener);
     void   AddQueuedEvent(eSoundEventType type, const SString& strString, double dNumber = 0.0, bool bBool = false, const SString& strError = "");
     bool   GetQueuedEvent(SSoundEventInfo& info);
     void   ParseShoutcastMeta(const SString& strMeta);
@@ -109,7 +109,7 @@ protected:
     void                ServiceVars();
     void                SetFinishedCallbacks();
 
-    void Process3D(const CVector& vecCameraPosition, const CVector& vecLookAt);
+    void Process3D(const CMatrix& listener);
 
 public:
     SSoundThreadVariables* m_pVars;

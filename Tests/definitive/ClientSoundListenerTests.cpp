@@ -11,10 +11,13 @@
 #include <SharedUtil.Legacy.h>
 #include <SString.hpp>
 #include <CSphere.h>
+#include <CMatrix.h>
 #include <array>
 #include <cmath>
 #include <cstdio>
 #include <stdexcept>
+#include <optional>
+#include <string_view>
 
 using SharedUtil::Clamp;
 using SharedUtil::Lerp;
@@ -39,9 +42,10 @@ namespace
 
     struct CLuaArguments
     {
-        void PushString(const SString&) { Unexpected(); }
-        void PushNumber(double) { Unexpected(); }
-        void PushBoolean(bool) { Unexpected(); }
+        void   PushString(const SString&) { Unexpected(); }
+        void   PushNumber(double value) { number = value; }
+        double number = 0;
+        void   PushBoolean(bool) { Unexpected(); }
     };
     enum SoundEvent
     {
@@ -60,7 +64,7 @@ namespace
 
     struct CBassAudio
     {
-        explicit CBassAudio(DWORD channel, bool is3D = true) : m_pSound(channel), m_b3D(is3D) {}
+        explicit CBassAudio(DWORD channel, bool is3D = true, bool stream = false) : m_pSound(channel), m_b3D(is3D), m_bStream(stream), m_pVars(stream) {}
         DWORD      m_pSound;
         bool       m_bPan = true;
         const bool m_b3D = true, m_bStream = false;
@@ -68,10 +72,20 @@ namespace
         bool       m_bPendingPlay = false, m_bPaused = true;
         float      m_fVolume = 0.8f, m_fMinDistance = 10, m_fMaxDistance = 30;
         CVector    m_vecPosition;
-        void       DoPulse(const CVector&, const CVector&);
-        void       Process3D(const CVector&, const CVector&);
-        void       ServiceVars() { Unexpected(); }
-        bool       GetQueuedEvent(SSoundEventInfo&) { return false; }
+        void       DoPulse(const CMatrix*);
+        void       Process3D(const CMatrix&);
+        void       ServiceVars() { ++streamPulses; }
+        unsigned   streamPulses = 0;
+        bool       queuedBeat = false;
+        bool       GetQueuedEvent(SSoundEventInfo& event)
+        {
+            if (!queuedBeat)
+                return false;
+            queuedBeat = false;
+            event.type = SOUND_EVENT_BEAT;
+            event.dNumber = 7;
+            return true;
+        }
     };
 
     struct CClientEntity
@@ -84,7 +98,10 @@ namespace
     struct CClientSoundManager;
     struct CClientSound
     {
-        CClientSound(CBassAudio* audio, CClientSoundManager* manager) : m_pAudio(audio), m_pSoundManager(manager), m_b3D(audio->m_b3D) {}
+        CClientSound(CBassAudio* audio, CClientSoundManager* manager)
+            : m_pAudio(audio), m_pSoundManager(manager), m_b3D(audio->m_b3D), m_bStream(audio->m_bStream)
+        {
+        }
         CBassAudio*          m_pAudio;
         CClientSoundManager* m_pSoundManager;
         const bool           m_b3D = true, m_bStream = false;
@@ -92,7 +109,7 @@ namespace
         int                  m_LuaDebugInfo = 0;
         CVector              m_vecPosition;
         SString              m_strPath;
-        void                 Process3D(const CVector&, const CVector&);
+        void                 Process3D(const CMatrix*);
         bool                 IsSound3D() const { return m_b3D; }
         unsigned             GetDimension() const { return 0; }
         CSphere              GetWorldBoundingSphere() const { return CSphere(m_pAudio->m_vecPosition, m_pAudio->m_fMaxDistance); }
@@ -106,7 +123,13 @@ namespace
         void                 UpdateSpatialData() { Unexpected(); }
         bool                 Create() { Unexpected(); }
         void                 Destroy() { Unexpected(); }
-        void                 CallEvent(const char*, CLuaArguments&, bool) { Unexpected(); }
+        void                 CallEvent(const char* name, CLuaArguments& arguments, bool children)
+        {
+            if (std::string_view(name) != "onClientSoundBeat" || arguments.number != 7 || !children)
+                Unexpected();
+            ++beats;
+        }
+        unsigned beats = 0;
     };
 
     // Expose the listener position observed by the production spatial query.
@@ -136,21 +159,30 @@ namespace
         return &spatial;
     }
 
+    enum class EFixedCameraMode
+    {
+        TARGET
+    };
     struct CClientCamera
     {
-        CVector  position{100, 200, 15};
-        CVector  target{100, 201, 15};
-        unsigned positions = 0, targets = 0;
-        void     GetPosition(CVector& out)
+        CMatrix             m_matFixedMatrix{CVector{100, 200, 15}};
+        CVector             m_vecFixedTarget;
+        float               m_fRoll = 0;
+        EFixedCameraMode    m_FixedCameraMode = EFixedCameraMode::TARGET;
+        bool                m_bFixed = false;
+        std::optional<bool> m_pulseMatrixAvailable{true};
+        mutable unsigned    activePoseReads = 0;
+        bool                GetMatrix(CMatrix&) const;
+        void                SetFixedTarget(const CVector&, float);
+        const CMatrix&      AcquirePulseMatrix() const
         {
-            ++positions;
-            out = position;
+            ++activePoseReads;
+            return m_matFixedMatrix;
         }
-        void GetFixedTarget(CVector& out)
-        {
-            ++targets;
-            out = target;
-        }
+        bool IsInFixedMode() const { return m_bFixed; }
+        void ToggleCameraFixedMode(bool fixed) { m_bFixed = fixed; }
+        void UpdateCenterOfWorldFromFixedMatrix() {}
+        void InvalidateCachedTransforms() {}
     };
     // No player lookup exists on either receiver. Reintroducing one into the
     // extracted production methods is a compile-time regression.
@@ -175,8 +207,12 @@ namespace
     ClientGame* g_pClientGame = &clientGame;
     struct Core
     {
-        Core* GetCVars() { Unexpected(); }
-        bool  GetValue(const char*, bool) { Unexpected(); }
+        Core* GetCVars() { return this; }
+        bool  GetValue(const char* name, bool)
+        {
+            Check(std::string_view(name) == "allow_external_sounds", "Unexpected CVar read");
+            return true;
+        }
     };
     Core  core;
     Core* g_pCore = &core;
@@ -256,22 +292,37 @@ namespace
         manager.m_Sounds.push_back(&sound);
         HSTREAM secondChannel = BASS_StreamCreate(44100, 2, 0, STREAMPROC_PUSH, nullptr);
         Check(secondChannel != 0, "Second spatial channel creation failed");
-        CBassAudio   secondAudio(secondChannel);
+        CBassAudio   secondAudio(secondChannel, true, true);
         CClientSound secondSound(&secondAudio, &manager);
         manager.m_Sounds.push_back(&secondSound);
         spatial.candidate = &sound;
+        // The camera returns its defined compatibility matrix but refuses the pose.
+        // The 3D stream must service its queued event without starting at the origin.
+        client.camera.m_pulseMatrixAvailable = false;
+        secondAudio.m_bPendingPlay = true;
+        secondAudio.m_bPaused = false;
+        secondAudio.queuedBeat = true;
+        Check(BASS_StreamPutData(secondChannel, samples.data(), sizeof(samples)) != static_cast<DWORD>(-1), "Unable to queue 3D data");
+        Check(BASS_ChannelSetAttribute(secondChannel, BASS_ATTRIB_VOL, 0.4f), "Prepare unstarted stream");
+        manager.DoPulse();
+        Check(client.cameraRequests == 1 && client.camera.activePoseReads == 1 && !spatial.queries && manager.stopUpdates == 3 && manager.volumeUpdates == 3 &&
+                  secondAudio.streamPulses == 1 && secondSound.beats == 1,
+              "Missing camera must allow stream events, volume and stop queues");
+        Check(secondAudio.m_bPendingPlay && BASS_ChannelIsActive(secondChannel) == BASS_ACTIVE_STOPPED, "Missing listener must defer the 3D play request");
+        ExpectAttribute(secondChannel, BASS_ATTRIB_VOL, 0.4f);
+        client.camera.m_pulseMatrixAvailable = true;
+
         unsigned activePulses = 0;
         auto     listen = [&](const CVector& offset, float pan, float volume)
         {
-            audio.m_vecPosition = client.camera.position + offset;
-            secondAudio.m_vecPosition = client.camera.position;
+            audio.m_vecPosition = client.camera.m_matFixedMatrix.vPos + offset;
+            secondAudio.m_vecPosition = client.camera.m_matFixedMatrix.vPos;
             Check(BASS_ChannelSetAttribute(secondChannel, BASS_ATTRIB_VOL, 0.2f), "Failed to prepare second spatial sample");
             manager.DoPulse();
             ++activePulses;
-            Check(client.cameraRequests == activePulses && client.camera.positions == activePulses && client.camera.targets == activePulses,
-                  "Active pulse must read this camera once");
-            Check(spatial.queries == activePulses && spatial.lastListener == client.camera.position && manager.volumeUpdates == activePulses + 2 &&
-                      manager.stopUpdates == activePulses + 2,
+            Check(client.cameraRequests == activePulses + 1, "Active pulse must read this camera once");
+            Check(spatial.queries == activePulses && spatial.lastListener == client.camera.m_matFixedMatrix.vPos && manager.volumeUpdates == activePulses + 3 &&
+                      manager.stopUpdates == activePulses + 3,
                   "Active pulse did not send the camera listener to streaming or process its queues");
             ExpectAttribute(flatChannel, BASS_ATTRIB_PAN, 0.25f);
             ExpectAttribute(flatChannel, BASS_ATTRIB_VOL, 0.6f);
@@ -280,7 +331,10 @@ namespace
             ExpectAttribute(channel, BASS_ATTRIB_PAN, pan);
             ExpectAttribute(channel, BASS_ATTRIB_VOL, volume);
         };
+        // Handedness is determined by front and up, even for a mirrored input matrix.
+        client.camera.m_matFixedMatrix.vRight = CVector(-1, 0, 0);
         listen(CVector{5, 0, 0}, 0.35f, 0.8f);
+        Check(!secondAudio.m_bPendingPlay && BASS_ChannelIsActive(secondChannel) == BASS_ACTIVE_PLAYING, "Spatial stream must resume on the first valid pose");
         listen(CVector{-5, 0, 0}, -0.35f, 0.8f);
         listen(CVector{20, 0, 0}, 1.0f, 0.8f * std::exp(-2.5f));
         Check(manager.m_DistanceStreamedInMap.count(&sound) == 1, "Nearby sound must stream in");
@@ -288,9 +342,30 @@ namespace
         listen(CVector{-75, 0, 0}, -1.0f, 0.0f);
         Check(manager.m_DistanceStreamedInMap.empty(), "Far sound must stream out");
         spatial.candidate = &sound;
-        client.camera.position = CVector{-80, 40, 90};
-        client.camera.target = client.camera.position + CVector{0, -1, 0};
+        client.camera.m_matFixedMatrix.vPos = CVector{-80, 40, 90};
+        const CVector position = client.camera.m_matFixedMatrix.vPos;
+        client.camera.SetFixedTarget(position + CVector{0, -1, 0}, 0.0f);
         listen(CVector{20, 0, 0}, -1.0f, 0.8f * std::exp(-2.5f));
+        client.camera.SetFixedTarget(position + CVector{0, 1, 0}, 0.0f);
+        // A scripted fixed matrix may disagree with its own front/up pair.
+        client.camera.m_matFixedMatrix.vRight = -client.camera.m_matFixedMatrix.vRight;
+        listen(CVector{15, 0, 0}, 0.675f, 0.8f * std::exp(-1.25f));
+        // A level camera preserves the old azimuth even for a source above the listener.
+        listen(CVector{12, 0, 16}, 1.0f, 0.8f * std::exp(-2.5f));
+        listen(CVector{12, 16, 0}, 0.6f, 0.8f * std::exp(-2.5f));
+        listen(CVector{-12, 16, 0}, -0.6f, 0.8f * std::exp(-2.5f));
+        client.camera.SetFixedTarget(position + CVector{0, 1, 0}, 90.0f);
+        listen(CVector{0, 0, 5}, 0.35f, 0.8f);
+        listen(CVector{0, 0, -20}, -1.0f, 0.8f * std::exp(-2.5f));
+        listen(CVector{20, 0, 0}, 0.0f, 0.8f * std::exp(-2.5f));
+        client.camera.SetFixedTarget(position + CVector{0, 1, 0}, 180.0f);
+        listen(CVector{20, 0, 0}, -1.0f, 0.8f * std::exp(-2.5f));
+        client.camera.SetFixedTarget(position + CVector{0, 0, 1}, 0.0f);
+        listen(CVector{20, 0, 0}, 1.0f, 0.8f * std::exp(-2.5f));
+        listen(CVector{0, 0, 20}, 0.0f, 0.8f * std::exp(-2.5f));
+        client.camera.SetFixedTarget(position + CVector{0, 0, -1}, 0.0f);
+        listen(CVector{-20, 0, 0}, -1.0f, 0.8f * std::exp(-2.5f));
+        listen(CVector{}, 0.0f, 0.8f);
         audio.m_bPan = false;
         listen(CVector{20, 0, 0}, 0.0f, 0.8f * std::exp(-2.5f));
         listen(CVector{0, 0, 30}, 0.0f, 0.0f);
@@ -298,11 +373,14 @@ namespace
         manager.m_Sounds.clear();
         spatial.candidate = nullptr;
         manager.DoPulse();
-        Check(manager.volumeUpdates == activePulses + 3 && manager.stopUpdates == activePulses + 3 && spatial.queries == activePulses &&
-                  client.cameraRequests == activePulses,
+        Check(manager.volumeUpdates == activePulses + 4 && manager.stopUpdates == activePulses + 4 && spatial.queries == activePulses &&
+                  client.cameraRequests == activePulses + 1,
               "Last sound removal must stop listener queries");
         Check(BASS_StreamFree(secondChannel) && BASS_StreamFree(flatChannel) && BASS_StreamFree(channel) && BASS_Free(), "BASS no-sound cleanup failed");
-        std::printf("BASS device 0; %u mixed camera pulses, 1 playing 2D-only pulse, 2 empty pulses, all pan and volume reads passed\n", activePulses);
+        std::printf(
+            "BASS device 0; %u mixed camera pulses, 1 missing pose with a queued beat, 1 playing 2D-only pulse, 2 empty pulses, all pan and volume reads "
+            "passed\n",
+            activePulses);
     }
 }
 

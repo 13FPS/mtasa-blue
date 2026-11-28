@@ -18,9 +18,6 @@
 
 #define PI_2 6.283185307179586476925286766559f
 
-// Camera FOV constants
-constexpr const std::uintptr_t VAR_CurrentCameraFOV = 0x8D5038;  // CCamera::CurrentFOV
-
 namespace
 {
     constexpr float       kPi = 3.1415926535897932384626433832795f;
@@ -1089,5 +1086,11 @@ float CClientCamera::GetAccurateFOV() const
     if (IsInCameraTransition())
         return m_pCamera->GetTransitionFOV();
 
+#if defined(_WIN64)
+    const CCam* activeCam = m_pCamera->GetCam(m_pCamera->GetActiveCam());
+    return activeCam ? activeCam->GetFOV() : DEFAULT_FOV;
+#else
+    constexpr std::uintptr_t VAR_CurrentCameraFOV = 0x8D5038;  // Classic CCamera::CurrentFOV
     return *(float*)VAR_CurrentCameraFOV;
+#endif
 }

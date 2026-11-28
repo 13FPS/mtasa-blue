@@ -12,6 +12,29 @@ SDK reference establish the hash behavior; no game function or new library is
 needed for hashing. Missing game subsystems remain pure virtual methods, so
 the factory cannot return an incomplete `CGame` as a playable backend.
 
+`CGameCameraAudioDE` adds the camera, audio engine and sound manager getters to
+the DE game. The session owner supplies the camera and audio engine and keeps
+them alive through Deathmatch shutdown. Immediate world-sound cancellation
+uses the same sound manager returned by `GetAESoundManager()`.
+`CCameraTransitionDE` reads one `CameraTransitionSample` for each state,
+FOV or matrix query. A DE session camera must supply a `CameraTransitionSource`
+that captures state, FOV, world position, look-at target and up direction from
+the same camera update and reports unavailable samples explicitly. The enclosing
+session must keep this source alive as long as the camera. The retail camera
+source and world-sound playback source still need implementation.
+
+Run `pwsh -File Tests/definitive/test_camera_basics_sdk.ps1 -Architectures x64`
+for DE transition dispatch and pose tests. Run
+`python Tests/definitive/test_client_camera_fov.py --arch x86` and repeat with
+`--arch x64` for the Classic calculation and Deathmatch camera selection.
+
+To exercise the getters offline, build the Release x64 Game DE target and run
+`python Tests/definitive/test_game_camera_audio_de.py "<Game DE object directory>"`
+from the repository root. The host links the normal production objects and
+supplies test receivers for the remaining abstract methods. It checks service
+identity, callback delivery, isolation between games and rejection of expired
+bindings. The public adapter continues to return a null `CGame` pointer.
+
 `SetAsyncLoadingFromScript`, `SuspendASyncLoading` and `IsASyncLoadingEnabled`
 now use the same MTA-owned loading policy as the classic backend. DE uses a
 monotonic elapsed-time clock for temporary suspension, so pausing native game

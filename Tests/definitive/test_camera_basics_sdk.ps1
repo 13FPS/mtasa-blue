@@ -78,7 +78,7 @@ function RunOwned([string]$Executable,[string[]]$Arguments,[string]$Directory,[s
 }
 
 try {
-    $productionSources=@('Client/game_de/CCameraSphereVisibleDE.cpp','Client/game_de/CCameraCamsDE.cpp','Client/game_de/CCameraWidescreenDE.cpp','Client/game_de/CCameraTargetDE.cpp','Client/game_de/CCamFovDE.cpp','Client/game_de/CCamRowDE.cpp','Client/game_de/CCamTargetDE.cpp','Client/game_de/CCamTargetSetterDE.cpp','Client/game_de/CPedPooledDE.cpp','Client/game_de/CPoolsDE.cpp','Client/game_de/CPedVitalsDE.cpp')
+    $productionSources=@('Client/game_de/CCameraSphereVisibleDE.cpp','Client/game_de/CCameraCamsDE.cpp','Client/game_de/CCameraWidescreenDE.cpp','Client/game_de/CCameraTargetDE.cpp','Client/game_de/CCameraTransitionDE.cpp','Client/game_de/CCamFovDE.cpp','Client/game_de/CCamRowDE.cpp','Client/game_de/CCamTargetDE.cpp','Client/game_de/CCamTargetSetterDE.cpp','Client/game_de/CPedPooledDE.cpp','Client/game_de/CPoolsDE.cpp','Client/game_de/CPedVitalsDE.cpp')
     $sourceNames=$productionSources+@('Client/game_de/NativeCameraSphereVisibleAccess.h','Tests/definitive/CameraBasicsSdkTests.cpp','Tests/definitive/test_camera_basics_sdk.ps1','Tests/definitive/Write-CameraBasicsFixture.ps1','Tests/definitive/Write-PedPoolRegistryFixture.ps1')
     $pending=[Collections.Generic.Queue[string]]::new()
     $seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -107,6 +107,9 @@ try {
     $record['cameraWidescreenGeneratedFixture']=Write-CameraWidescreenFixture $taskRoot $widescreenGenerated
     $mainTargetGenerated=Join-Path $scratchRoot 'CameraTargetFixture.generated.h'
     $record['cameraMainTargetGeneratedFixture']=Write-CameraTargetFixture $taskRoot $mainTargetGenerated
+    $transitionGenerated=Join-Path $scratchRoot 'CameraTransitionFixture.generated.h'
+    $record['cameraTransitionGeneratedFixture']=Write-CameraTargetFixture $taskRoot $transitionGenerated -Transition
+    Copy-Item -LiteralPath $transitionGenerated -Destination (Join-Path $outputRoot 'CameraTransitionFixture.generated.h')
     if($record.cameraMainTargetGeneratedFixture.rejectingMethods -ne 25 -or @($record.cameraMainTargetGeneratedFixture.inheritedProductionMethods).Count -ne 10){throw 'Actual main-target camera SDK35-method partition changed'}
     Copy-Item -LiteralPath $mainTargetGenerated -Destination (Join-Path $outputRoot ([IO.Path]::GetFileName($mainTargetGenerated)))
     if($record.cameraWidescreenGeneratedFixture.rejectingMethods -ne 26 -or @($record.cameraWidescreenGeneratedFixture.inheritedProductionMethods).Count -ne 9){throw 'Actual widescreen camera SDK35-method partition changed'}
@@ -200,7 +203,7 @@ try {
         $result['cameraProviderRefusalTransportTested']=$text.Contains('Actual camera provider refusal transport fixture completed')
 
         $expectedBits = if ($architecture -eq 'x86') { 32 } else { 64 }
-        if ($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -ne 3922 -or $result.pointerBits -ne $expectedBits -or -not $result.actualCameraBasicsSdkTested -or -not $result.actualCameraJumpCutSdkTested -or -not $result.actualCameraFovWriteSdkTested -or -not $result.actualCameraDirectionSdkTested -or -not $result.actualCameraRowBorrowSdkTested -or -not $result.actualCameraHistorySdkTested -or -not $result.actualCameraTargetSdkTested -or -not $result.actualPedPooledInterfaceSdkTested -or -not $result.actualCameraTargetSetterSdkTested -or -not $result.actualCameraGetCamSdkTested -or -not $result.actualCameraWidescreenSdkTested -or -not $result.actualCameraMainTargetSdkTested -or -not $result.actualCamFovSdkTested -or -not $result.cameraProviderRefusalTransportTested) {
+        if ($result.test.exitCode -ne 0 -or $result.test.timedOut -or $result.checks -ne 3933 -or $result.pointerBits -ne $expectedBits -or -not $result.actualCameraBasicsSdkTested -or -not $result.actualCameraJumpCutSdkTested -or -not $result.actualCameraFovWriteSdkTested -or -not $result.actualCameraDirectionSdkTested -or -not $result.actualCameraRowBorrowSdkTested -or -not $result.actualCameraHistorySdkTested -or -not $result.actualCameraTargetSdkTested -or -not $result.actualPedPooledInterfaceSdkTested -or -not $result.actualCameraTargetSetterSdkTested -or -not $result.actualCameraGetCamSdkTested -or -not $result.actualCameraWidescreenSdkTested -or -not $result.actualCameraMainTargetSdkTested -or -not $result.actualCamFovSdkTested -or -not $result.cameraProviderRefusalTransportTested) {
             throw "$architecture actual camera basics SDK checks failed or summary/pointer-width evidence was missing."
         }
     }

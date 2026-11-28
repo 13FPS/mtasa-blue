@@ -10,7 +10,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
-constexpr float FLOAT_EPSILON = 0.0001f;
+#include <SharedUtil.Defines.h>
 enum eBone
 {
 };
@@ -18,6 +18,48 @@ enum eBone
 #include <game/CCam.h>
 #include <game/CCamera.h>
 #include <CLuaMultiReturn.h>
+#include "CameraTransitionPoseChecks.h"
+
+namespace classic_transition
+{
+    struct CCameraSAInterface
+    {
+        std::uint8_t m_uiTransitionState;
+        CVector      SourceDuringInter, TargetDuringInter, UpDuringInter;
+    };
+    struct CCameraSA
+    {
+        CCameraSAInterface* data = nullptr;
+        CCameraSAInterface* GetInterface() const { return data; }
+        bool                IsInTransition() const { return data && data->m_uiTransitionState != 0; }
+        bool                GetTransitionMatrix(CMatrix&) const;
+    };
+    // Historical source used this helper for its three finite-input checks.
+    [[maybe_unused]] static bool IsFiniteVector(const CVector& value)
+    {
+        return value.IsValid();
+    }
+#include "ClassicTransition.inl"
+    void Check()
+    {
+        CCameraSA  camera;
+        CMatrix    output(CVector(1, 2, 3));
+        const auto before = output.To4x4Array();
+        if (camera.GetTransitionMatrix(output) || output.To4x4Array() != before)
+            throw std::runtime_error("absent classic camera changed the output");
+        CCameraSAInterface sample{};
+        camera.data = &sample;
+        if (camera.GetTransitionMatrix(output) || output.To4x4Array() != before)
+            throw std::runtime_error("inactive classic transition changed the output");
+        CheckCameraTransitionPoses(
+            [&](CVector source, CVector target, CVector up, CMatrix& matrix)
+            {
+                sample = {1, source, target, up};
+                return camera.GetTransitionMatrix(matrix);
+            });
+        std::puts("Passed Classic transition roll, vertical, fallback and invalid input checks");
+    }
+}
 
 static constexpr float classicFov = 56.25f;
 // The trace distinguishes transition state (I), transition FOV (T), active row (A),
@@ -63,6 +105,7 @@ struct Row : CCam
 struct Camera : CCamera
 {
     bool     transition = false;
+    bool     transitionPoseAvailable = true;
     BYTE     selector = 0;
     BYTE     vehicle = 1;
     BYTE     ped = 1;
@@ -79,6 +122,8 @@ struct Camera : CCamera
     bool GetTransitionMatrix(CMatrix& output) const override
     {
         Call('B');
+        if (!transition || !transitionPoseAvailable)
+            return false;
         output = CMatrix(CVector(8, 4, 2));
         return true;
     }
@@ -213,21 +258,39 @@ static void CheckStartupAndPose()
     calls.clear();
     const CMatrix matrix = client.GetGtaMatrix();
 #if defined(_WIN64)
-    const std::string poseCalls = "IACDUS";
+    const std::string poseCalls = "BACDUS";
 #else
-    const std::string poseCalls = "IACMDUS";
+    const std::string poseCalls = "BACMDUS";
 #endif
     if (calls != poseCalls || matrix.vPos != CVector(17, -3, 5) || matrix.vFront != CVector(0, 0, 1) || matrix.vUp != CVector(0, 1, 0) ||
         matrix.vRight != CVector(-1, 0, 0))
         throw std::runtime_error("incorrect active camera pose: " + calls);
     camera.transition = true;
     calls.clear();
-    if (client.GetGtaMatrix().vPos != CVector(8, 4, 2) || calls != "IB")
+    if (client.GetGtaMatrix().vPos != CVector(8, 4, 2) || calls != "B")
         throw std::runtime_error("transition matrix dispatch changed");
+    camera.transitionPoseAvailable = false;
+    calls.clear();
+    if (client.GetGtaMatrix().vPos != matrix.vPos || calls != poseCalls)
+        throw std::runtime_error("missing transition pose lost the active row");
+    refuse = 'B';
+    calls.clear();
+    bool propagated = false;
+    try
+    {
+        client.GetGtaMatrix();
+    }
+    catch (const std::runtime_error& error)
+    {
+        propagated = error.what() == std::string("B");
+    }
+    refuse = 0;
+    if (!propagated || calls != "B")
+        throw std::runtime_error("transition source refusal was masked");
     camera.transition = false;
     camera.selector = 255;
     calls.clear();
-    if (client.GetGtaMatrix().vPos != CVector() || calls != "IAC")
+    if (client.GetGtaMatrix().vPos != CVector() || calls != "BAC")
         throw std::runtime_error("absent row produced a pose");
     g_pGame = nullptr;
     g_pCore = nullptr;
@@ -239,6 +302,7 @@ int main()
     try
     {
         CheckStartupAndPose();
+        classic_transition::Check();
         CClientCamera client;
         CStaticFunctionDefinitions::m_pCamera = &client;
         Check(DEFAULT_FOV, "");

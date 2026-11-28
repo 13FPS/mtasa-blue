@@ -158,16 +158,21 @@ function Write-CameraWidescreenFixture([string]$RepositoryRoot,[string]$OutputPa
         productionCameraConcrete=$false;nativeFactoryClaimed=$false;sharedSdkEdited=$false;polymorphicBaseDeletionExecuted=$false}
 }
 
-function Write-CameraTargetFixture([string]$RepositoryRoot,[string]$OutputPath) {
+function Write-CameraTargetFixture([string]$RepositoryRoot,[string]$OutputPath,[switch]$Transition) {
     $source='Client/sdk/game/CCamera.h'
     $all=@(Get-CameraBasicsSdkMethods $RepositoryRoot $source)
     $names=@('IsSphereVisible','GetActiveCam','Restore','RestoreWithJumpCut','IsInTransition','ResetCameraClip','GetCam','SetWidescreen','GetWidescreen','GetTargetEntity')
+    $receiver='class CameraTargetObserver final : public mta::game_de::CCameraTargetDE {public:'
+    $ctor='CameraTargetObserver(mta::game_de::CPoolsDE& pools,mta::game_de::NativeGameTimingAccess& owner) : CCameraTargetDE(pools,owner) {}'
+    if($Transition) {
+        $names+=@('GetTransitionState','GetTransitionFOV','GetTransitionMatrix')
+        $receiver='class CameraTransitionObserver final : public mta::game_de::CCameraTransitionDE {public:'
+        $ctor='CameraTransitionObserver(mta::game_de::CPoolsDE& pools,mta::game_de::NativeGameTimingAccess& owner,const mta::game_de::CameraTransitionSource& source) : CCameraTransitionDE(pools,owner,source) {}'
+    }
     $provided=@($all|Where-Object {$_.name -in $names})
     $rejected=@($all|Where-Object {$_.name -notin $names})
-    if($all.Count -ne 35 -or $provided.Count -ne 10 -or $rejected.Count -ne 25){throw 'Actual main-target camera35-method partition changed'}
-    $lines=@('#pragma once','#include <cstdlib>','#pragma warning(push)','#pragma warning(disable : 4100)',
-        'class CameraTargetObserver final : public mta::game_de::CCameraTargetDE {public:',
-        'CameraTargetObserver(mta::game_de::CPoolsDE& pools,mta::game_de::NativeGameTimingAccess& owner) : CCameraTargetDE(pools,owner) {}')
+    if($all.Count -ne 35 -or $provided.Count -ne $names.Count -or $rejected.Count -ne (35-$names.Count)){throw 'Actual camera35-method partition changed'}
+    $lines=@('#pragma once','#include <cstdlib>','#pragma warning(push)','#pragma warning(disable : 4100)',$receiver,$ctor)
     $lines+=@($rejected|ForEach-Object {$_.signature+' override {std::abort();}'})
     $lines+=@('};','#pragma warning(pop)')
     [IO.File]::WriteAllLines($OutputPath,$lines,[Text.UTF8Encoding]::new($false))

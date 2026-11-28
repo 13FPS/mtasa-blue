@@ -931,14 +931,16 @@ CMatrix CClientCamera::GetGtaMatrix() const
     if (!m_pCamera)
         return CMatrix();
 
-    if (IsInCameraTransition())
-        return GetInterpolatedCameraMatrix();
+    // The matrix query observes the transition and pose together. If there is
+    // no usable transition pose, use the current camera row for this frame.
+    CMatrix matResult;
+    if (m_pCamera->GetTransitionMatrix(matResult))
+        return matResult;
 
     CCam* pCam = m_pCamera->GetCam(m_pCamera->GetActiveCam());
     if (!pCam)
         return CMatrix();
 
-    CMatrix matResult;
 #if !defined(_WIN64)
     // Classic also repairs invalid camera state while reading its global matrix.
     m_pCamera->GetMatrix(&matResult);
@@ -1077,15 +1079,6 @@ void CClientCamera::ResetShakeCamera() noexcept
 bool CClientCamera::IsInCameraTransition() const
 {
     return m_pCamera ? m_pCamera->IsInTransition() : false;
-}
-
-CMatrix CClientCamera::GetInterpolatedCameraMatrix() const
-{
-    CMatrix matrix;
-    if (m_pCamera && m_pCamera->GetTransitionMatrix(matrix))
-        return matrix;
-
-    return CMatrix();
 }
 
 float CClientCamera::GetAccurateFOV() const

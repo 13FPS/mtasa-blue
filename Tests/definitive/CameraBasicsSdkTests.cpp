@@ -7,6 +7,8 @@
 #include "../../Client/game_de/CCameraCamsDE.h"
 #include "../../Client/game_de/CCameraWidescreenDE.h"
 #include "../../Client/game_de/CCameraTargetDE.h"
+#include "../../Client/game_de/CCameraTransitionDE.h"
+#include "CameraTransitionPoseChecks.h"
 #include "../../Client/game_de/CCamFovDE.h"
 #include "../../Client/game_de/CCamRowDE.h"
 #include "../../Client/game_de/CCamTargetDE.h"
@@ -34,6 +36,7 @@
 #include "CameraCamsFixture.generated.h"
 #include "CameraWidescreenFixture.generated.h"
 #include "CameraTargetFixture.generated.h"
+#include "CameraTransitionFixture.generated.h"
 #include "CamFovFixture.generated.h"
 #include "CamRowFixture.generated.h"
 #include "CamTargetFixture.generated.h"
@@ -1844,6 +1847,55 @@ namespace
         std::puts("Actual Cam target history SDK fixture completed");
     }
 
+    void CameraTransitions()
+    {
+        struct Source : CameraTransitionSource
+        {
+            CameraTransitionSample sample{};
+            ClockResult            status = ClockResult::Ok;
+            mutable unsigned       reads = 0;
+            ClockResult            ReadCameraTransition(CameraTransitionSample& output) const noexcept override
+            {
+                ++reads;
+                output = sample;
+                return status;
+            }
+        } source;
+        TargetAccess                 owner;
+        camera_target_fixture::Pools pools(owner);
+        CameraTransitionObserver     camera(pools, owner, source);
+        const CCamera&               sdk = camera;
+        CMatrix                      output(CVector(3, 5, 7));
+        const auto                   before = output.To4x4Array();
+        Check(!sdk.GetTransitionMatrix(output) && source.reads == 1 && output.To4x4Array() == before, "inactive transition preserves output");
+        Check(!sdk.IsInTransition() && source.reads == 2, "inactive state read once");
+        source.sample.state = 255;
+        source.sample.fov = 45.25f;
+        Check(sdk.GetTransitionState() == 255 && source.reads == 3, "raw state read once");
+        Check(sdk.IsInTransition() && source.reads == 4, "nonzero state read once");
+        Check(sdk.GetTransitionFOV() == 45.25f && source.reads == 5, "transition FOV read once");
+        source.sample.fov = 78.75f;
+        Check(sdk.GetTransitionFOV() == 78.75f && source.reads == 6, "later FOV comes from a fresh sample");
+        CheckCameraTransitionPoses(
+            [&](CVector from, CVector at, CVector up, CMatrix& matrix)
+            {
+                source.sample = {1, 37, from, at, up};
+                const auto previous = source.reads;
+                const bool observed = sdk.GetTransitionMatrix(matrix);
+                if (source.reads != previous + 1)
+                    throw std::runtime_error("matrix mixed multiple transition samples");
+                return observed;
+            });
+        source.status = ClockResult::Stopped;
+        const auto reads = source.reads;
+        Refuses([&] { sdk.GetTransitionState(); }, "ReadCameraTransition", source.status);
+        Refuses([&] { sdk.IsInTransition(); }, "ReadCameraTransition", source.status);
+        Refuses([&] { sdk.GetTransitionFOV(); }, "ReadCameraTransition", source.status);
+        Refuses([&] { sdk.GetTransitionMatrix(output); }, "ReadCameraTransition", source.status);
+        Check(source.reads == reads + 4 && output.To4x4Array() == before, "refused reads do not retry or publish partial output");
+        std::puts("Actual DE camera transition sampling and pose checks completed");
+    }
+
     void Cases()
     {
         struct PolicyCamera : CameraBasicsObserver
@@ -1985,6 +2037,7 @@ namespace
         CameraProducts();
         WidescreenPolicy();
         MainCameraTargets();
+        CameraTransitions();
         std::puts("Actual camera JumpCut SDK fixture completed");
         std::puts("Actual camera basics SDK fixture completed");
         std::puts("Actual Cam finite FOV SDK fixture completed");

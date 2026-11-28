@@ -12,6 +12,7 @@
 #include "StdInc.h"
 #include "CCameraSA.h"
 #include "CGameSA.h"
+#include <game/CCameraTransitionPose.h>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
@@ -30,11 +31,6 @@ namespace
         else if (angle > kPi)
             angle -= kTwoPi;
         return angle;
-    }
-
-    inline bool IsFiniteVector(const CVector& vec) noexcept
-    {
-        return std::isfinite(vec.fX) && std::isfinite(vec.fY) && std::isfinite(vec.fZ);
     }
 }
 
@@ -761,39 +757,8 @@ float CCameraSA::GetTransitionFOV() const
 bool CCameraSA::GetTransitionMatrix(CMatrix& matrix) const
 {
     CCameraSAInterface* cameraInterface = GetInterface();
-    if (!cameraInterface || !IsInTransition())
-        return false;
-
-    CVector source = cameraInterface->SourceDuringInter;
-    CVector target = cameraInterface->TargetDuringInter;
-    CVector up = cameraInterface->UpDuringInter;
-
-    if (!IsFiniteVector(source) || !IsFiniteVector(target) || !IsFiniteVector(up))
-        return false;
-
-    CVector forward = target - source;
-    if (forward.Length() < FLOAT_EPSILON)
-        forward = CVector(0.0f, 1.0f, 0.0f);
-    else
-        forward.Normalize();
-
-    CVector right = CVector(forward.fY, -forward.fX, 0.0f);
-    if (right.Length() < FLOAT_EPSILON)
-        right = CVector(1.0f, 0.0f, 0.0f);
-    else
-        right.Normalize();
-
-    CVector correctedUp = right;
-    correctedUp.CrossProduct(&forward);
-    correctedUp.Normalize();
-
-    matrix.vPos = source;
-    matrix.vFront = forward;
-    matrix.vRight = -right;
-    matrix.vUp = correctedUp;
-    matrix.OrthoNormalize(CMatrix::AXIS_FRONT, CMatrix::AXIS_UP);
-
-    return true;
+    return cameraInterface && cameraInterface->m_uiTransitionState != 0 &&
+           MtaGame::BuildCameraTransitionMatrix(cameraInterface->SourceDuringInter, cameraInterface->TargetDuringInter, cameraInterface->UpDuringInter, matrix);
 }
 
 bool CCameraSA::IsSphereVisible(CVector* center, float radius) const

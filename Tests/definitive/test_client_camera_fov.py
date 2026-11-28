@@ -45,6 +45,8 @@ def main():
             env.pop("CL", None)
             env.pop("_CL_", None)
             camera = source(LOGIC + "CClientCamera.cpp")
+            classic = source("Client/game_sa/CCameraSA.cpp")
+            (work / "ClassicTransition.inl").write_text(method(classic, "bool CCameraSA::GetTransitionMatrix("), encoding="utf-8")
             fov = method(camera, "float CClientCamera::GetAccurateFOV() const")
             # Never compile the prior process read. A sentinel distinguishes
             # selection of the Classic field from any SDK receiver.
@@ -60,9 +62,11 @@ def main():
                 raise ValueError("Lua no longer registers the selected function")
             functions = source(LOGIC + "CStaticFunctionDefinitions.cpp")
             methods = ("bool CClientCamera::IsInCameraTransition() const", "CMatrix CClientCamera::GetGtaMatrix() const",
-                       "CMatrix CClientCamera::GetInterpolatedCameraMatrix() const", "void CClientCamera::PersistViewModes()",
+                       "void CClientCamera::PersistViewModes()",
                        "void CClientCamera::SetCameraVehicleViewMode(", "void CClientCamera::SetCameraPedViewMode(",
                        "eVehicleCamMode CClientCamera::GetCameraVehicleViewMode()", "ePedCamMode CClientCamera::GetCameraPedViewMode()")
+            if args.source_commit and "CMatrix CClientCamera::GetInterpolatedCameraMatrix() const" in camera:
+                methods += ("CMatrix CClientCamera::GetInterpolatedCameraMatrix() const",)
             code = [*(method(camera, signature) for signature in methods), fov,
                     method(functions, "bool CStaticFunctionDefinitions::GetCameraMatrix("),
                     method(lua, "CLuaMultiReturn<float, float, float, float, float, float, float, float> CLuaCameraDefs::GetCameraMatrix()")]
@@ -74,7 +78,7 @@ def main():
                 signatures = re.findall(r"^\s*virtual\s+([^;]+?)\s*= 0;", sdk, re.M)
                 bodies = [sig.strip() + " override { std::abort(); }" for sig in signatures if re.search(r"(\w+)\(", sig)[1] not in exercised]
                 (work / f"Unused{cls}.inl").write_text("\n".join(bodies), encoding="utf-8")
-            for path in (TEST, Path(__file__)):
+            for path in (TEST, Path(__file__), TEST.with_name("CameraTransitionPoseChecks.h"), ROOT / "Client/sdk/game/CCameraTransitionPose.h"):
                 record["sourceHashes"][path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
             dirs = [work, ROOT / "Client/sdk", ROOT / "Shared/sdk", ROOT / "Shared/mods/deathmatch/logic/lua"]
             if os.name == "nt":

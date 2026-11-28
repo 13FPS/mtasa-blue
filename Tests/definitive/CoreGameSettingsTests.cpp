@@ -154,6 +154,9 @@ struct CCore
 #include "ApplyConsoleSettings.generated.inl"
 #undef CGameSettings
 #include "MouseControlsDialogTests.inl"
+#if __has_include("GameSettingsProfileTests.inl")
+    #include "GameSettingsProfileTests.inl"
+#endif
 
 int main(int argc, char** argv)
 {
@@ -188,7 +191,8 @@ int main(int argc, char** argv)
         xml =
             "<c><invert_mouse>1bad</invert_mouse><grass>0bad</grass><aspect_ratio>3bad</aspect_ratio>"
             "<fast_clothes_loading>broken</fast_clothes_loading><steer_with_mouse> 1 </steer_with_mouse></c>";
-    else if (name == "controls-numbers" || name == "profile-floats" || name == "profile-integers" || name == "console-layout" || name == "profile-vector2d")
+    else if (name == "controls-numbers" || name == "profile-floats" || name == "profile-integers" || name == "console-layout" || name == "profile-vector2d" ||
+             name == "de-video-profile" || name == "classic-video-profile")
         xml = "<c/>";
     else if (name == "controls-volumes")
         xml = "<c><mastervolume>0</mastervolume><mtavolume>0.6</mtavolume><voicevolume>broken</voicevolume></c>";
@@ -205,6 +209,12 @@ int main(int argc, char** argv)
     root.m_pNode = document.RootElement();
     auto& variables = CClientVariables::GetSingleton();
     variables.Load();
+#if __has_include("GameSettingsProfileTests.inl")
+    if (name == "de-video-profile")
+        return VideoProfileTests::CheckDE(variables);
+    if (name == "classic-video-profile")
+        return VideoProfileTests::CheckClassic(variables);
+#endif
     if (name == "profile-vector2d")
     {
         const CVector2D original(50, 40);

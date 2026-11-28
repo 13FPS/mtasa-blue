@@ -13,7 +13,7 @@
 
 // R* have this info inside CMenuManager but I can't believe that makes much sense
 
-#include <game/CSettings.h>
+#include <game/CGameSettingsProfile.h>
 #include <cstddef>
 
 #define CLASS_CMenuManager 0xBA6748
@@ -89,11 +89,12 @@ static_assert(offsetof(CSettingsSAInterface, bUseWideScreen) == 0x4B);
 static_assert(offsetof(CSettingsSAInterface, dwPrevVideoMode) == 0xD8);
 static_assert(sizeof(CSettingsSAInterface) == 0xDC);
 
-class CSettingsSA : public CGameSettings
+class CSettingsSA : public MtaGame::CGameSettingsProfile
 {
     friend class COffsets;
 
 private:
+    CCVarsInterface&      Profile() const noexcept override;
     CSettingsSAInterface* m_pInterface;
     bool                  m_bVolumetricShadowsEnabled;
     bool                  m_bVolumetricShadowsSuspended;
@@ -150,16 +151,12 @@ public:
     void SetMipMappingEnabled(bool bEnable);
 
     bool IsVolumetricShadowsEnabled() const noexcept;
-    bool GetVolumetricShadowsEnabledByVideoSetting() const noexcept;
-    bool ResetVolumetricShadows() noexcept;
 
     void SetVolumetricShadowsEnabled(bool bEnable);
     void SetVolumetricShadowsSuspended(bool bSuspended);
 
     bool IsDynamicPedShadowsEnabled();
     void SetDynamicPedShadowsEnabled(bool bEnable);
-    bool IsDynamicPedShadowsEnabledByVideoSetting() const noexcept;
-    bool ResetDynamicPedShadows() noexcept;
 
     float        GetAspectRatioValue();
     eAspectRatio GetAspectRatio();
@@ -171,7 +168,6 @@ public:
     eRadarMode GetRadarMode();
     void       SetRadarMode(eRadarMode hudMode);
 
-    void  UpdateFieldOfViewFromSettings();
     void  ResetFieldOfViewFromScript();
     void  SetFieldOfViewPlayer(float fAngle, bool bFromScript, bool instant = false);
     void  SetFieldOfViewVehicle(float fAngle, bool bFromScript, bool instant = false);

@@ -85,6 +85,28 @@ def main():
             (work / relative).write_text(source(path), encoding="utf-8")
         (work / "game/CControllerConfigManager.h").write_text(source("Client/sdk/game/CControllerConfigManager.h"))
         (work / "CControllerActions.h").write_text(source("Shared/sdk/CControllerActions.h"))
+        video_cases = ()
+        classic_header = source("Client/game_sa/CSettingsSA.h")
+        if "MtaGame::CGameSettingsProfile" in classic_header:
+            for path in ("Client/sdk/game/CGameSettingsProfile.h", "Client/game_de/CGameSettingsDE.h"):
+                (work / ("game/" + Path(path).name)).write_text(source(path))
+            video_fixture = fixture.with_name("GameSettingsProfileTests.inl")
+            shutil.copyfile(video_fixture, work / video_fixture.name)
+            record["inputs"][video_fixture.relative_to(ROOT).as_posix()] = hashlib.sha256(video_fixture.read_bytes()).hexdigest()
+            sdk = (work / "game/CSettings.h").read_text()
+            covered = {"GetVolumetricShadowsEnabledByVideoSetting", "IsDynamicPedShadowsEnabledByVideoSetting", "ResetVolumetricShadows",
+                       "ResetDynamicPedShadows", "UpdateFieldOfViewFromSettings", "SetVolumetricShadowsEnabled", "SetDynamicPedShadowsEnabled",
+                       "SetFieldOfViewPlayer", "SetFieldOfViewVehicle", "SetFieldOfViewVehicleMax", "ResetVehiclesLODDistance",
+                       "ResetPedsLODDistance", "ResetBlurEnabled", "ResetCoronaReflectionsEnabled"}
+            stubs = [signature + " override { std::abort(); }" for signature, name in re.findall(
+                r"virtual\s+([^;{}\n]+?\b(\w+)\([^;{}\n]*?\)(?:\s+const)?(?:\s+noexcept)?)\s*=\s*0;", sdk) if name not in covered]
+            (work / "OtherProfileMethods.generated.inl").write_text("\n".join(stubs))
+            classic = source("Client/game_sa/CSettingsSA.cpp")
+            resets = [method(classic, "void CSettingsSA::" + signature) for signature in (
+                "ResetVehiclesLODDistance(bool bForceDefault)", "ResetPedsLODDistance(bool bForceDefault)", "ResetBlurEnabled()", "ResetCoronaReflectionsEnabled()")]
+            constants = [line for line in classic_header.splitlines() if re.match(r"#define\s+(?:\w+_LOD_DISTANCE\b|TRAIN_LOD_DISTANCE_MULTIPLIER\b|DEFAULT_BLUR_LEVEL\b)", line)]
+            (work / "ClassicVideoResets.generated.inl").write_text("\n".join(constants + resets))
+            video_cases = ("de-video-profile", "classic-video-profile")
         env = dict(os.environ, TMP=temp, TEMP=temp, TMPDIR=temp)
         env.pop("CL", None)
         env.pop("_CL_", None)
@@ -104,7 +126,7 @@ def main():
         if not record["compile"]:
             record["cases"] = {case: run(case, [test, case]) for case in (
                 "saved", "unreadable", "ranges", "migration", "profile-floats", "profile-integers", "integer-startup", "controls-load", "controls-numbers",
-                "controls-defaults", "controls-invalid-nick", "controls-volumes", "console-layout", "profile-vector2d")}
+                "controls-defaults", "controls-invalid-nick", "controls-volumes", "console-layout", "profile-vector2d", *video_cases)}
             record["success"] = not any(record["cases"].values())
     receipt = output / "result.json"
     receipt.write_text(json.dumps(record, indent=2) + "\n")

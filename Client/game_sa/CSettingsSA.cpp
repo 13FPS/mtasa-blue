@@ -358,17 +358,9 @@ void CSettingsSA::SetVolumetricShadowsEnabled(bool bEnable)
     MemPut<BYTE>(0x5E682A + 1, bEnable);
 }
 
-bool CSettingsSA::GetVolumetricShadowsEnabledByVideoSetting() const noexcept
+CCVarsInterface& CSettingsSA::Profile() const noexcept
 {
-    bool volumetricShadow;
-    g_pCore->GetCVars()->Get("volumetric_shadows", volumetricShadow);
-    return volumetricShadow;
-}
-
-bool CSettingsSA::ResetVolumetricShadows() noexcept
-{
-    pGame->GetSettings()->SetVolumetricShadowsEnabled(pGame->GetSettings()->GetVolumetricShadowsEnabledByVideoSetting());
-    return true;
+    return *g_pCore->GetCVars();
 }
 
 void CSettingsSA::SetVolumetricShadowsSuspended(bool bSuspended)
@@ -384,19 +376,6 @@ bool CSettingsSA::IsDynamicPedShadowsEnabled()
 void CSettingsSA::SetDynamicPedShadowsEnabled(bool bEnable)
 {
     m_bDynamicPedShadowsEnabled = bEnable;
-}
-
-bool CSettingsSA::IsDynamicPedShadowsEnabledByVideoSetting() const noexcept
-{
-    bool pedDynamicShadows;
-    g_pCore->GetCVars()->Get("dynamic_ped_shadows", pedDynamicShadows);
-    return pedDynamicShadows;
-}
-
-bool CSettingsSA::ResetDynamicPedShadows() noexcept
-{
-    pGame->GetSettings()->SetDynamicPedShadowsEnabled(pGame->GetSettings()->IsDynamicPedShadowsEnabledByVideoSetting());
-    return true;
 }
 
 //
@@ -595,16 +574,6 @@ float CSettingsSA::GetFieldOfViewVehicleMax()
     return ms_fFOVCarMax;
 }
 
-void CSettingsSA::UpdateFieldOfViewFromSettings()
-{
-    float fFieldOfView;
-    g_pCore->GetCVars()->Get("fov", fFieldOfView);
-    fFieldOfView = Clamp(70.f, fFieldOfView, 100.f);
-    SetFieldOfViewPlayer(fFieldOfView, false);
-    SetFieldOfViewVehicle(fFieldOfView, false);
-    SetFieldOfViewVehicleMax(100, false);
-}
-
 void CSettingsSA::ResetFieldOfViewFromScript()
 {
     ms_bFOVPlayerFromScript = false;
@@ -702,10 +671,7 @@ void CSettingsSA::ResetVehiclesLODDistance(bool bForceDefault)
     if (ms_bMaxVehicleLODDistanceFromScript && !bForceDefault)
         return;
 
-    bool bHighDetailVehicles;
-    g_pCore->GetCVars()->Get("high_detail_vehicles", bHighDetailVehicles);
-
-    if (bHighDetailVehicles)
+    if (ProfileValue("high_detail_vehicles", false))
     {
         ms_fVehicleLODDistance = MAX_VEHICLE_LOD_DISTANCE;
         ms_fTrainPlaneLODDistance = MAX_VEHICLE_LOD_DISTANCE;
@@ -743,10 +709,7 @@ void CSettingsSA::ResetPedsLODDistance(bool bForceDefault)
     if (ms_bMaxPedsLODDistanceFromScript && !bForceDefault)
         return;
 
-    bool bHighDetailPeds;
-    g_pCore->GetCVars()->Get("high_detail_peds", bHighDetailPeds);
-
-    if (bHighDetailPeds)
+    if (ProfileValue("high_detail_peds", false))
         ms_fPedsLODDistance = MAX_PEDS_LOD_DISTANCE;
     else
         ms_fPedsLODDistance = DEFAULT_PEDS_LOD_DISTANCE;
@@ -772,9 +735,7 @@ void CSettingsSA::ResetBlurEnabled()
     if (m_bBlurViaScript)
         return;
 
-    bool bEnabled;
-    g_pCore->GetCVars()->Get("blur", bEnabled);
-    pGame->SetBlurLevel(bEnabled ? DEFAULT_BLUR_LEVEL : 0);
+    pGame->SetBlurLevel(ProfileValue("blur", true) ? DEFAULT_BLUR_LEVEL : 0);
 }
 
 void CSettingsSA::SetBlurControlledByScript(bool bByScript)
@@ -793,9 +754,7 @@ void CSettingsSA::ResetCoronaReflectionsEnabled()
     if (m_bCoronaReflectionsViaScript)
         return;
 
-    bool bEnabled;
-    g_pCore->GetCVars()->Get("corona_reflections", bEnabled);
-    g_pCore->GetGame()->GetCoronas()->SetCoronaReflectionsEnabled(bEnabled ? 1 : 0);
+    g_pCore->GetGame()->GetCoronas()->SetCoronaReflectionsEnabled(ProfileValue("corona_reflections", false));
 }
 
 void CSettingsSA::SetCoronaReflectionsControlledByScript(bool bViaScript)

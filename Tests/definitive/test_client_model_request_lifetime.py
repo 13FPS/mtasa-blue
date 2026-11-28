@@ -17,7 +17,8 @@ LOGIC = Path("Client/mods/deathmatch/logic")
 SCENARIOS = ("cancel", "replace", "replace-loaded", "complete", "destroy", "replace-after-cancel",
              "callback-failure", "apply-failure", "completion-release-failure", "poll-failure",
              "replace-query-failure", "replace-acquire-failure", "replace-release-failure",
-             "cancel-release-failure", "teardown-failure")
+             "cancel-release-failure", "teardown-failure", "mixed-queue", "append-during-last-callback",
+             "earlier-model-loads-in-callback")
 
 
 def main():

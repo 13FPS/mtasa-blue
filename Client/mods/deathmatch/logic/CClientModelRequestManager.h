@@ -57,5 +57,6 @@ private:
     SClientModelRequest Detach(Requests::iterator iter);
 
     bool     m_bDoingPulse = false;
+    bool     m_restartPulse = false;
     Requests m_Requests;
 };

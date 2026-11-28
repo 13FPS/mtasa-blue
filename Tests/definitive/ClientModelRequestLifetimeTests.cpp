@@ -49,8 +49,10 @@ struct CModelInfo
     int                         references = 0, removals = 0, applied = 0;
     bool                        loaded = false, releasedWithRegistration = true;
     bool                        failLoadCheck = false, failAcquire = false, failApply = false, failRelease = false;
+    mutable unsigned            loadChecks = 0;
     bool                        IsLoaded() const
     {
+        ++loadChecks;
         if (failLoadCheck)
             throw Failure::LoadCheck;
         return loaded;
@@ -149,6 +151,43 @@ void ExpectFailure(Failure expected, Operation operation)
     Check(false, "operation must propagate its failure");
 }
 
+static void MixedQueue(Game& game, CClientManager& manager)
+{
+    std::array<CClientEntity, 64> waiting, ready;
+    CClientModelRequestManager    requests;
+    auto& [waitingModel, readyModel] = game.models;
+    unsigned delivered = 0;
+    for (auto& entity : waiting)
+        requests.Request(0, &entity);
+    for (auto& entity : ready)
+    {
+        requests.Request(1, &entity);
+        entity.callback = [&](CModelInfo* model)
+        {
+            Check(model == &readyModel, "delivered the requested model");
+            ++delivered;
+        };
+    }
+    readyModel.loaded = true;
+    waitingModel.loadChecks = readyModel.loadChecks = 0;
+    manager.Pulse(requests);
+    std::printf("Mixed queue: %u waiting polls, %u ready polls, %u deliveries\n", waitingModel.loadChecks, readyModel.loadChecks, delivered);
+    Check(delivered == ready.size() && readyModel.references == 0 && waitingModel.references == static_cast<int>(waiting.size()),
+          "ready requests completed once and pending requests kept their references");
+    Check(waitingModel.loadChecks <= 2 * waiting.size() && readyModel.loadChecks == ready.size(), "a mixed queue needs at most two passes");
+    for (auto& entity : waiting)
+    {
+        entity.callback = [&](CModelInfo* model)
+        {
+            Check(model == &waitingModel, "received waiting model on its next pulse");
+            ++delivered;
+        };
+    }
+    waitingModel.loaded = true;
+    manager.Pulse(requests);
+    Check(delivered == waiting.size() + ready.size() && !waitingModel.references, "remaining requests complete after loading");
+}
+
 int main(int argc, char** argv)
 {
     // A historical destructor throwing from noexcept should fail this subprocess promptly.
@@ -165,7 +204,12 @@ int main(int argc, char** argv)
         game.models[i].registration = registrations[i];
     }
     const std::string_view scenario = argc == 2 ? argv[1] : "";
-    CClientEntity          entity, other;
+    if (scenario == "mixed-queue")
+    {
+        MixedQueue(game, client.manager);
+        return 0;
+    }
+    CClientEntity entity, other;
     {
         CClientModelRequestManager requests;
         Check(!requests.Request(0, &entity) && oldModel.references == 1, "unloaded model is queued and referenced");
@@ -227,6 +271,31 @@ int main(int argc, char** argv)
             client.manager.Pulse(requests);
             Check(received && newModel.references == 0 && newModel.removals == 1 && !requests.HasRequested(&other),
                   "only the new model is delivered on a later pulse and its reference is released exactly once");
+            registrations[0].reset();
+        }
+        else if (scenario == "earlier-model-loads-in-callback")
+        {
+            Check(!requests.Request(1, &other), "queue an entity after the waiting model");
+            newModel.loaded = true;
+            bool delivered = false;
+            entity.callback = [&](CModelInfo* model) { delivered = model == &oldModel; };
+            other.callback = [&](CModelInfo*) { oldModel.loaded = true; };
+            client.manager.Pulse(requests);
+            Check(delivered && !oldModel.references && !newModel.references, "an earlier model made ready by a callback is delivered in the same pulse");
+            registrations[0].reset();
+        }
+        else if (scenario == "append-during-last-callback")
+        {
+            oldModel.loaded = true;
+            bool delivered = false;
+            entity.callback = [&](CModelInfo*)
+            {
+                Check(!requests.Request(1, &other), "callback queues an unloaded model");
+                newModel.loaded = true;
+            };
+            other.callback = [&](CModelInfo* model) { delivered = model == &newModel; };
+            client.manager.Pulse(requests);
+            Check(delivered && !requests.HasRequested(&other) && !newModel.references, "newly ready request is delivered in the same pulse");
             registrations[0].reset();
         }
         else if (scenario == "callback-failure" || scenario == "apply-failure" || scenario == "completion-release-failure")

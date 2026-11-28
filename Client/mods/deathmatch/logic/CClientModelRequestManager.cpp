@@ -81,6 +81,8 @@ CModelInfo* CClientModelRequestManager::GetRequestedModelInfo(CClientEntity* pRe
 
 bool CClientModelRequestManager::RequestBlocking(unsigned short usModelID, const char* szTag)
 {
+    if (m_bDoingPulse)
+        m_restartPulse = true;
     // Grab the model info
     CModelInfo* pInfo = g_pGame->GetModelInfo(usModelID);
     if (pInfo)
@@ -112,6 +114,9 @@ bool CClientModelRequestManager::RequestForStreamIn(unsigned short usModelID, CC
 bool CClientModelRequestManager::Request(unsigned short usModelID, CClientEntity* pRequester, CClientStreamElement* rangeOwner)
 {
     assert(pRequester);
+    // A callback can replace the very next request or append after the last one.
+    if (m_bDoingPulse)
+        m_restartPulse = true;
     CModelInfo* info = g_pGame->GetModelInfo(usModelID);
     if (!info)
         return false;
@@ -181,47 +186,57 @@ void CClientModelRequestManager::DoPulse()
     std::exception_ptr failure;
     try
     {
-        for (auto iter = m_Requests.begin(); iter != m_Requests.end();)
+        bool delivered;
+        do
         {
-            if (!iter->canceled && iter->rangeOwner && !iter->rangeOwner->IsModelStreamInWanted())
-                iter->canceled = true;
-            if (iter->canceled)
+            delivered = false;
+            for (auto iter = m_Requests.begin(); iter != m_Requests.end();)
             {
-                ++iter;
-                continue;
-            }
-            if (iter->pModel->IsLoaded())
-            {
-                // Entity callbacks can cancel, replace or create other requests.
-                // Detach this request before calling them, keeping its registration.
-                auto entry = Detach(iter);
-                try
+                if (!iter->canceled && iter->rangeOwner && !iter->rangeOwner->IsModelStreamInWanted())
+                    iter->canceled = true;
+                if (iter->canceled)
                 {
-                    entry.pModel->MakeCustomModel();
-                    entry.pEntity->ModelRequestCallback(entry.pModel);
+                    ++iter;
+                    continue;
                 }
-                catch (...)
+                if (iter->pModel->IsLoaded())
                 {
-                    failure = std::current_exception();
+                    // Entity callbacks can cancel, replace or create other requests.
+                    // Detach this request before calling them, keeping its registration.
+                    auto entry = Detach(iter++);
+                    m_restartPulse = false;
+                    try
+                    {
+                        entry.pModel->MakeCustomModel();
+                        entry.pEntity->ModelRequestCallback(entry.pModel);
+                    }
+                    catch (...)
+                    {
+                        failure = std::current_exception();
+                    }
+                    ReleaseModel(entry.pModel, failure);
+                    delivered = true;
+                    // A reentrant Request can erase the next iterator. Cancel only marks
+                    // its entry and is safe to handle during the remainder of this pass.
+                    if (failure || m_restartPulse)
+                        break;
                 }
-                ReleaseModel(entry.pModel, failure);
-                if (failure)
-                    break;
-                iter = m_Requests.begin();
-            }
-            else
-            {
-                if (iter->requestTimer.Get() > 2000)
+                else
                 {
-                    if (g_pGame->IsASyncLoadingEnabled())
-                        iter->pModel->Request(NON_BLOCKING, "CClientModelRequestManager::DoPulse #1");
-                    else
-                        iter->pModel->Request(BLOCKING, "CClientModelRequestManager::DoPulse #2");
-                    iter->requestTimer.Reset();
+                    if (iter->requestTimer.Get() > 2000)
+                    {
+                        if (g_pGame->IsASyncLoadingEnabled())
+                            iter->pModel->Request(NON_BLOCKING, "CClientModelRequestManager::DoPulse #1");
+                        else
+                            iter->pModel->Request(BLOCKING, "CClientModelRequestManager::DoPulse #2");
+                        iter->requestTimer.Reset();
+                    }
+                    ++iter;
                 }
-                ++iter;
             }
-        }
+            // The callback for a later entry can load a previously waiting model.
+            // Deliver it in this pulse without rescanning after each individual callback.
+        } while (delivered && !failure && !m_Requests.empty());
     }
     catch (...)
     {

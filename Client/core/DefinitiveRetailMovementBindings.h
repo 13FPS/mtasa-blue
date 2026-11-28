@@ -142,7 +142,7 @@ namespace DefinitiveRetailMovementBindings
         std::array<Slot, Detail::Actions.size()> slots{};
         while (!contents.empty())
         {
-            const auto end = contents.find('\n');
+            const auto end = contents.find_first_of("\r\n");
             auto       line = contents.substr(0, end);
             contents = end == std::string_view::npos ? std::string_view{} : contents.substr(end + 1);
 

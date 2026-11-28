@@ -33,6 +33,10 @@ int main(int argc, char** argv)
     for (const auto* invalid : {"short-unit", "embedded-nul", "unpaired-high", "unpaired-low", "missing-low", "invalid-scalar", "surrogate-scalar"})
         ok &= Check(invalid, Retail::Read(file.parent_path() / (std::string(invalid) + ".cfg")), {});
     ok &= Check("empty", Retail::Parse(" \r\n\t"), {});
+    ok &= Check("exported mixed line endings",
+                Retail::Parse("29 HID_MAPPING_ACCELERATE 0 -1\r\n49 HID_MAPPING_RHYTHM_UP 0 -1\n49 HID_MAPPING_PED_MOVE_Y 1 -1\r"
+                              "43 HID_MAPPING_PED_MOVE_Y 0 -1\n127 HID_MAPPING_ATTACK 0 0"),
+                {{"forwards", "k"}, {"backwards", "s"}});
     ok &= Check("default rows",
                 Retail::Parse("44 HID_MAPPING_PED_MOVE_X 0 -1\n29 HID_MAPPING_PED_MOVE_Y 1 -1\n54 HID_MAPPING_SPRINT 0 -1\n"
                               "43 HID_MAPPING_PED_MOVE_Y 0 -1\n42 HID_MAPPING_PED_MOVE_X 1 -1\n"),

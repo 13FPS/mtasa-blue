@@ -1,15 +1,20 @@
 #requires -Version 7.0
 <#
 .SYNOPSIS
-Copies one primary MTA movement key to GTA Definitive Edition's saved keyboard layout before launch.
+Copies saved MTA movement keys to GTA Definitive Edition's keyboard layout before launch.
 .EXAMPLE
 ./sync-movement-binding.ps1 -MtaKeybinds 'C:\path\to\definitive\keybinds.xml' -Control forwards -WhatIf
+.EXAMPLE
+./sync-movement-binding.ps1 -MtaKeybinds 'C:\path\to\definitive\keybinds.xml' -WholeProfile -WhatIf
+.DESCRIPTION
+WholeProfile applies forwards, backwards, left, right and sprint together. Each needs a distinct supported primary key.
 #>
-[CmdletBinding(SupportsShouldProcess)]
+[CmdletBinding(SupportsShouldProcess, DefaultParameterSetName='Single')]
 param(
-    [Parameter(Mandatory)][string]$MtaKeybinds,
-    [Parameter(Mandatory)][ValidateSet('forwards', 'backwards', 'left', 'right', 'sprint')][string]$Control,
-    [string]$KeyboardMappings = (Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'Rockstar Games/GTA San Andreas Definitive Edition/KeyboardMappings.cfg')
+    [Parameter(Mandatory, Position=0)][string]$MtaKeybinds,
+    [Parameter(Mandatory, Position=1, ParameterSetName='Single')][ValidateSet('forwards', 'backwards', 'left', 'right', 'sprint')][string]$Control,
+    [Parameter(Mandatory, ParameterSetName='Profile')][switch]$WholeProfile,
+    [Parameter(Position=2)][string]$KeyboardMappings = (Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'Rockstar Games/GTA San Andreas Definitive Edition/KeyboardMappings.cfg')
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -50,7 +55,7 @@ if ($root.Name -cne 'definitive_keybinds' -or $root.GetAttribute('version') -cne
 $records = $binds.SelectNodes('*')
 if ($records.Count -gt 1024) { throw 'Too many records in MTA movement profile.' }
 $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-$primary = $null
+$primaries = @{}
 foreach ($record in $records) {
     $name = $record.GetAttribute('control')
     $key = $record.GetAttribute('key')
@@ -60,11 +65,24 @@ foreach ($record in $records) {
     }
     # Settings stores the primary before its alternates, even when the primary
     # is a key the retail importer cannot translate.
-    if ($name -ieq $Control -and $null -eq $primary) { $primary = $key }
+    if (!$primaries.ContainsKey($name)) { $primaries[$name] = $key }
 }
-if (!$primary) { throw "MTA has no saved primary key for $Control." }
-$desired = $keyIds[$primary]
-if (!$desired) { throw "Unsupported MTA primary key '$primary' for $Control." }
+if ($PSCmdlet.ParameterSetName -eq 'Profile' -and !$WholeProfile) { throw 'Specify -WholeProfile to apply the five saved keys.' }
+$controls = if ($WholeProfile) { 'forwards','backwards','left','right','sprint' } else { $Control }
+$controlForKey = @{}
+$controlForSlot = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::Ordinal)
+$mappings = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+foreach ($name in $controls) {
+    $primary = $primaries[$name]
+    if (!$primary) { throw "MTA has no saved primary key for $name." }
+    $desired = $keyIds[$primary]
+    if (!$desired) { throw "Unsupported MTA primary key '$primary' for $name." }
+    if ($controlForKey.ContainsKey($desired)) { throw "MTA controls $name and $($controlForKey[$desired]) both use '$primary'." }
+    $controlForKey[$desired] = $name
+    $mapping, $direction = $actions[$name]
+    $controlForSlot.Add("$mapping/$direction", $name)
+    [void]$mappings.Add($mapping)
+}
 
 $target = Get-Item -LiteralPath $KeyboardMappings
 if ($target.Length -gt 64KB) { throw 'GTA keyboard mapping file exceeds 64 KiB.' }
@@ -86,8 +104,7 @@ if ($prefix -lt 0 -or [Convert]::ToBase64String($bytes, $prefix, $encoded.Length
     throw 'Invalid keyboard mapping file encoding.'
 }
 
-$mapping, $direction = $actions[$Control]
-$selected = $null
+$selected = @{}
 $conflicts = @()
 # The retail game reuses movement keys for vehicles, menus and distinct
 # minigames. Keep those records intact. Unknown contexts cannot establish
@@ -98,31 +115,53 @@ foreach ($line in [regex]::Matches($text, '[^\r\n]+')) {
     if ($words.Count -lt 2 -or $words[0].Value -match '^[;#]') { continue }
     $id = $words[0].Value
     $action = $words[1].Value
-    if ($action -ceq $mapping) {
-        if ($words.Count -lt 3 -or $words[2].Value -cnotin @('0','1')) { throw "Malformed GTA mapping for $Control." }
-        if ($words[2].Value -ceq $direction) {
-            if ($null -ne $selected -or $words.Count -ne 4 -or $words[3].Value -cne '-1' -or !$keyIds.ContainsValue($id)) {
-                throw "GTA has an ambiguous or unsupported mapping for $Control."
+    if ($mappings.Contains($action)) {
+        if ($words.Count -lt 3 -or $words[2].Value -cnotin @('0','1')) { throw "Malformed GTA mapping for $action." }
+        $slot = "$action/$($words[2].Value)"
+        if ($controlForSlot.ContainsKey($slot)) {
+            $name = $controlForSlot[$slot]
+            if ($selected.ContainsKey($name) -or $words.Count -ne 4 -or $words[3].Value -cne '-1' -or !$keyIds.ContainsValue($id)) {
+                throw "GTA has an ambiguous or unsupported mapping for $name."
             }
-            $selected = $words[0]
-            $index = $line.Index + $selected.Index
+            $selected[$name] = [pscustomobject]@{ Index = $line.Index + $words[0].Index; Old = $id; New = $keyIds[$primaries[$name]] }
+            # Each selected action is assigned its final, already distinct key.
             continue
         }
     }
-    if ($id -cne $desired) { continue }
-    if ($words.Count -ne 4) { throw "Malformed GTA row using '$primary'." }
+    if (!$controlForKey.ContainsKey($id)) { continue }
+    $name = $controlForKey[$id]
+    if ($words.Count -ne 4) { throw "Malformed GTA row using '$($primaries[$name])'." }
     if ($words[3].Value -cne '-1') { continue }
     if ($action -cmatch $independent) { continue }
     # The stock game's four-arrow layout retains these two gang commands on
     # the same arrows as forwards and backwards.
-    if (($Control -eq 'forwards' -and $desired -eq '79' -and $action -ceq 'HID_MAPPING_GANG_RECRUIT_FOLLOW') -or
-        ($Control -eq 'backwards' -and $desired -eq '80' -and $action -ceq 'HID_MAPPING_GANG_IGNORE_HOLD_POSITION')) { continue }
-    $conflicts += $action
+    if (($name -eq 'forwards' -and $id -eq '79' -and $action -ceq 'HID_MAPPING_GANG_RECRUIT_FOLLOW') -or
+        ($name -eq 'backwards' -and $id -eq '80' -and $action -ceq 'HID_MAPPING_GANG_IGNORE_HOLD_POSITION')) { continue }
+    $conflicts += "$($primaries[$name]) ($name): $action"
 }
-if ($null -eq $selected) { throw "GTA has no existing keyboard mapping for $Control." }
-if ($selected.Value -ceq $desired) { return }
-if ($conflicts.Count) { throw "GTA already uses '$primary' for $($conflicts -join ', '). The mapping was not changed." }
-if (!$PSCmdlet.ShouldProcess($target.FullName, "Set $Control to the saved MTA primary key '$primary'")) { return }
+foreach ($name in $controls) {
+    if (!$selected.ContainsKey($name)) { throw "GTA has no existing keyboard mapping for $name." }
+}
+$edits = @($selected.Values | Where-Object { $_.Old -cne $_.New } | Sort-Object Index -Descending)
+if ($conflicts.Count -and ($WholeProfile -or $edits.Count)) { throw "Conflicting GTA keyboard bindings: $($conflicts -join ', ')." }
+if (!$edits.Count) { return }
+$summary = if ($WholeProfile) {
+    'Apply MTA primary keys (' + (($controls | ForEach-Object { "$_=$($primaries[$_])" }) -join ', ') + ')'
+} else {
+    "Set $Control to the saved MTA primary key '$($primaries[$Control])'"
+}
+if (!$PSCmdlet.ShouldProcess($target.FullName, $summary)) { return }
+
+# Edit from the end so all offsets refer to the original layout. The shared
+# writer verifies and commits this one span against both original input files.
+$index = $edits[-1].Index
+$end = $edits[0].Index + $edits[0].Old.Length
+$old = $text.Substring($index, $end - $index)
+$replacement = $old
+foreach ($edit in $edits) {
+    $offset = $edit.Index - $index
+    $replacement = $replacement.Remove($offset, $edit.Old.Length).Insert($offset, $edit.New)
+}
 & (Join-Path $PSScriptRoot 'Write-DefinitiveSettingsToken.ps1') -Path $target.FullName -Bytes $bytes -Encoding $encoding -Text $text `
-    -Index $index -OldToken $selected.Value -Replacement $desired -GameProcesses @('SanAndreas','PlayGTASanAndreas') `
+    -Index $index -OldToken $old -Replacement $replacement -GameProcesses @('SanAndreas','PlayGTASanAndreas') `
     -SourcePath $source.FullName -SourceBytes $sourceBytes

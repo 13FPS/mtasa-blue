@@ -1,4 +1,5 @@
 #requires -Version 7.0
+param([string]$CapturedStockKeyboardMappings)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
@@ -9,11 +10,12 @@ $scratch = Join-Path $repo ('Build/tmp/retail-movement-export/' + [guid]::NewGui
 $profile = Join-Path $scratch 'keybinds.xml'
 $mapping = Join-Path $scratch 'KeyboardMappings.cfg'
 $paths = @{ MtaKeybinds = $profile; KeyboardMappings = $mapping }
-$fixtureProcess = @{ Running = ''; OnCheck = $null }
+$fixtureProcess = @{ Running = ''; OnCheck = $null; Checks = 0 }
 $cases = 0
 
 # Exercise the real file code with fixture-local process state, even if GTA is open on the workstation.
 function Get-Process([string[]]$Name, $ErrorAction) {
+    $fixtureProcess.Checks++
     if ($fixtureProcess.OnCheck) {
         $callback = $fixtureProcess.OnCheck
         $fixtureProcess.OnCheck = $null
@@ -43,6 +45,25 @@ function Assert-Refusal([string]$Case, [string]$Xml, [string]$Retail, [string]$C
     try { & $command @paths -Control $Control } catch { $failed = $true }
     if (!$failed) { throw "Expected refusal for $Case" }
     Assert-Bytes $mapping $original $Case
+    $script:cases++
+}
+
+function Whole-Profile([string[]]$Keys) {
+    $names = @('forwards','backwards','left','right','sprint')
+    $rows = for ($n = 0; $n -lt $Keys.Count; ++$n) {
+        '<bind control="{0}" key="{1}" />' -f $names[$n], $Keys[$n]
+    }
+    Movement-Profile ($rows -join '')
+}
+
+function Assert-WholeRefusal([string]$Case, [string]$Xml, [string]$Retail, [string]$ExpectedError) {
+    [IO.File]::WriteAllText($profile, $Xml)
+    [IO.File]::WriteAllText($mapping, $Retail)
+    $before = [IO.File]::ReadAllBytes($mapping)
+    $message = ''
+    try { & $command @paths -WholeProfile } catch { $message = $_.Exception.Message }
+    if ($message -notmatch $ExpectedError) { throw "Unexpected result for ${Case}: $message" }
+    Assert-Bytes $mapping $before $Case
     $script:cases++
 }
 
@@ -165,6 +186,78 @@ try {
     Assert-Bytes $mapping ([Text.Encoding]::UTF8.GetBytes($row)) 'concurrent primary edit'
     Assert-Bytes $profile ([Text.Encoding]::UTF8.GetBytes($reshuffled)) 'new MTA primary'
     $cases++
+    $swap = Whole-Profile @('s','w','d','a','lshift')
+    $cycle = Whole-Profile @('s','a','d','lshift','w')
+    $original = "  29`tHID_MAPPING_PED_MOVE_Y  1 -1`r`n43 HID_MAPPING_PED_MOVE_Y 0 -1`n42 HID_MAPPING_PED_MOVE_X 1 -1`r44 HID_MAPPING_PED_MOVE_X 0 -1`n54 HID_MAPPING_SPRINT 0 -1`n29 HID_MAPPING_ACCELERATE 0 -1"
+    $expectedSwap = "  43`tHID_MAPPING_PED_MOVE_Y  1 -1`r`n29 HID_MAPPING_PED_MOVE_Y 0 -1`n44 HID_MAPPING_PED_MOVE_X 1 -1`r42 HID_MAPPING_PED_MOVE_X 0 -1`n54 HID_MAPPING_SPRINT 0 -1`n29 HID_MAPPING_ACCELERATE 0 -1"
+    $expectedCycle = "  43`tHID_MAPPING_PED_MOVE_Y  1 -1`r`n42 HID_MAPPING_PED_MOVE_Y 0 -1`n44 HID_MAPPING_PED_MOVE_X 1 -1`r54 HID_MAPPING_PED_MOVE_X 0 -1`n29 HID_MAPPING_SPRINT 0 -1`n29 HID_MAPPING_ACCELERATE 0 -1"
+    foreach ($encoding in @([Text.UTF8Encoding]::new($false), [Text.UTF8Encoding]::new($true), [Text.Encoding]::Unicode,
+                            [Text.Encoding]::BigEndianUnicode, [Text.Encoding]::UTF32, [Text.UTF32Encoding]::new($true, $true))) {
+        [IO.File]::WriteAllText($mapping, $original, $encoding)
+        $withAlternates = $swap.Replace('</binds>', '<bind control="forwards" key="p" /><bind control="walk" key="rshift" /></binds>')
+        [IO.File]::WriteAllText($profile, $withAlternates)
+        $before = [IO.File]::ReadAllBytes($mapping)
+        $checksBefore = $fixtureProcess.Checks
+        & $command @paths -WholeProfile -WhatIf
+        Assert-Bytes $mapping $before 'whole profile preview'
+        & $command @paths -WholeProfile
+        if ($fixtureProcess.Checks -ne $checksBefore + 1) { throw 'Whole-profile preview and apply did not perform exactly one guarded commit' }
+        $expected = [byte[]]($encoding.GetPreamble() + $encoding.GetBytes($expectedSwap))
+        Assert-Bytes $mapping $expected 'two simultaneous swaps'
+        [IO.File]::SetLastWriteTimeUtc($mapping, $stamp)
+        & $command @paths -WholeProfile
+        if ([IO.File]::GetLastWriteTimeUtc($mapping) -ne $stamp) { throw 'A whole-profile no-op rewrote the file' }
+        if ($fixtureProcess.Checks -ne $checksBefore + 1) { throw 'A whole-profile no-op entered the writer' }
+        [IO.File]::WriteAllText($profile, $cycle)
+        & $command @paths -WholeProfile
+        Assert-Bytes $mapping ([byte[]]($encoding.GetPreamble() + $encoding.GetBytes($expectedCycle))) 'five-control cycle'
+        $cases++
+    }
+    Assert-WholeRefusal 'missing primary' (Whole-Profile @('s','w','d','a')) $layout 'sprint'
+    Assert-WholeRefusal 'unsupported primary before a supported alternate' ($swap.Replace('control="sprint" key="lshift"', 'control="sprint" key="p" /><bind control="sprint" key="lshift"')) $layout 'Unsupported.*sprint'
+    Assert-WholeRefusal 'duplicate final primary' (Whole-Profile @('s','w','d','a','s')) $layout 'same|both|duplicate'
+    Assert-WholeRefusal 'ambiguous final action' $swap ($layout + $actions.sprint) 'ambiguous.*sprint'
+    Assert-WholeRefusal 'absent GTA action' $swap ($layout.Replace($actions.right, '')) 'no existing.*right'
+    Assert-WholeRefusal 'on-foot conflict for the new owner of a key' $swap ($layout + '43 HID_MAPPING_JUMP 0 -1') 'HID_MAPPING_JUMP'
+    Assert-WholeRefusal 'on-foot conflict even on unchanged final key' $swap ($layout + '54 HID_MAPPING_SOMETHING_NEW 0 -1') 'HID_MAPPING_SOMETHING_NEW'
+    Assert-WholeRefusal 'conflicting right key and gang follow' (Whole-Profile @('w','s','a','arrow_u','lshift')) ($layout + $gang) 'HID_MAPPING_GANG_RECRUIT_FOLLOW'
+    [IO.File]::WriteAllText($mapping, $layout + $gang)
+    [IO.File]::WriteAllText($profile, (Whole-Profile @('arrow_u','arrow_d','arrow_l','arrow_r','lshift')))
+    & $command @paths -WholeProfile
+    $expectedArrows = "79 HID_MAPPING_PED_MOVE_Y 1 -1`n80 HID_MAPPING_PED_MOVE_Y 0 -1`n81 HID_MAPPING_PED_MOVE_X 1 -1`n82 HID_MAPPING_PED_MOVE_X 0 -1`n54 HID_MAPPING_SPRINT 0 -1`n$gang"
+    Assert-Bytes $mapping ([Text.Encoding]::UTF8.GetBytes($expectedArrows)) 'whole arrow layout keeps its stock gang mappings'
+    $cases++
+    $fixtureProcess.Running = 'PlayGTASanAndreas'
+    Assert-WholeRefusal 'active game prevents all five edits' $cycle $layout 'Close GTA'
+    $fixtureProcess.Running = ''
+    $fixtureProcess.OnCheck = { [IO.File]::WriteAllText($profile, $cycle) }.GetNewClosure()
+    Assert-WholeRefusal 'source changed during the whole commit' $swap $layout 'MTA bindings changed'
+    $external = $layout + '68 HID_MAPPING_JUMP 0 -1'
+    [IO.File]::WriteAllText($profile, $swap)
+    [IO.File]::WriteAllText($mapping, $layout)
+    $fixtureProcess.OnCheck = { [IO.File]::WriteAllText($mapping, $external) }.GetNewClosure()
+    $message = ''
+    try { & $command @paths -WholeProfile } catch { $message = $_.Exception.Message }
+    if ($message -notmatch 'GTA settings changed') { throw "Concurrent whole-profile target edit was lost: $message" }
+    Assert-Bytes $mapping ([Text.Encoding]::UTF8.GetBytes($external)) 'concurrent target edit during whole commit'
+    $cases++
+    if ($CapturedStockKeyboardMappings) {
+        $capture = (Resolve-Path -LiteralPath $CapturedStockKeyboardMappings).Path
+        $captureBytes = [IO.File]::ReadAllBytes($capture)
+        [IO.File]::WriteAllBytes($mapping, $captureBytes)
+        [IO.File]::WriteAllText($profile, $cycle)
+        & $command @paths -WholeProfile
+        $cycleLayout = [IO.File]::ReadAllText($mapping)
+        foreach ($line in @('43 HID_MAPPING_PED_MOVE_Y 1 -1','42 HID_MAPPING_PED_MOVE_Y 0 -1','44 HID_MAPPING_PED_MOVE_X 1 -1',
+                            '54 HID_MAPPING_PED_MOVE_X 0 -1','29 HID_MAPPING_SPRINT 0 -1')) {
+            if ($line -cnotin ($cycleLayout -split '\r?\n')) { throw "Expected GTA capture row $line" }
+        }
+        [IO.File]::WriteAllText($profile, (Whole-Profile @('w','s','a','d','lshift')))
+        & $command @paths -WholeProfile
+        Assert-Bytes $mapping $captureBytes 'captured stock file restored byte for byte'
+        Assert-Bytes $capture $captureBytes 'original GTA capture'
+        $cases++
+    }
     Write-Output "Passed $cases retail movement export cases."
 } finally {
     [IO.File]::Delete($profile)

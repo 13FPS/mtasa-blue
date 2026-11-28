@@ -143,7 +143,7 @@ try {
     if ($compileExit -ne 0) { throw 'Owned frontend host compilation failed.' }
     if ((Sha $hostPath) -eq '63e633bb51c35fe35ca98f503b62e7ddb8403abe4c9d501cfa9162892453846f') { throw 'Disposable host unexpectedly matches the real game.' }
     $testExit=0
-    foreach ($case in @('normal','cancel','focus','gated','cpu-busy','partial-start','throw-start','startup-failure')) {
+    foreach ($case in @('normal','cancel','focus','gated','cpu-busy','partial-start','throw-start','startup-failure','late-menu')) {
         $caseRoot=Join-Path $outputRoot ('case-'+$case)
         $assetRoot=Join-Path $caseRoot 'Win64/CLEO/de-online'
         [IO.Directory]::CreateDirectory((Join-Path $assetRoot 'mta/logs')) | Out-Null
@@ -187,7 +187,7 @@ try {
     $executionArtifacts=@(Get-ChildItem -LiteralPath $outputRoot -Recurse -File | Where-Object { $_.Extension -in @('.exe','.obj','.log','.json','.bmp') } | ForEach-Object {
         [ordered]@{path=$_.FullName;sha256=(Sha $_.FullName);bytes=$_.Length}
     })
-    $success=$null -eq $failure -and $compileExit -eq 0 -and $testExit -eq 0 -and $testCount -gt 0 -and $runs.Count -eq 8 -and
+    $success=$null -eq $failure -and $compileExit -eq 0 -and $testExit -eq 0 -and $testCount -gt 0 -and $runs.Count -eq 9 -and
         @($runs | Where-Object { -not $_.success }).Count -eq 0 -and -not $timedOut -and $sourceUnchanged -and $artifactsUnchanged -and
         $assetsUnchanged -and $certificatesUnchanged -and $platformUnchanged
     $receipt=[ordered]@{schema='mta_owned_frontend_surface_host_tests_v1';recordedAt=[DateTimeOffset]::Now.ToString('o');directory=$outputRoot;success=$success;

@@ -576,6 +576,8 @@ int wmain(int argc, wchar_t** argv)
                 Check(GetForegroundWindow() == focus, "passive surface does not activate or focus its child");
             if (mode == L"normal")
             {
+                const auto initialCopies = result.ownQueueSubmissions - result.guiFrames;
+                std::printf("Before resize: %u GUI frames, %u presentations, %u readback copies\n", result.guiFrames, result.presentSucceeded, initialCopies);
                 Capture(parent, std::filesystem::current_path() / L"owned-composition.bmp");
                 RECT rect{0, 0, 800, 600};
                 AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
@@ -592,7 +594,15 @@ int wmain(int argc, wchar_t** argv)
                 result = surface.Snapshot();
                 Check(result.resizeCount == 1 && result.width == 800 && result.height == 600 && !result.resizePending,
                       "drain and resize only owned composition swapchain");
-                RenderProof(surface, result.presentSucceeded + 1);
+                Check(!result.readbackComplete, "resizing invalidates the preceding pixel check");
+                RenderProof(surface, result.presentSucceeded + 3);
+                result = surface.Snapshot();
+                std::printf("After resize: %u GUI frames, %u presentations, %u readback copies\n", result.guiFrames, result.presentSucceeded,
+                            result.ownQueueSubmissions - result.guiFrames);
+                Check(initialCopies == 1, "sample the initial size once while subsequent frames keep presenting");
+                Check(result.ownQueueSubmissions == result.guiFrames + 2 && result.readbackRedVerified && result.transparentPixelVerified &&
+                          result.premultipliedPixelsVerified,
+                      "resized surface revalidates its pixels once and continues presenting");
             }
             if (mode == L"resize-failure")
             {

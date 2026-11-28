@@ -619,33 +619,37 @@ namespace DefinitiveGuiSurface
                 return Fail(E_FAIL, status);
             }
             ++result.guiFrames;
-            hr = copyAllocator->Reset();
-            if (SUCCEEDED(hr))
-                hr = copyList->Reset(copyAllocator.Get(), nullptr);
-            if (FAILED(hr))
+            // Sample until the current size has verified pixels. Resize clears the result.
+            if (!result.readbackComplete)
             {
-                Completion();
-                return Fail(hr);
+                hr = copyAllocator->Reset();
+                if (SUCCEEDED(hr))
+                    hr = copyList->Reset(copyAllocator.Get(), nullptr);
+                if (FAILED(hr))
+                {
+                    Completion();
+                    return Fail(hr);
+                }
+                Barrier(copyList.Get(), buffer.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_SOURCE);
+                D3D12_TEXTURE_COPY_LOCATION source{}, destination{};
+                source.pResource = buffer.Get();
+                source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+                destination.pResource = readback.Get();
+                destination.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+                destination.PlacedFootprint = footprint;
+                const D3D12_BOX box{0, 0, 0, captureWidth, captureHeight, 1};
+                copyList->CopyTextureRegion(&destination, 0, 0, 0, &source, &box);
+                Barrier(copyList.Get(), buffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PRESENT);
+                hr = copyList->Close();
+                if (FAILED(hr))
+                {
+                    Completion();
+                    return Fail(hr);
+                }
+                ID3D12CommandList* copies[] = {copyList.Get()};
+                queue->ExecuteCommandLists(1, copies);
+                ++result.ownQueueSubmissions;
             }
-            Barrier(copyList.Get(), buffer.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_SOURCE);
-            D3D12_TEXTURE_COPY_LOCATION source{}, destination{};
-            source.pResource = buffer.Get();
-            source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-            destination.pResource = readback.Get();
-            destination.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-            destination.PlacedFootprint = footprint;
-            const D3D12_BOX box{0, 0, 0, captureWidth, captureHeight, 1};
-            copyList->CopyTextureRegion(&destination, 0, 0, 0, &source, &box);
-            Barrier(copyList.Get(), buffer.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PRESENT);
-            hr = copyList->Close();
-            if (FAILED(hr))
-            {
-                Completion();
-                return Fail(hr);
-            }
-            ID3D12CommandList* copies[] = {copyList.Get()};
-            queue->ExecuteCommandLists(1, copies);
-            ++result.ownQueueSubmissions;
             Completion();
             if (failed)
                 return Status::Failed;

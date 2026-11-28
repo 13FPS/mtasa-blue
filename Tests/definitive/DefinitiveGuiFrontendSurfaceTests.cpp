@@ -138,16 +138,27 @@ namespace
         bool               failStart = false, throwStart = false, focused = false;
         std::int32_t       mouseX = 0, mouseY = 0;
         Session*           surface = nullptr;
+        bool               delayMenu = false;
+        CGUI*              pendingGui = nullptr;
         bool               reentrantRejected = false;
         bool               consumeModifierInput = false, consumedModifierReleaseVerified = false;
         unsigned           consumedModifierMessages = 0;
         bool               Read() { return handle && read(handle, state.data(), static_cast<std::uint32_t>(state.size())) == Frontend::Status::Ok; }
+        bool               CreateMenu(CGUI* gui)
+        {
+            handle = create(Frontend::ApiVersion, gui);
+            return Read() && state[Frontend::Phase] == 2;
+        }
         static bool        Start(void* context, CGUI* gui)
         {
             auto& self = *static_cast<Menu*>(context);
             ++self.starts;
-            self.handle = self.create(Frontend::ApiVersion, gui);
-            if (!self.Read() || self.state[Frontend::Phase] != 2)
+            if (self.delayMenu)
+            {
+                self.pendingGui = gui;
+                return true;
+            }
+            if (!self.CreateMenu(gui))
                 return false;
             // A successful Core factory can still be followed by a failed host
             // start. Surface must retain and invoke its stop obligation.
@@ -163,6 +174,18 @@ namespace
             self.mouseY = y;
             self.focused = focused;
             self.reentrantRejected = self.surface->Shutdown() == Status::Busy;
+            if (self.pendingGui)
+            {
+                const auto raster = self.surface->Snapshot();
+                if (raster.guiFrames < 3)
+                    return true;
+                Check(!raster.readbackComplete && raster.readbackPixels <= 10000 && raster.presentSucceeded >= 3 &&
+                          raster.ownQueueSubmissions == 2 * raster.guiFrames,
+                      "early frames keep presenting and sampling while menu content is absent");
+                if (!self.CreateMenu(self.pendingGui))
+                    return false;
+                self.pendingGui = nullptr;
+            }
             return self.pulse(self.handle, x, y, focused ? 1u : 0u) == Frontend::Status::Ok && self.Read();
         }
         static bool Stop(void* context)
@@ -211,15 +234,25 @@ namespace
     void Settle(Session& surface, Menu& menu)
     {
         const auto deadline = GetTickCount64() + 8000;
+        unsigned   verifiedCopies = 0, verifiedPresent = 0;
         do
         {
             Pump();
             const auto status = surface.Poll();
             Check(status == Status::Ok || status == Status::Busy, "real frontend composition remains running");
             const auto raster = surface.Snapshot();
+            if (raster.readbackComplete && !verifiedCopies)
+            {
+                verifiedCopies = raster.ownQueueSubmissions - raster.guiFrames;
+                verifiedPresent = raster.presentSucceeded;
+            }
             if (menu.Read() && menu.state[Frontend::MenuVisible] && !menu.state[Frontend::MenuFading] && raster.readbackComplete &&
-                raster.presentSucceeded >= 3 && menu.pulses >= 24)
+                raster.presentSucceeded >= verifiedPresent + 2 && menu.pulses >= 24)
+            {
+                Check(verifiedCopies > 0 && raster.ownQueueSubmissions - raster.guiFrames == verifiedCopies,
+                      "validated menu pixels stop readback copies while new frames keep presenting");
                 return;
+            }
             Sleep(10);
         } while (GetTickCount64() < deadline);
         Check(false, "real menu fade and actual composition pixels settle before deadline");
@@ -252,7 +285,7 @@ int wmain(int argc, wchar_t** argv)
         const std::wstring          mode(argv[2]);
         Check(root.is_absolute() && root.filename() == L"de-online", "explicit disposable adapter asset layout");
         Check(mode == L"normal" || mode == L"cancel" || mode == L"focus" || mode == L"gated" || mode == L"cpu-busy" || mode == L"partial-start" ||
-                  mode == L"throw-start" || mode == L"startup-failure",
+                  mode == L"throw-start" || mode == L"startup-failure" || mode == L"late-menu",
               "explicit frontend surface workload");
         std::printf("Frontend surface case=%ls\n", mode.c_str());
         const auto core = LoadLibraryExW((root / L"core.dll").c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -268,6 +301,7 @@ int wmain(int argc, wchar_t** argv)
         menu.release = Export<Frontend::Release>(core, "MTA_ReleaseDEFrontendSession");
         menu.failStart = mode == L"partial-start";
         menu.throwStart = mode == L"throw-start";
+        menu.delayMenu = mode == L"late-menu";
         menu.busyStops = mode == L"cpu-busy" ? 1u : 0u;
         ComPtr<ID3D12Debug> debug;
         const bool          debugAvailable = SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)));
@@ -306,7 +340,7 @@ int wmain(int argc, wchar_t** argv)
               "transfer only owned WARP lease and independent parent");
         const bool startupFailure = menu.failStart || menu.throwStart || mode == L"startup-failure";
         Check(surface.Start() == (startupFailure ? Status::Failed : Status::Ok), "real frontend start reports the selected actual lifecycle outcome");
-        Check(menu.starts == 1 && menu.handle, "Core startup publishes retained frontend ownership");
+        Check(menu.starts == 1 && (menu.delayMenu ? menu.pendingGui != nullptr : menu.handle != nullptr), "frontend start retains its GUI or Core session");
         if (!startupFailure)
         {
             const auto child = GetWindow(parent.window.load(), GW_CHILD);
@@ -361,7 +395,7 @@ int wmain(int argc, wchar_t** argv)
                 Click(child, 230, 804);
                 Check(menu.Read() && menu.state[Frontend::CloseRequested], "actual MTA Quit requests host close without terminating owned process");
             }
-            else
+            else if (!menu.delayMenu)
             {
                 if (mode == L"cancel")
                 {

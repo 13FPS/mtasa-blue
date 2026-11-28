@@ -58,8 +58,9 @@ def main():
         for path, signatures in (
             (ROOT / "Shared/mods/deathmatch/logic/Utils.h", ["inline float DistanceBetweenPoints3D(", "inline float ConvertDegreesToRadiansNoWrap("]),
             (LOGIC / "CClientCamera.cpp", ["bool CClientCamera::GetMatrix(", "void CClientCamera::SetFixedTarget("]),
-            (LOGIC / "CBassAudio.cpp", ["void CBassAudio::Process3D(", "void CBassAudio::DoPulse("]),
-            (LOGIC / "CClientSound.cpp", ["void CClientSound::Process3D("]),
+            (LOGIC / "CBassAudio.cpp", ["void CBassAudio::SetPaused(", "void CBassAudio::Process3D(", "void CBassAudio::DoPulse("]),
+            (LOGIC / "CClientSound.cpp", ["void CClientSound::SetPaused(", "bool CClientSound::IsPaused(", "void CClientSound::Process3D("]),
+            (LOGIC / "luadefs/CLuaAudioDefs.cpp", ["bool CLuaAudioDefs::SetSoundPaused("]),
             (LOGIC / "CClientSoundManager.cpp", ["void CClientSoundManager::DoPulse()", "void CClientSoundManager::UpdateDistanceStreaming("]),
         ):
             source = read(path).decode("utf-8-sig").replace("\r\n", "\n")
@@ -72,6 +73,7 @@ def main():
                 methods.append(body)
                 record["methods"][signature] = hashlib.sha256(body.encode()).hexdigest()
         header = read(LOGIC / "CBassAudio.h").decode("utf-8-sig")
+        worker_state = header[header.index("struct SSoundThreadVariables"):header.index("class CBassAudio")]
         cutoff = next(line for line in header.splitlines() if line.startswith("#define CUT_OFF "))
         for path in (HOST, Path(__file__).resolve(), dll, lib, ROOT / "vendor/bass/bass.h",
                      SDK / "CMatrix.h", SDK / "CVector.h", SDK / "CVector4D.h", SDK / "CSphere.h", SDK / "SharedUtil.Map.h", SDK / "SharedUtil.Misc.h", SDK / "SString.hpp"):
@@ -83,6 +85,7 @@ def main():
         with tempfile.TemporaryDirectory(dir=scratch, prefix="client-listener-") as tmp:
             work = Path(tmp)
             (work / "ListenerMethods.generated.inl").write_text(cutoff + "\n\n" + "\n\n".join(methods) + "\n", encoding="utf-8")
+            (work / "SoundWorkerState.generated.inl").write_text(worker_state, encoding="utf-8")
             shutil.copy2(dll, work / "bass.dll")
             cmd = ["cl", "/nologo", "/EHsc", "/O2", "/MT", "/std:c++17", "/DNOMINMAX", "/DWIN32", "/D_CRT_SECURE_NO_WARNINGS",
                    "/I" + str(work), "/I" + str(SDK), "/I" + str(ROOT / "vendor/bass"), str(HOST), str(lib), "/Fe:listener.exe"]

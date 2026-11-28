@@ -17,7 +17,9 @@
 #include <cstdio>
 #include <stdexcept>
 #include <optional>
+#include <mutex>
 #include <string_view>
+#include <variant>
 
 using SharedUtil::Clamp;
 using SharedUtil::Lerp;
@@ -40,12 +42,43 @@ namespace
         throw std::runtime_error("Unexpected non-listener operation");
     }
 
+    // Destruction follows removal of the worker's callback ID. No worker
+    // holds the block during these three result-ownership cases.
+    using CCriticalSection = std::mutex;
+#include "SoundWorkerState.generated.inl"
+
+    void CheckUnclaimedStream()
+    {
+        BASS_CHANNELINFO info{};
+        HSTREAM          pending = BASS_StreamCreate(44100, 2, BASS_STREAM_AUTOFREE, STREAMPROC_PUSH, nullptr);
+        Check(pending && BASS_ChannelGetInfo(pending, &info), "Pending channel creation failed");
+        auto* result = new SSoundThreadVariables;
+        result->pSound = pending;
+        result->bStreamCreateResult = true;
+        delete result;
+        Check(!BASS_ChannelGetInfo(pending, &info) && BASS_ErrorGetCode() == BASS_ERROR_HANDLE, "Dropping an unclaimed stream leaked the BASS channel");
+
+        HSTREAM claimed = BASS_StreamCreate(44100, 2, BASS_STREAM_AUTOFREE, STREAMPROC_PUSH, nullptr);
+        Check(claimed != 0, "Claimed channel creation failed");
+        result = new SSoundThreadVariables;
+        result->pSound = claimed;
+        result->bStreamCreateResult = false;
+        delete result;
+        Check(BASS_ChannelGetInfo(claimed, &info) && BASS_StreamFree(claimed), "Dropping a consumed result freed the playing owner's channel");
+
+        result = new SSoundThreadVariables;
+        result->bStreamCreateResult = true;
+        delete result;
+        std::puts("Unclaimed BASS handle released; consumed and failed stream results passed");
+    }
+
     struct CLuaArguments
     {
-        void   PushString(const SString&) { Unexpected(); }
-        void   PushNumber(double value) { number = value; }
-        double number = 0;
-        void   PushBoolean(bool) { Unexpected(); }
+        void    PushString(const SString& value) { reason = value; }
+        SString reason;
+        void    PushNumber(double value) { number = value; }
+        double  number = 0;
+        void    PushBoolean(bool) { Unexpected(); }
     };
     enum SoundEvent
     {
@@ -69,10 +102,11 @@ namespace
         bool       m_bPan = true;
         const bool m_b3D = true, m_bStream = false;
         const bool m_pVars = false;
-        bool       m_bPendingPlay = false, m_bPaused = true;
+        bool       m_bPendingPlay = false, m_bPaused = false;
         float      m_fVolume = 0.8f, m_fMinDistance = 10, m_fMaxDistance = 30;
         CVector    m_vecPosition;
         void       DoPulse(const CMatrix*);
+        void       SetPaused(bool paused);
         void       Process3D(const CMatrix&);
         void       ServiceVars() { ++streamPulses; }
         unsigned   streamPulses = 0;
@@ -110,26 +144,60 @@ namespace
         CVector              m_vecPosition;
         SString              m_strPath;
         void                 Process3D(const CMatrix*);
-        bool                 IsSound3D() const { return m_b3D; }
-        unsigned             GetDimension() const { return 0; }
-        CSphere              GetWorldBoundingSphere() const { return CSphere(m_pAudio->m_vecPosition, m_pAudio->m_fMaxDistance); }
-        void                 DistanceStreamIn();
-        void                 DistanceStreamOut();
-        bool                 IsFinished() const { return false; }
-        CClientEntity*       GetAttachedTo() const { return nullptr; }
-        void                 GetPosition(CVector&) { Unexpected(); }
-        void                 DoAttaching() { Unexpected(); }
-        void                 SetVelocity(const CVector&) { Unexpected(); }
-        void                 UpdateSpatialData() { Unexpected(); }
-        bool                 Create() { Unexpected(); }
-        void                 Destroy() { Unexpected(); }
-        void                 CallEvent(const char* name, CLuaArguments& arguments, bool children)
+        void                 SetPaused(bool paused);
+        bool                 IsPaused();
+        bool                 m_bPaused = false;
+        struct
         {
+            bool paused = false;
+            void SetPaused(bool value) { paused = value; }
+        } m_SimulatedPlayPosition;
+        bool           IsSound3D() const { return m_b3D; }
+        unsigned       GetDimension() const { return 0; }
+        CSphere        GetWorldBoundingSphere() const { return CSphere(m_pAudio->m_vecPosition, m_pAudio->m_fMaxDistance); }
+        void           DistanceStreamIn();
+        void           DistanceStreamOut();
+        bool           IsFinished() const { return false; }
+        CClientEntity* GetAttachedTo() const { return nullptr; }
+        void           GetPosition(CVector&) { Unexpected(); }
+        void           DoAttaching() { Unexpected(); }
+        void           SetVelocity(const CVector&) { Unexpected(); }
+        void           UpdateSpatialData() { Unexpected(); }
+        bool           Create() { Unexpected(); }
+        void           Destroy() { Unexpected(); }
+        void           CallEvent(const char* name, CLuaArguments& arguments, bool children)
+        {
+            if (std::string_view(name) == "onClientSoundStopped" || std::string_view(name) == "onClientSoundStarted")
+            {
+                const bool paused = std::string_view(name) == "onClientSoundStopped";
+                Check(!children && arguments.reason == (paused ? "paused" : "resumed"), "Incorrect pause event");
+                Check(IsPaused() == paused && m_SimulatedPlayPosition.paused == paused && (!m_pAudio || m_pAudio->m_bPaused == paused),
+                      "Pause event exposed stale playback state");
+                ++pauseEvents;
+                if (!paused && pauseOnResume)
+                    SetPaused(true);
+                return;
+            }
             if (std::string_view(name) != "onClientSoundBeat" || arguments.number != 7 || !children)
                 Unexpected();
             ++beats;
         }
         unsigned beats = 0;
+        unsigned pauseEvents = 0;
+        bool     pauseOnResume = false;
+    };
+
+    struct CClientPlayerVoice
+    {
+        void SetPaused(bool) { Unexpected(); }
+    };
+    struct CClientPlayer
+    {
+        CClientPlayerVoice* GetVoice() { Unexpected(); }
+    };
+    struct CLuaAudioDefs
+    {
+        static bool SetSoundPaused(std::variant<CClientSound*, CClientPlayer*> sound, bool paused);
     };
 
     // Expose the listener position observed by the production spatial query.
@@ -257,10 +325,57 @@ namespace
         }
     }
 
+    void CheckPausePlayback(bool spatialSound)
+    {
+        HSTREAM channel = BASS_StreamCreate(44100, 2, 0, STREAMPROC_PUSH, nullptr);
+        Check(channel != 0, "Could not create the pause test channel");
+        std::array<short, 16384> samples{};
+        Check(BASS_StreamPutData(channel, samples.data(), sizeof(samples)) != static_cast<DWORD>(-1), "Could not queue the pause test audio");
+        CBassAudio   audio(channel, spatialSound);
+        CClientSound sound(&audio, nullptr);
+        CMatrix      listener;
+        const auto   setPaused = [&](bool paused) { Check(CLuaAudioDefs::SetSoundPaused(&sound, paused), "Lua pause request failed"); };
+        audio.m_bPendingPlay = true;
+        setPaused(false);
+        Check(BASS_ChannelIsActive(channel) == BASS_ACTIVE_STOPPED && !sound.pauseEvents, "Redundant resume bypassed first-pulse playback");
+        setPaused(true);
+        audio.DoPulse(&listener);
+        Check(BASS_ChannelIsActive(channel) == BASS_ACTIVE_STOPPED, "Paused sound started on the first available pose");
+        setPaused(false);
+        Check(BASS_ChannelIsActive(channel) == BASS_ACTIVE_STOPPED, "Resume bypassed the pending first play");
+        audio.DoPulse(nullptr);
+        if (spatialSound)
+        {
+            Check(BASS_ChannelIsActive(channel) == BASS_ACTIVE_STOPPED, "Spatial first play bypassed the missing listener");
+            audio.DoPulse(&listener);
+        }
+        Check(BASS_ChannelIsActive(channel) == BASS_ACTIVE_PLAYING, "Pending first play did not start");
+        setPaused(true);
+        Check(BASS_ChannelIsActive(channel) == BASS_ACTIVE_PAUSED, "Playing channel was not paused immediately");
+        setPaused(false);
+        if (spatialSound)
+        {
+            audio.DoPulse(nullptr);
+            Check(BASS_ChannelIsActive(channel) == BASS_ACTIVE_PAUSED, "Spatial resume bypassed the missing listener");
+            audio.DoPulse(&listener);
+        }
+        Check(BASS_ChannelIsActive(channel) == BASS_ACTIVE_PLAYING, "Channel failed to resume");
+        setPaused(true);
+        sound.pauseOnResume = true;
+        setPaused(false);
+        audio.DoPulse(&listener);
+        Check(sound.IsPaused() && BASS_ChannelIsActive(channel) == BASS_ACTIVE_PAUSED && sound.pauseEvents == 7, "Resume overwrote the event handler's pause");
+        Check(BASS_StreamFree(channel), "Could not release pause test channel");
+    }
+
     void Run()
     {
         Check(HIWORD(BASS_GetVersion()) == BASSVERSION, "BASS DLL and import header differ");
         Check(BASS_Init(0, 44100, 0, nullptr, nullptr) && BASS_GetDevice() == 0, "BASS no-sound device unavailable");
+        CheckUnclaimedStream();
+        CheckPausePlayback(false);
+        CheckPausePlayback(true);
+        std::puts("Lua pause/resume passed for pending, playing and re-paused 2D and 3D channels");
         HSTREAM channel = BASS_StreamCreate(44100, 2, 0, STREAMPROC_PUSH, nullptr);
         Check(channel != 0, "BASS stereo channel creation failed");
         ClientManager       client;

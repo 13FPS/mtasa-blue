@@ -503,30 +503,17 @@ bool CClientSound::IsLooped(void) const
 
 void CClientSound::SetPaused(bool bPaused)
 {
-    if (m_bPaused != bPaused)
-    {
-        if (bPaused)
-        {
-            // call onClientSoundStopped
-            CLuaArguments Arguments;
-            Arguments.PushString("paused");  // Reason
-            this->CallEvent("onClientSoundStopped", Arguments, false);
-        }
-        else
-        {
-            // call onClientSoundStarted
-            CLuaArguments Arguments;
-            Arguments.PushString("resumed");  // Reason
-            this->CallEvent("onClientSoundStarted", Arguments, false);
-        }
-    }
-
+    if (m_bPaused == bPaused)
+        return;
     m_bPaused = bPaused;
-
     m_SimulatedPlayPosition.SetPaused(bPaused);
-
     if (m_pAudio)
         m_pAudio->SetPaused(m_bPaused);
+
+    // A script can inspect or change this sound again from its event handler.
+    CLuaArguments arguments;
+    arguments.PushString(bPaused ? "paused" : "resumed");
+    CallEvent(bPaused ? "onClientSoundStopped" : "onClientSoundStarted", arguments, false);
 }
 
 bool CClientSound::IsPaused()

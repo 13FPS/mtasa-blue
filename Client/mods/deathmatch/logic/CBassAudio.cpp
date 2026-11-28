@@ -825,14 +825,18 @@ bool CBassAudio::IsFreed()
 //
 void CBassAudio::SetPaused(bool bPaused)
 {
+    if (m_bPaused == bPaused)
+        return;
     m_bPaused = bPaused;
-    if (m_pSound)
-    {
-        if (bPaused)
-            BASS_ChannelPause(m_pSound);
-        else
-            BASS_ChannelPlay(m_pSound, false);
-    }
+    if (!m_pSound || m_bPendingPlay)
+        return;
+
+    if (bPaused)
+        BASS_ChannelPause(m_pSound);
+    else if (m_b3D)
+        m_bPendingPlay = true;  // The camera may have moved or disappeared during the pause.
+    else
+        BASS_ChannelPlay(m_pSound, false);
 }
 
 // Non-streams only
@@ -1225,11 +1229,10 @@ void CBassAudio::DoPulse(const CMatrix* listener)
         Process3D(*listener);
 
     // A new spatial channel needs its first gain and pan before playback.
-    if (m_bPendingPlay && (!m_b3D || listener))
+    if (m_bPendingPlay && !m_bPaused && (!m_b3D || listener))
     {
         m_bPendingPlay = false;
-        if (!m_bPaused)
-            BASS_ChannelPlay(m_pSound, false);
+        BASS_ChannelPlay(m_pSound, false);
     }
 }
 

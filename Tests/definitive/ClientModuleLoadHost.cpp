@@ -57,8 +57,8 @@ int wmain(int argc, wchar_t** argv)
         Check(SetDllDirectoryW(L"") != FALSE, "exclude the current directory from this isolated loader check");
 
         // This is the production architecture/path owner, loading the real
-        // linked module. Do not call InitClient: its public factory can enter
-        // the still-unavailable game/network startup through CClientGame.
+        // linked module. The separate factory test calls InitClient, which
+        // constructs the singleton. ClientInitialize starts the session.
         MtaStartup::Module owner;
         if (!owner.Load(client.wstring()))
             throw std::runtime_error("actual client module load failed, Windows error " + std::to_string(owner.Error()));

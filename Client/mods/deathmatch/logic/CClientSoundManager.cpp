@@ -226,6 +226,16 @@ CClientSound* CClientSoundManager::PlaySound3D(void* pMemory, unsigned int uiLen
     return NULL;
 }
 
+static void SetInitialGTASFXVolume(CClientSound* sound)
+{
+    if (sound)
+    {
+        // The game slider and its master-volume adjustment use 64 for full scale.
+        const float volume = g_pGame->GetSettings()->GetSFXVolume() / 64.0f;
+        sound->SetVolume(std::min(volume, 1.0f));
+    }
+}
+
 CClientSound* CClientSoundManager::PlayGTASFX(eAudioLookupIndex containerIndex, int iBankIndex, int iAudioIndex, bool bLoop)
 {
     void*        pAudioData;
@@ -247,12 +257,7 @@ CClientSound* CClientSoundManager::PlayGTASFX(eAudioLookupIndex containerIndex, 
 
     CClientSound* pSound = PlaySound2D(pAudioData, uiAudioLength, bLoop);
 
-    if (pSound)
-    {
-        CGameSettings* gameSettings = g_pGame->GetSettings();
-        pSound->SetVolume(gameSettings->GetSFXVolume() / 255.0f);
-    }
-
+    SetInitialGTASFXVolume(pSound);
     return pSound;
 }
 
@@ -277,12 +282,7 @@ CClientSound* CClientSoundManager::PlayGTASFX3D(eAudioLookupIndex containerIndex
 
     CClientSound* pSound = PlaySound3D(pAudioData, uiAudioLength, vecPosition, bLoop);
 
-    if (pSound)
-    {
-        CGameSettings* gameSettings = g_pGame->GetSettings();
-        pSound->SetVolume(gameSettings->GetSFXVolume() / 255.0f);
-    }
-
+    SetInitialGTASFXVolume(pSound);
     return pSound;
 }
 

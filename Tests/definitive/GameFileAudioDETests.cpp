@@ -28,6 +28,8 @@ void SelectRoot(const std::filesystem::path& root)
     Check(_wputenv_s(L"MTA_DE_AUDIO_ROOT", root.c_str()) == 0, "select fixture archive root");
 }
 
+#include "GTASfxPlaybackFixture.h"
+
 void CheckUnavailable(CGame& game)
 {
     CAudioContainer* container = game.GetAudioContainer();
@@ -69,6 +71,14 @@ int wmain(int argc, wchar_t** argv)
             SelectRoot(argv[1]);
             Game installed;
             CheckAvailable(installed, false);
+#ifdef MTA_TEST_BASS_DECODE
+            // Device zero is the BASS no-sound device. Decoding stays in memory.
+            Check(BASS_Init(0, 44100, 0, nullptr, nullptr) != 0, "start BASS without an output device");
+#endif
+            sfx_playback_fixture::Run(installed, true);
+#ifdef MTA_TEST_BASS_DECODE
+            Check(BASS_Free() != 0, "release BASS");
+#endif
             return 0;
         }
         const auto path = std::filesystem::current_path();
@@ -89,6 +99,7 @@ int wmain(int argc, wchar_t** argv)
         SelectRoot({});
         Check(original == sdk.GetAudioContainer(), "later environment changes preserve a live game binding");
         CheckAvailable(sdk, true);
+        sfx_playback_fixture::Run(sdk, false);
         CheckUnavailable(missing);
         Game next;
         CheckUnavailable(next);

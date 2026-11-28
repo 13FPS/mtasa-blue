@@ -67,10 +67,6 @@ CAudioEngineSA::CAudioEngineSA(CAudioEngineSAInterface* pInterface)
     m_bRadioOn = false;
     m_bRadioMuted = false;
     m_ucRadioChannel = 0;
-    m_bAmbientSoundsPaused = false;
-    m_bAmbientGeneralEnabled = true;
-    m_bAmbientGunfireEnabled = true;
-    m_pWorldSoundHandler = NULL;
 
     HookInstall(HOOKPOS_CAEAmbienceTrackManager_CheckForPause, (DWORD)HOOK_CAEAmbienceTrackManager_CheckForPause, 6);
 
@@ -437,43 +433,6 @@ void CAudioEngineSA::PauseAllSound(bool bPaused)
     }
 }
 
-void CAudioEngineSA::PauseAmbientSounds(bool bPaused)
-{
-    m_bAmbientSoundsPaused = bPaused;
-    UpdateAmbientSoundSettings();
-}
-
-void CAudioEngineSA::SetAmbientSoundEnabled(eAmbientSoundType eType, bool bEnabled)
-{
-    if (eType == AMBIENT_SOUND_GENERAL)
-    {
-        m_bAmbientGeneralEnabled = bEnabled;
-    }
-    else if (eType == AMBIENT_SOUND_GUNFIRE)
-    {
-        m_bAmbientGunfireEnabled = bEnabled;
-    }
-    UpdateAmbientSoundSettings();
-}
-
-bool CAudioEngineSA::IsAmbientSoundEnabled(eAmbientSoundType eType)
-{
-    if (m_bAmbientSoundsPaused)
-        return false;
-    if (eType == AMBIENT_SOUND_GENERAL)
-        return m_bAmbientGeneralEnabled;
-    else if (eType == AMBIENT_SOUND_GUNFIRE)
-        return m_bAmbientGunfireEnabled;
-    else
-        return false;
-}
-
-void CAudioEngineSA::ResetAmbientSounds()
-{
-    SetAmbientSoundEnabled(AMBIENT_SOUND_GENERAL, true);
-    SetAmbientSoundEnabled(AMBIENT_SOUND_GUNFIRE, true);
-}
-
 void CAudioEngineSA::UpdateAmbientSoundSettings()
 {
     // Update gunfire setting
@@ -544,37 +503,26 @@ void CAudioEngineSA::ResetWorldSounds()
     m_DisabledWorldSounds = CRanges();
 }
 
-void CAudioEngineSA::SetWorldSoundHandler(WorldSoundHandler* pHandler)
-{
-    m_pWorldSoundHandler = pHandler;
-}
-
 bool CAudioEngineSA::OnWorldSound(CAESound* pAESound)
 {
     if (!IsValidWorldSoundRequest(pAESound))
         return false;
 
-    if (!IsWorldSoundEnabled(pAESound->usGroup, pAESound->usIndex))
-        return false;
+    return DispatchWorldSound(pAESound->usGroup, pAESound->usIndex,
+                              [&]
+                              {
+                                  CEntitySAInterface* pGameEntity = pAESound->pGameEntity;
 
-    if (m_pWorldSoundHandler)
-    {
-        CEntitySAInterface* pGameEntity = pAESound->pGameEntity;
+                                  if (!pGameEntity && pAESound->pAudioEntity)
+                                      pGameEntity = pAESound->pAudioEntity->pEntity;
 
-        if (!pGameEntity && pAESound->pAudioEntity)
-            pGameEntity = pAESound->pAudioEntity->pEntity;
-
-        SWorldSoundEvent event = {
-            pAESound->usGroup,
-            pAESound->usIndex,
-            pGameEntity,
-            pAESound->m_vCurrPosn,
-        };
-
-        return m_pWorldSoundHandler(event);
-    }
-
-    return true;
+                                  return SWorldSoundEvent{
+                                      pAESound->usGroup,
+                                      pAESound->usIndex,
+                                      pGameEntity,
+                                      pAESound->m_vCurrPosn,
+                                  };
+                              });
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////

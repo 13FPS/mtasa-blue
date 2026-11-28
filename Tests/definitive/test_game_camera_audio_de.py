@@ -97,7 +97,13 @@ def main():
 
         (work / "objects.rsp").write_text("\n".join(f'"{obj}"' for obj in objects))
         run("archive", ["lib", "/nologo", "/out:game.lib", "@objects.rsp"])
-        run("compile", ["cl", *options, HOST, "/Fe:host.exe", "/link", "game.lib", "bcrypt.lib", "dxgi.lib",
+        # Deathmatch discovers the optional interface across the game DLL boundary.
+        probe = work / "camera_client.cpp"
+        probe.write_text('#include <cstdint>\n#include <SharedUtil.IntTypes.h>\n#include <game/CCamera.h>\n#include <game/CCameraTransitionFOV.h>\n'
+                         'extern "C" __declspec(dllexport) const CCameraTransitionFOV* FindFovService(const CCamera* camera) {\n'
+                         '    return dynamic_cast<const CCameraTransitionFOV*>(camera);\n}\n')
+        run("client-dll", ["cl", *options, "/LD", probe, "/Fe:camera_client.dll"])
+        run("compile", ["cl", *options, HOST, "/Fe:host.exe", "/link", "game.lib", "camera_client.lib", "bcrypt.lib", "dxgi.lib",
                         "d3d12.lib", "user32.lib", "/OPT:REF"])
         run("execute", [work / "host.exe"])
         sources = [HOST, Path(__file__), ROOT / "Client/game_de/CGameCameraAudioDE.h", ROOT / "Client/game_de/CGameCameraAudioDE.cpp",
@@ -105,7 +111,7 @@ def main():
                    ROOT / "Client/game_de/GameSdkStrings.cpp", ROOT / "Shared/sdk/SString.hpp", ROOT / "Client/game_de/CCameraTransitionDE.h",
                    ROOT / "Client/game_de/CCameraTransitionDE.cpp", ROOT / "Client/game_de/CCameraSphereVisibleDE.cpp",
                    ROOT / "Client/game_de/CPoolsDE.h", ROOT / "Client/game_de/CPoolsDE.cpp",
-                   ROOT / "Client/sdk/game/CCameraTransitionPose.h", ROOT / "Shared/sdk/CMatrix.h"]
+                   ROOT / "Client/sdk/game/CCameraTransitionPose.h", ROOT / "Client/sdk/game/CCameraTransitionFOV.h", ROOT / "Shared/sdk/CMatrix.h"]
         record = {"success": True, "abstractMethods": outstanding, "normalObjects": str(args.objects.resolve()),
                   "sources": {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sources},
                   "linkedObjects": {obj.name: hashlib.sha256(obj.read_bytes()).hexdigest() for obj in objects if obj.name in required_objects}}

@@ -10,6 +10,8 @@
 
 using namespace mta::game_de;
 
+extern "C" __declspec(dllimport) const CCameraTransitionFOV* FindFovService(const CCamera* camera);
+
 namespace
 {
     void Check(bool passed, const char* message)
@@ -173,7 +175,10 @@ int main()
             another.GetAESoundManager()->CancelSoundsInBankSlot(2, 3);
             Check(otherManager.cancellations == 2, "direct SDK cancellation reached a different sound manager");
         }
-        Check(game.GetCamera()->GetTransitionFOV() == 47.5f && transition.reads == 2, "lost first game's transition");
+        const auto* sampled = FindFovService(game.GetCamera());
+        float       fov = 0;
+        Check(sampled && sampled->TryGetActiveTransitionFOV(fov) && fov == 47.5f && transition.reads == 2,
+              "client DLL did not find the first game's transition FOV");
         transition.status = ClockResult::Stopped;
         const auto before = pose.To4x4Array();
         Check(Refused([&] { game.GetCamera()->GetTransitionMatrix(pose); }) && pose.To4x4Array() == before && transition.reads == 3,

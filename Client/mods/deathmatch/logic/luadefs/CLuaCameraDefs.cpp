@@ -120,8 +120,10 @@ CLuaMultiReturn<unsigned char, unsigned char> CLuaCameraDefs::GetCameraViewMode(
 
 CLuaMultiReturn<float, float, float, float, float, float, float, float> CLuaCameraDefs::GetCameraMatrix()
 {
-    CVector vecPosition, vecLookAt;
-    float   fRoll, fFOV;
+    // Before the client camera exists, return the same identity view as a
+    // camera waiting for its first game pose.
+    CVector vecPosition, vecLookAt(0, 1, 0);
+    float   fRoll = 0.0f, fFOV = DEFAULT_FOV;
     CStaticFunctionDefinitions::GetCameraMatrix(vecPosition, vecLookAt, fRoll, fFOV);
     return {vecPosition.fX, vecPosition.fY, vecPosition.fZ, vecLookAt.fX, vecLookAt.fY, vecLookAt.fZ, fRoll, fFOV};
 }

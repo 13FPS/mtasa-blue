@@ -17,6 +17,7 @@ enum eBone
 #include <CMatrix.h>
 #include <game/CCam.h>
 #include <game/CCamera.h>
+#include <game/CCameraTransitionFOV.h>
 #include <CLuaMultiReturn.h>
 #include "CameraTransitionPoseChecks.h"
 #include "FixedCameraMath.inl"
@@ -153,6 +154,18 @@ struct Camera : CCamera
 #include "UnusedCCamera.inl"
 };
 
+struct SampledCamera : Camera, CCameraTransitionFOV
+{
+    bool TryGetActiveTransitionFOV(float& value) const override
+    {
+        Call('Q');
+        if (!transition)
+            return false;
+        value = 43.75f;
+        return true;
+    }
+};
+
 namespace SystemState
 {
     enum Enum
@@ -190,7 +203,8 @@ static Settings* g_pCore = nullptr;
 
 enum class EFixedCameraMode
 {
-    TARGET
+    TARGET,
+    MATRIX
 };
 
 struct CClientCamera
@@ -223,13 +237,9 @@ struct CClientCamera
     CMatrix                     GetInterpolatedCameraMatrix() const;
     bool                        IsInCameraTransition() const;
     float                       GetAccurateFOV() const;
-    void                        GetPosition(CVector& p) const { p = CVector(1, 2, 3); }
-    void                        GetFixedTarget(CVector& p, float* roll) const
-    {
-        p = CVector(4, 5, 6);
-        *roll = 7;
-    }
-    bool GetMatrix(CMatrix&) const;
+    void                        GetPosition(CVector& p) const;
+    void                        GetFixedTarget(CVector& p, float* roll) const;
+    bool                        GetMatrix(CMatrix&) const;
 };
 struct CStaticFunctionDefinitions
 {
@@ -343,7 +353,9 @@ static void CheckStartupAndPose()
     calls.clear();
     if (!client.GetMatrix(matrix) || matrix.To4x4Array() != client.m_matFixedMatrix.To4x4Array() || !calls.empty())
         throw std::runtime_error("fixed camera did not preserve its supplied matrix");
-    for (const auto direction : {CVector(0, 1, 0), CVector(0.00001f, 0, 1), CVector(0, 0, -1)})
+    CStaticFunctionDefinitions::m_pCamera = &client;
+    client.m_pCamera = nullptr;
+    for (const auto direction : {CVector(0, 1, 0), CVector(0.4f, 0.8f, 0.9f), CVector(0.00001f, 0, 1), CVector(0, 0, 1), CVector(0, 0, -1)})
     {
         for (float roll : {0.f, 45.f, 90.f, 180.f, -35.f})
         {
@@ -354,6 +366,11 @@ static void CheckStartupAndPose()
             right.CrossProduct(&matrix.vUp);
             if ((right - matrix.vRight).Length() > 0.0001f || std::abs(right.Length() - 1.0f) > 0.0001f)
                 throw std::runtime_error("fixed camera basis changed handedness");
+            // Read it back as a matrix, with no retained target or roll.
+            client.m_FixedCameraMode = EFixedCameraMode::MATRIX;
+            const float observed = std::get<6>(CLuaCameraDefs::GetCameraMatrix().values);
+            if (!std::isfinite(observed) || std::abs(std::remainder(observed - roll, 360.0f)) > 0.001f)
+                throw std::runtime_error("Lua lost matrix roll: expected " + std::to_string(roll) + ", read " + std::to_string(observed));
         }
     }
     g_pGame = nullptr;
@@ -368,7 +385,13 @@ int main()
         CheckStartupAndPose();
         classic_transition::Check();
         CClientCamera client;
+        CStaticFunctionDefinitions::m_pCamera = nullptr;
+        if (CLuaCameraDefs::GetCameraMatrix().values != std::make_tuple(0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, DEFAULT_FOV))
+            throw std::runtime_error("unpublished camera did not return the identity view");
         CStaticFunctionDefinitions::m_pCamera = &client;
+        client.m_bFixed = true;
+        client.m_matFixedMatrix.vPos = CVector(1, 2, 3);
+        client.SetFixedTarget(CVector(4, 5, 6), 7.0f);
         Check(DEFAULT_FOV, "");
         Camera camera;
         client.m_pCamera = &camera;
@@ -410,7 +433,31 @@ int main()
             }
             throw std::runtime_error("provider refusal changed at " + std::string(1, op));
         }
-        std::printf("Passed %u Lua camera matrix FOV scenarios\n", checks);
+        SampledCamera sampled;
+        client.m_pCamera = &sampled;
+        sampled.transition = true;
+        Check(43.75f, "Q");
+        sampled.transition = false;
+#if defined(_WIN64)
+        sampled.rows[0].value = 68.25f;
+        Check(68.25f, "QACF");
+#else
+        Check(classicFov, "Q");
+#endif
+        refuse = 'Q';
+        calls.clear();
+        try
+        {
+            CLuaCameraDefs::GetCameraMatrix();
+        }
+        catch (const std::runtime_error& ex)
+        {
+            if (calls == "Q" && std::string(ex.what()) == "Q")
+                refuse = 0;
+        }
+        if (refuse)
+            throw std::runtime_error("sample refusal was masked");
+        std::printf("Passed %u Lua camera matrix FOV scenarios, roll round trips and absent camera defaults\n", checks);
         return 0;
     }
     catch (const std::exception& ex)

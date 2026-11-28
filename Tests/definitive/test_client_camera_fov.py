@@ -68,6 +68,7 @@ def main():
             methods = ("bool CClientCamera::IsInCameraTransition() const", gta_matrix, "bool CClientCamera::GetMatrix(",
                        "const CMatrix& CClientCamera::AcquirePulseMatrix() const", "void CClientCamera::InvalidateCachedTransforms() const",
                        "void CClientCamera::PersistViewModes()", "void CClientCamera::SetFixedTarget(",
+                       "void CClientCamera::GetFixedTarget(", "void CClientCamera::GetPosition(",
                        "void CClientCamera::SetCameraVehicleViewMode(", "void CClientCamera::SetCameraPedViewMode(",
                        "eVehicleCamMode CClientCamera::GetCameraVehicleViewMode()", "ePedCamMode CClientCamera::GetCameraPedViewMode()")
             if args.source_commit and "CMatrix CClientCamera::GetInterpolatedCameraMatrix() const" in camera:
@@ -85,6 +86,8 @@ def main():
                 (work / f"Unused{cls}.inl").write_text("\n".join(bodies), encoding="utf-8")
             for path in (TEST, Path(__file__), TEST.with_name("CameraTransitionPoseChecks.h"), ROOT / "Client/sdk/game/CCameraTransitionPose.h"):
                 record["sourceHashes"][path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+            ext = "Client/sdk/game/CCameraTransitionFOV.h"
+            record["sourceHashes"][ext] = hashlib.sha256((ROOT / ext).read_bytes()).hexdigest()
             dirs = [work, ROOT / "Client/sdk", ROOT / "Shared/sdk", ROOT / "Shared/mods/deathmatch/logic/lua"]
             if os.name == "nt":
                 vswhere = Path(os.environ["ProgramFiles(x86)"]) / "Microsoft Visual Studio/Installer/vswhere.exe"

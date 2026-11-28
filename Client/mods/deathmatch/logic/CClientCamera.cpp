@@ -10,6 +10,7 @@
 
 #include <StdInc.h>
 #include <game/CCam.h>
+#include <game/CCameraTransitionFOV.h>
 #include <array>
 #include <charconv>
 #include <cmath>
@@ -102,6 +103,14 @@ namespace
     {
         if (RequiresOrthonormalization(matrix))
             matrix.OrthoNormalize(CMatrix::AXIS_FRONT, CMatrix::AXIS_UP);
+    }
+
+    // At a pole there is no horizontal heading. Both directions of the Lua
+    // camera matrix conversion use +X as the zero-roll right axis there.
+    CVector GetLevelCameraRight(const CVector& front)
+    {
+        CVector right(front.fY, -front.fX, 0);
+        return right.Normalize() == 0 ? CVector(1, 0, 0) : right;
     }
 
     inline CMatrix& ScratchMatrix() noexcept
@@ -409,11 +418,19 @@ void CClientCamera::GetFixedTarget(CVector& vecTarget, float* pfRoll) const
     }
     else
     {
-        if (pfRoll)
-            *pfRoll = 0;
         CMatrix matTemp;
         GetMatrix(matTemp);
         vecTarget = matTemp.vPos + matTemp.vFront;
+        if (pfRoll)
+        {
+            const CVector right = GetLevelCameraRight(matTemp.vFront);
+            CVector       up = right;
+            up.CrossProduct(&matTemp.vFront);
+            up.Normalize();
+            const float sine = -matTemp.vUp.DotProduct(&right);
+            const float cosine = matTemp.vUp.DotProduct(&up);
+            *pfRoll = std::isfinite(sine) && std::isfinite(cosine) && (sine != 0 || cosine != 0) ? std::atan2(sine, cosine) * (180.0f / kPi) : 0.0f;
+        }
     }
 }
 
@@ -450,11 +467,7 @@ void CClientCamera::SetFixedTarget(const CVector& vecPosition, float fRoll)
         vecFront.Normalize();
 
     // Grab the right vector
-    CVector vecRight = CVector(vecFront.fY, -vecFront.fX, 0);
-    if (vecRight.Length() < FLOAT_EPSILON)
-        vecRight = CVector(1.0f, 0.0f, 0.0f);
-    else
-        vecRight.Normalize();
+    CVector vecRight = GetLevelCameraRight(vecFront);
 
     // Calculate the up vector from this
     CVector vecUp = vecRight;
@@ -1087,7 +1100,14 @@ float CClientCamera::GetAccurateFOV() const
     if (!m_pCamera)
         return DEFAULT_FOV;
 
-    if (IsInCameraTransition())
+    // A transition may finish between separate state and FOV observations.
+    if (const auto* transition = dynamic_cast<const CCameraTransitionFOV*>(m_pCamera))
+    {
+        float fov;
+        if (transition->TryGetActiveTransitionFOV(fov))
+            return fov;
+    }
+    else if (IsInCameraTransition())
         return m_pCamera->GetTransitionFOV();
 
 #if defined(_WIN64)

@@ -23,6 +23,12 @@ the same camera update and reports unavailable samples explicitly. The enclosing
 session must keep this source alive as long as the camera. The retail camera
 source and world-sound playback source still need implementation.
 
+Deathmatch queries the optional `CCameraTransitionFOV` interface to read a DE
+transition's activity and field of view from one update. An inactive transition
+uses the active camera row. The original `CCamera` interface remains binary
+compatible. Lua's `getCameraMatrix` uses the same zero-roll direction as
+`setCameraMatrix` when looking straight up or down.
+
 Run `pwsh -File Tests/definitive/test_camera_basics_sdk.ps1 -Architectures x64`
 for DE transition dispatch and pose tests. Run
 `python Tests/definitive/test_client_camera_fov.py --arch x86` and repeat with

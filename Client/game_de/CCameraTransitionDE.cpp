@@ -29,6 +29,15 @@ namespace mta::game_de
         return ReadSample().fov;
     }
 
+    bool CCameraTransitionDE::TryGetActiveTransitionFOV(float& fov) const
+    {
+        const auto sample = ReadSample();
+        if (sample.state == 0)
+            return false;
+        fov = sample.fov;
+        return true;
+    }
+
     bool CCameraTransitionDE::GetTransitionMatrix(CMatrix& matrix) const
     {
         const auto sample = ReadSample();

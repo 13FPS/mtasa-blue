@@ -33,7 +33,6 @@
 #include <enums/VehicleType.h>
 #include <enums/HandlingProperty.h>
 #include <cmath>
-#include <numbers>
 
 using std::list;
 
@@ -5079,29 +5078,6 @@ bool CStaticFunctionDefinitions::GetCameraMatrix(CVector& vecPosition, CVector& 
     m_pCamera->GetFixedTarget(vecLookAt, &fRoll);
 
     fFOV = m_pCamera->GetAccurateFOV();
-
-    if (fRoll == 0.0f)
-    {
-        // Calculate roll from camera matrix when not directly available
-        CMatrix matrix;
-        m_pCamera->GetMatrix(matrix);
-
-        CVector worldUp(0.0f, 0.0f, 1.0f);
-        CVector cameraUp = matrix.vUp;
-        CVector cameraRight = matrix.vRight;
-
-        // Project camera up vector onto plane perpendicular to camera front
-        CVector projectedUp = cameraUp - matrix.vFront * cameraUp.DotProduct(&matrix.vFront);
-        if (projectedUp.Length() <= FLOAT_EPSILON)
-            return true;
-
-        projectedUp.Normalize();
-
-        float cosRoll = worldUp.DotProduct(&projectedUp);
-        float sinRoll = cameraRight.DotProduct(&worldUp);
-
-        fRoll = std::atan2(sinRoll, cosRoll) * (180.0f / std::numbers::pi_v<float>);
-    }
 
     return true;
 }

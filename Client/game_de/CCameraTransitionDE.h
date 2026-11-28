@@ -5,6 +5,7 @@
  ****************************************************************************/
 #pragma once
 #include "CCameraTargetDE.h"
+#include <game/CCameraTransitionFOV.h>
 
 namespace mta::game_de
 {
@@ -28,11 +29,12 @@ namespace mta::game_de
         ~CameraTransitionSource() = default;
     };
 
-    class CCameraTransitionDE : public CCameraTargetDE
+    class CCameraTransitionDE : public CCameraTargetDE, public CCameraTransitionFOV
     {
     public:
         std::uint8_t GetTransitionState() const override;
         float        GetTransitionFOV() const override;
+        bool         TryGetActiveTransitionFOV(float& fov) const override;
         bool         GetTransitionMatrix(CMatrix& matrix) const override;
 
     protected:

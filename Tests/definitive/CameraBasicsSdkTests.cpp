@@ -1876,6 +1876,12 @@ namespace
         Check(sdk.GetTransitionFOV() == 45.25f && source.reads == 5, "transition FOV read once");
         source.sample.fov = 78.75f;
         Check(sdk.GetTransitionFOV() == 78.75f && source.reads == 6, "later FOV comes from a fresh sample");
+        const auto* sampled = dynamic_cast<const CCameraTransitionFOV*>(&sdk);
+        float       fov = 0;
+        Check(sampled && sampled->TryGetActiveTransitionFOV(fov) && fov == 78.75f && source.reads == 7, "active transition FOV read once through SDK");
+        source.sample.state = 0;
+        source.sample.fov = 22;
+        Check(!sampled->TryGetActiveTransitionFOV(fov) && fov == 78.75f && source.reads == 8, "inactive FOV consumed a later sample or changed output");
         CheckCameraTransitionPoses(
             [&](CVector from, CVector at, CVector up, CMatrix& matrix)
             {
@@ -1891,8 +1897,9 @@ namespace
         Refuses([&] { sdk.GetTransitionState(); }, "ReadCameraTransition", source.status);
         Refuses([&] { sdk.IsInTransition(); }, "ReadCameraTransition", source.status);
         Refuses([&] { sdk.GetTransitionFOV(); }, "ReadCameraTransition", source.status);
+        Refuses([&] { sampled->TryGetActiveTransitionFOV(fov); }, "ReadCameraTransition", source.status);
         Refuses([&] { sdk.GetTransitionMatrix(output); }, "ReadCameraTransition", source.status);
-        Check(source.reads == reads + 4 && output.To4x4Array() == before, "refused reads do not retry or publish partial output");
+        Check(source.reads == reads + 5 && fov == 78.75f && output.To4x4Array() == before, "refused reads do not retry or publish partial output");
         std::puts("Actual DE camera transition sampling and pose checks completed");
     }
 
